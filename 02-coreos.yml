@@ -75,6 +75,18 @@
       delay: 10
 
     # Define the ignition config as a variable for easier reading
+    - name: Create network_config file contents
+      set_fact:
+        network_config: |
+          [connection]
+          id=Wired connection 1
+          type=ethernet
+          match-device=type:ethernet
+
+          [ipv4]
+          address1={{ portainer_ip }}/24,10.20.177.1
+          method=manual
+
     - name: Create ignition JSON string
       set_fact:
         ignition_config: >-
@@ -92,6 +104,17 @@
                     "sudo",
                     "docker"
                   ]
+                }
+              ]
+            },
+            "storage": {
+              "files": [
+                {
+                  "path": "/etc/NetworkManager/system-connections/static.nmconnection",
+                  "mode": 384,
+                  "contents": {
+                    "source": "data:text/plain;charset=utf-8;base64,{{ network_config | b64encode }}"
+                  }
                 }
               ]
             }
