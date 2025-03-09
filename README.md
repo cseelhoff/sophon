@@ -1,5 +1,7 @@
 # sophon
 
+<img src="./sophon.drawio.svg">
+
 Prereqs:
 - Laptop (bootstrap)
   - Ansible
