@@ -1,0 +1,114 @@
+---
+- name: Create a CoreOS VM on Proxmox
+  hosts: localhost
+  gather_facts: true  # We need this for IP address discovery
+  vars_files:
+    - vars.yml
+  tasks:  
+    # Find the IP address that Proxmox can reach
+    - name: Get local IP address
+      set_fact:
+        # local_ip: "{{ ansible_default_ipv4.address }}"    
+        # if running WSL2
+        # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
+        # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
+        # TURN OFF WHEN DONE:
+        # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
+        # netsh interface portproxy show all
+        local_ip: "10.0.3.123"
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ portainer_ip }}"
+        port: 22
+        delay: 2
+        timeout: 300
+        state: started
+      delegate_to: localhost
+
+    - name: Add VM to inventory
+      add_host:
+        name: "{{ portainer_ip }}"
+        groups: new_vms
+        ansible_user: "{{ coreos_username }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    - name: Check if portainer is installed
+      ansible.builtin.raw: podman images -q docker.io/portainer/portainer-ce:latest
+      register: portainer_image_check
+      changed_when: false
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Debug portainer image check result
+      debug:
+        msg: "Image check result: '{{ portainer_image_check.stdout | trim }}'"
+      delegate_to: localhost
+
+    - name: Download and load portainer image from local server
+      ansible.builtin.raw: |
+        cd /tmp && 
+        curl -o portainer-ce-latest.tar http://{{ local_ip }}:{{ http_file_server_port }}/portainer-ce-latest.tar && 
+        podman load -i portainer-ce-latest.tar &&
+        rm -f portainer-ce-latest.tar
+      when: portainer_image_check.stdout | trim == ""
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    # - name: Stop the HTTP server
+    #   ansible.builtin.command:
+    #     cmd: "pkill -f 'python3 -m http.server {{ http_file_server_port }}'"
+    #   ignore_errors: yes
+
+    - name: Check if portainer service exists
+      ansible.builtin.raw: test -f /etc/systemd/system/portainer.service && echo "exists" || echo "not found"
+      register: portainer_service_check
+      changed_when: false
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Enable and start podman.socket
+      ansible.builtin.raw: systemctl enable --now podman.socket
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+      when: portainer_service_check.stdout | trim == "not found"
+
+    - name: Create portainer systemd service file
+      ansible.builtin.raw: |
+        cat > /etc/systemd/system/portainer.service << 'EOF'
+        [Unit]
+        Description=Portainer container
+        After=network.target
+
+        [Service]
+        Restart=always
+        ExecStartPre=-/usr/bin/podman stop portainer
+        ExecStartPre=-/usr/bin/podman rm portainer
+        ExecStart=/usr/bin/podman run --name portainer \
+          -p 9000:9000 \
+          -p 8000:8000 \
+          --volume /var/run/podman/podman.sock:/var/run/docker.sock:Z \
+          --volume portainer_data:/data \
+          docker.io/portainer/portainer-ce:latest
+        ExecStop=/usr/bin/podman stop portainer
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        chmod 644 /etc/systemd/system/portainer.service
+      when: portainer_service_check.stdout | trim == "not found"
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Reload systemd daemon
+      ansible.builtin.raw: systemctl daemon-reload
+      when: portainer_service_check.stdout | trim == "not found"
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Start portainer and set to autostart
+      ansible.builtin.raw: systemctl enable --now portainer
+      register: portainer_start
+      become: true
+      delegate_to: "{{ portainer_ip }}"
