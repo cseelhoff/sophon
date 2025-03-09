@@ -7,9 +7,6 @@
   vars:
     proxmox_api_host: "10.20.177.99"
     proxmox_api_user: "root@pam"
-    proxmox_api_token_id: "ansible"
-    # proxmox_api_token_secret: "{{ proxmox_api_token_secret }}"
-    # proxmox_api_password: "{{ proxmox_api_password }}"
     node: "proxmox"
     vm_name: "portainer"
     portainer_ip: "10.20.177.201/24"
@@ -27,7 +24,17 @@
     local_download_dir: "/tmp/coreos_images"
     http_port: 8000
 
-  tasks:
+  tasks:  
+    # if running WSL2
+    # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
+    # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
+    # TURN OFF WHEN DONE:
+    # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
+    # netsh interface portproxy show all
+    - name: override local_ip
+      set_fact:
+        local_ip: "10.0.3.123"
+
     - name: Create download directory
       ansible.builtin.file:
         path: "{{ local_download_dir }}"
@@ -82,13 +89,30 @@
       ansible.builtin.slurp:
         src: "{{ ssh_public_key_path }}"
       register: ssh_key
+        
+    - name: Obtain Proxmox API ticket
+      uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/access/ticket"
+        method: POST
+        body:
+          username: "{{ proxmox_api_user }}"
+          password: "{{ proxmox_api_password }}"
+        body_format: form-urlencoded
+        validate_certs: false
+      register: pve_ticket
+      
+    - name: Set authentication cookies and CSRF token
+      set_fact:
+        pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
+        pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
 
     - name: Download QCOW2 to Proxmox from local server
       uri:
         url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/storage/{{ storage_pool }}/download-url"
         method: POST
         headers:
-          Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+          Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+          CSRFPreventionToken: "{{ pve_csrf_token }}"
         body:
           content: "iso"  # Proxmox treats this as a generic downloadable file
           filename: "{{ qcow2_img_filename }}"
@@ -97,23 +121,25 @@
         validate_certs: false
       register: qcow2_download
       failed_when: qcow2_download.status != 200 and "already exists" not in (qcow2_download.content|default("")|string)
-
+      
     - name: Debug QCOW2 download response
       debug:
         msg: "{{ qcow2_download }}"
 
-    # - name: Wait for QCOW2 download to complete
-      # ansible.builtin.uri:
-      #   url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/tasks/{{ qcow2_download.json.data | regex_replace('UPID:([^:]+):.*', '\\1') }}/status"
-      #   headers:
-      #     Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
-      #   method: GET
-      #   validate_certs: false
-      # register: task_status
-      # until: task_status.json.data.status == "stopped"
-      # retries: 60
-      # delay: 5
-      # when: qcow2_download.status == 200
+    - name: Wait for QCOW2 download to complete
+      uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/storage/{{ storage_pool }}/content"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+          CSRFPreventionToken: "{{ pve_csrf_token }}"
+        validate_certs: false
+      register: storage_content
+      until: >
+        storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + qcow2_img_filename) 
+        | map(attribute='format') | select('defined') | list | length > 0
+      retries: 30
+      delay: 10
 
     # Define the ignition config as a variable for easier reading
     - name: Create ignition JSON string
@@ -149,22 +175,19 @@
             }
           }
 
-    # Modify the ignition json to remove all blank lines and replace commas with double-commas
+    # Modify the ignition json to replace commas with double-commas
     - name: Clean ignition JSON
       set_fact:
         ignition_config: "{{ ignition_config  | to_json | quote | regex_replace(',', ',,') }}"
 
-    # Debug the ignition config
-    - name: Debug ignition config
+    - name: Debug cleaned ignition JSON
       debug:
-        var: ignition_config
+        msg: "Cleaned ignition config: {{ ignition_config }}"
         
     # Create the VM using the QCOW2 image in one step
     - name: Create VM on Proxmox with imported disk
       community.general.proxmox_kvm:
         api_host: "{{ proxmox_api_host }}"
-        # api_token_id: "{{ proxmox_api_token_id }}"
-        # api_token_secret: "{{ proxmox_api_token_secret }}"
         api_user: "{{ proxmox_api_user }}"
         api_password: "{{ proxmox_api_password }}"
         node: "{{ node }}"
@@ -178,19 +201,9 @@
           net0: "virtio,bridge=vmbr0"
         state: present
         timeout: 600
-        #clone: null  # Ensure it doesn't try to clone
         scsi:
           scsi0: "local:iso/{{ qcow2_img_filename }},format=qcow2"
-        # disk:
-        #   - storage: "{{ storage_pool }}"
-        #     import_from: "/var/lib/vz/template/iso/{{ qcow2_img_filename }}"
-        #     size: "{{ disk_size }}"
         args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
-        # args: "-fw_cfg name=opt/com.coreos/config,string='{\"ignition\":{\"version\":\"3.0.0\"},,\"passwd\":{\"users\":[{\"name\":\"nixos\",,\"passwordHash\":\"$y$j9T$icTH9ilSsldG.Sew1Ipk./$P4/ewJbHmjiKy99l7Z9bcen5dVYRf0SetM3C2l8VKn2\"}]}}'"
-        # args: "-fw_cfg name=opt/com.coreos/config,file=/var/lib/vz/snippets/user-data"
-        # ipconfig:
-          # ipconfig0: "ip={{ portainer_ip }},gw={{ portainer_gw }}"
-        # bootdisk: "scsi0"
       register: vm_create
       delegate_to: localhost
           
@@ -198,9 +211,8 @@
     - name: Start VM on Proxmox
       community.general.proxmox_kvm:
         api_host: "{{ proxmox_api_host }}"
-        api_token_id: "{{ proxmox_api_token_id }}"
-        api_token_secret: "{{ proxmox_api_token_secret }}"
         api_user: "{{ proxmox_api_user }}"
+        api_password: "{{ proxmox_api_password }}"
         node: "{{ node }}"
         vmid: "{{ vm_create.vmid }}"
         state: started
@@ -214,11 +226,6 @@
         timeout: 300
         state: started
       delegate_to: localhost
-
-    - name: Stop the HTTP server
-      ansible.builtin.command:
-        cmd: "pkill -f 'python3 -m http.server {{ http_port }}'"
-      ignore_errors: yes
 
     - name: Add VM to inventory
       add_host:
@@ -242,6 +249,11 @@
       when: portainer_image_check.stdout == ""
       become: true
       delegate_to: "{{ portainer_ip }}"
+
+    - name: Stop the HTTP server
+      ansible.builtin.command:
+        cmd: "pkill -f 'python3 -m http.server {{ http_port }}'"
+      ignore_errors: yes
 
     - name: Check if portainer service exists
       ansible.builtin.stat:
