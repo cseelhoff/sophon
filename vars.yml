@@ -1,0 +1,19 @@
+proxmox_api_host: "10.20.177.99"
+node: "proxmox"
+cores: 2
+memory: 4096
+disk_size: 10G
+portainer_ip: "10.20.177.123/24"
+portainer_gw: "10.20.177.1"
+local_download_dir: "/tmp/coreos_images"
+http_file_server_port: 8000
+qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.xz"
+qcow2_xz_filename: "{{ qcow2_url | basename }}"
+qcow2_final_filename: "{{ qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
+qcow2_img_filename: "{{ qcow2_final_filename }}.img"
+vm_name: "portainer"
+coreos_username: "admin"
+storage_pool: "local"
+proxmox_api_user: "root@pam"
+ssh_private_key_path: "~/.ssh/id_rsa"
+ssh_public_key_path: "{{ ssh_private_key_path }}.pub"
