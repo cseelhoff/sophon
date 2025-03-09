@@ -1,0 +1,297 @@
+---
+- name: Create a CoreOS VM on Proxmox
+  hosts: localhost
+  gather_facts: true  # We need this for IP address discovery
+  vars_files:
+    - secrets.yml
+  vars:
+    proxmox_api_host: "10.20.177.99"
+    proxmox_api_user: "root@pam"
+    proxmox_api_token_id: "ansible"
+    # proxmox_api_token_secret: "{{ proxmox_api_token_secret }}"
+    # proxmox_api_password: "{{ proxmox_api_password }}"
+    node: "proxmox"
+    vm_name: "portainer"
+    portainer_ip: "10.20.177.201/24"
+    portainer_gw: "10.20.177.1"
+    qcow2_final_filename: "fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2"
+    qcow2_img_filename: "{{ qcow2_final_filename }}.img"
+    qcow2_xz_filename: "{{ qcow2_final_filename }}.xz"
+    qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/{{ qcow2_xz_filename }}"
+    storage_pool: "local"
+    cores: 2
+    memory: 4096
+    disk_size: 10G
+    ssh_private_key_path: "~/.ssh/id_rsa"
+    ssh_public_key_path: "{{ ssh_private_key_path }}.pub"
+    local_download_dir: "/tmp/coreos_images"
+    http_port: 8000
+
+  tasks:
+    - name: Create download directory
+      ansible.builtin.file:
+        path: "{{ local_download_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check if qcow2.xz exists locally
+      ansible.builtin.stat:
+        path: "{{ local_download_dir }}/{{ qcow2_img_filename }}"
+      register: qcow2_xz_stat
+
+    - debug:
+        msg: "qcow2.img exists: {{ qcow2_xz_stat.stat.exists }}"
+
+    - name: Download qcow2.xz locally
+      ansible.builtin.get_url:
+        url: "{{ qcow2_url }}"
+        dest: "{{ local_download_dir }}/{{ qcow2_xz_filename }}"
+        timeout: 600
+      when: not qcow2_xz_stat.stat.exists
+
+    - name: Extract QCOW2 file from the .xz locally, and rename the extracted .qcow2 file to .qcow2.img
+      ansible.builtin.command:
+        cmd: "xz -d {{ local_download_dir }}/{{ qcow2_xz_filename }}"
+      when: not qcow2_xz_stat.stat.exists
+
+    - name: Rename extracted qcow2 file
+      ansible.builtin.command:
+        cmd: "mv {{ local_download_dir }}/{{ qcow2_final_filename }} {{ local_download_dir }}/{{ qcow2_img_filename }}"
+      when: not qcow2_xz_stat.stat.exists
+
+    - name: Start Python HTTP server in background
+      ansible.builtin.command:
+        cmd: "python3 -m http.server {{ http_port }}"
+        chdir: "{{ local_download_dir }}"
+      async: 600  # Keep running for 10 minutes
+      poll: 0
+      register: http_server
+
+    # Find the IP address that Proxmox can reach
+    - name: Get local IP address
+      set_fact:
+        local_ip: "{{ ansible_default_ipv4.address }}"
+        
+    - name: Ensure SSH key exists
+      ansible.builtin.command:
+        cmd: "ssh-keygen -t rsa -b 4096 -f {{ ssh_private_key_path }} -N ''"
+      args:
+        creates: "{{ ssh_public_key_path }}"
+
+    - name: Read SSH public key
+      ansible.builtin.slurp:
+        src: "{{ ssh_public_key_path }}"
+      register: ssh_key
+
+    - name: Download QCOW2 to Proxmox from local server
+      uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/storage/{{ storage_pool }}/download-url"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+        body:
+          content: "iso"  # Proxmox treats this as a generic downloadable file
+          filename: "{{ qcow2_img_filename }}"
+          url: "http://{{ local_ip }}:{{ http_port }}/{{ qcow2_img_filename }}"
+        body_format: json
+        validate_certs: false
+      register: qcow2_download
+      failed_when: qcow2_download.status != 200 and "already exists" not in (qcow2_download.content|default("")|string)
+
+    - name: Debug QCOW2 download response
+      debug:
+        msg: "{{ qcow2_download }}"
+
+    # - name: Wait for QCOW2 download to complete
+      # ansible.builtin.uri:
+      #   url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/tasks/{{ qcow2_download.json.data | regex_replace('UPID:([^:]+):.*', '\\1') }}/status"
+      #   headers:
+      #     Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+      #   method: GET
+      #   validate_certs: false
+      # register: task_status
+      # until: task_status.json.data.status == "stopped"
+      # retries: 60
+      # delay: 5
+      # when: qcow2_download.status == 200
+
+    # Define the ignition config as a variable for easier reading
+    - name: Create ignition JSON string
+      set_fact:
+        ignition_config: >-
+          {
+            "ignition": {
+              "version": "3.0.0"
+            },
+            "storage": {
+              "files": [
+                {
+                  "path": "/etc/systemd/network/20-wired.network",
+                  "contents": {
+                    "source": "data:,# Match any ethernet interface\n[Match]\nType=ether\n\n[Network]\nAddress=10.20.177.199/24\nGateway=10.20.177.1\nDNS=127.0.0.1\nDHCP=no"
+                  },
+                  "mode": 420
+                }
+              ]
+            },
+            "passwd": {
+              "users": [
+                {
+                  "name": "nixos",
+                  "passwordHash": "$y$j9T$icTH9ilSsldG.Sew1Ipk./$P4/ewJbHmjiKy99l7Z9bcen5dVYRf0SetM3C2l8VKn2",
+                  "sshAuthorizedKeys": ["{{ ssh_key['content'] | b64decode | trim }}"],
+                  "groups": [
+                    "sudo",
+                    "docker"
+                  ]
+                }
+              ]
+            }
+          }
+
+    # Modify the ignition json to remove all blank lines and replace commas with double-commas
+    - name: Clean ignition JSON
+      set_fact:
+        ignition_config: "{{ ignition_config  | to_json | quote | regex_replace(',', ',,') }}"
+
+    # Debug the ignition config
+    - name: Debug ignition config
+      debug:
+        var: ignition_config
+        
+    # Create the VM using the QCOW2 image in one step
+    - name: Create VM on Proxmox with imported disk
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        # api_token_id: "{{ proxmox_api_token_id }}"
+        # api_token_secret: "{{ proxmox_api_token_secret }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_password: "{{ proxmox_api_password }}"
+        node: "{{ node }}"
+        name: "{{ vm_name }}"
+        cores: "{{ cores }}"
+        memory: "{{ memory }}"
+        ostype: "l26"
+        onboot: true
+        autostart: true
+        net:
+          net0: "virtio,bridge=vmbr0"
+        state: present
+        timeout: 600
+        #clone: null  # Ensure it doesn't try to clone
+        scsi:
+          scsi0: "local:iso/{{ qcow2_img_filename }},format=qcow2"
+        # disk:
+        #   - storage: "{{ storage_pool }}"
+        #     import_from: "/var/lib/vz/template/iso/{{ qcow2_img_filename }}"
+        #     size: "{{ disk_size }}"
+        args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
+        # args: "-fw_cfg name=opt/com.coreos/config,string='{\"ignition\":{\"version\":\"3.0.0\"},,\"passwd\":{\"users\":[{\"name\":\"nixos\",,\"passwordHash\":\"$y$j9T$icTH9ilSsldG.Sew1Ipk./$P4/ewJbHmjiKy99l7Z9bcen5dVYRf0SetM3C2l8VKn2\"}]}}'"
+        # args: "-fw_cfg name=opt/com.coreos/config,file=/var/lib/vz/snippets/user-data"
+        # ipconfig:
+          # ipconfig0: "ip={{ portainer_ip }},gw={{ portainer_gw }}"
+        # bootdisk: "scsi0"
+      register: vm_create
+      delegate_to: localhost
+          
+    # Start VM
+    - name: Start VM on Proxmox
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        api_user: "{{ proxmox_api_user }}"
+        node: "{{ node }}"
+        vmid: "{{ vm_create.vmid }}"
+        state: started
+      delegate_to: localhost
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ portainer_ip }}"
+        port: 22
+        delay: 10
+        timeout: 300
+        state: started
+      delegate_to: localhost
+
+    - name: Stop the HTTP server
+      ansible.builtin.command:
+        cmd: "pkill -f 'python3 -m http.server {{ http_port }}'"
+      ignore_errors: yes
+
+    - name: Add VM to inventory
+      add_host:
+        name: "{{ portainer_ip }}"
+        groups: new_vms
+        ansible_user: core
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+
+    - name: Check if portainer is installed
+      ansible.builtin.command:
+        cmd: podman images -q docker.io/portainer/portainer-ce:latest
+      register: portainer_image_check
+      changed_when: false
+      failed_when: false
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Pull portainer image if not present
+      ansible.builtin.command:
+        cmd: podman pull docker.io/portainer/portainer-ce:latest
+      when: portainer_image_check.stdout == ""
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Check if portainer service exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/portainer.service
+      register: portainer_service_file
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Create portainer systemd service file
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/portainer.service
+        content: |
+          [Unit]
+          Description=Portainer container
+          After=network.target
+
+          [Service]
+          Restart=always
+          ExecStartPre=-/usr/bin/podman stop portainer
+          ExecStartPre=-/usr/bin/podman rm portainer
+          ExecStart=/usr/bin/podman run --name portainer \
+            -p 9000:9000 \
+            -p 8000:8000 \
+            --volume /var/run/podman/podman.sock:/var/run/docker.sock:Z \
+            --volume portainer_data:/data \
+            docker.io/portainer/portainer-ce:latest
+          ExecStop=/usr/bin/podman stop portainer
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+      when: not portainer_service_file.stat.exists
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      when: not portainer_service_file.stat.exists
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+
+    - name: Start portainer and set to autostart
+      ansible.builtin.systemd:
+        name: portainer
+        state: started
+        enabled: true
+      register: portainer_start
+      until: portainer_start is not failed
+      retries: 5
+      delay: 10
+      become: true
+      delegate_to: "{{ portainer_ip }}"
