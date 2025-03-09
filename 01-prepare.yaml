@@ -1,0 +1,69 @@
+---
+- name: Prepare bootstrap HTTP File Server
+  hosts: localhost
+  # gather_facts: true  # We need this for IP address discovery
+  vars_files:
+    - vars.yml
+    # - secrets.yml
+  tasks:
+    # Find the IP address that Proxmox can reach
+    # - name: Get local IP address
+    #   set_fact:
+        # local_ip: "{{ ansible_default_ipv4.address }}"    
+        # if running WSL2
+        # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
+        # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
+        # TURN OFF WHEN DONE:
+        # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
+        # netsh interface portproxy show all
+        # local_ip: "10.0.3.123"
+
+    - name: Create download directory
+      ansible.builtin.file:
+        path: "{{ local_download_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check if qcow2.xz exists locally
+      ansible.builtin.stat:
+        path: "{{ local_download_dir }}/{{ qcow2_img_filename }}"
+      register: qcow2_xz_stat
+
+    - name: Download qcow2.xz locally
+      ansible.builtin.get_url:
+        url: "{{ qcow2_url }}"
+        dest: "{{ local_download_dir }}/{{ qcow2_xz_filename }}"
+        timeout: 600
+      when: not qcow2_xz_stat.stat.exists
+
+    - name: Extract QCOW2 file from the .xz locally, and rename the extracted .qcow2 file to .qcow2.img
+      ansible.builtin.command:
+        cmd: "xz -d {{ local_download_dir }}/{{ qcow2_xz_filename }}"
+      when: not qcow2_xz_stat.stat.exists
+
+    - name: Rename extracted qcow2 file
+      ansible.builtin.command:
+        cmd: "mv {{ local_download_dir }}/{{ qcow2_final_filename }} {{ local_download_dir }}/{{ qcow2_img_filename }}"
+      when: not qcow2_xz_stat.stat.exists
+
+    - name: Pull portainer image locally
+      command: podman pull portainer/portainer-ce:latest
+
+    - name: Save portainer image to tar file
+      command: podman save -o {{ local_download_dir }}/portainer-ce-latest.tar portainer/portainer-ce:latest
+      args:
+        creates: "{{ local_download_dir }}/portainer-ce-latest.tar"
+      
+    - name: Start Python HTTP server in background
+      ansible.builtin.command:
+        cmd: "python3 -m http.server {{ http_file_server_port }}"
+        chdir: "{{ local_download_dir }}"
+      async: 600  # Keep running for 10 minutes
+      poll: 0
+      register: http_server
+
+    - name: Ensure SSH key exists
+      ansible.builtin.command:
+        cmd: "ssh-keygen -t rsa -b 4096 -f {{ ssh_private_key_path }} -N ''"
+      args:
+        creates: "{{ ssh_public_key_path }}"
