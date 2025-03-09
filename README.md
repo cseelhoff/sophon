@@ -1,7 +1,7 @@
 # sophon
 
 Prereqs:
-1. Laptop (bootstrap)
-  1. Ansible
-  1. Internet connection for initial image downloads
-1. Hypervisor (QEMU or Vcenter)
+- Laptop (bootstrap)
+  - Ansible
+  - Internet connection for initial image downloads
+- Hypervisor (QEMU or Vcenter)
