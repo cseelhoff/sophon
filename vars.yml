@@ -3,7 +3,7 @@ node: "proxmox"
 cores: 2
 memory: 4096
 disk_size: 10G
-portainer_ip: "10.20.177.123/24"
+portainer_ip: "10.20.177.124"
 portainer_gw: "10.20.177.1"
 local_download_dir: "/tmp/coreos_images"
 http_file_server_port: 8000

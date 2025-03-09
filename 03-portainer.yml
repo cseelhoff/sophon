@@ -4,6 +4,7 @@
   gather_facts: true  # We need this for IP address discovery
   vars_files:
     - vars.yml
+    - secrets.yml
   tasks:  
     # Find the IP address that Proxmox can reach
     - name: Get local IP address
@@ -68,6 +69,13 @@
       become: true
       delegate_to: "{{ portainer_ip }}"
 
+    - name: Create bcrypt password for portainer admin
+      ansible.builtin.shell: "htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2 | sed -e 's/\\$/\\$\\$/g'"
+      register: portainer_admin_password_bcrypt
+      changed_when: false
+      delegate_to: localhost
+      when: portainer_service_check.stdout | trim == "not found"
+      
     - name: Enable and start podman.socket
       ansible.builtin.raw: systemctl enable --now podman.socket
       become: true
@@ -80,17 +88,20 @@
         [Unit]
         Description=Portainer container
         After=network.target
-
+        
         [Service]
         Restart=always
         ExecStartPre=-/usr/bin/podman stop portainer
         ExecStartPre=-/usr/bin/podman rm portainer
         ExecStart=/usr/bin/podman run --name portainer \
-          -p 9000:9000 \
           -p 8000:8000 \
-          --volume /var/run/podman/podman.sock:/var/run/docker.sock:Z \
-          --volume portainer_data:/data \
-          docker.io/portainer/portainer-ce:latest
+          -p 9443:9443 \
+          --restart=always \
+          --privileged \
+          -v /run/podman/podman.sock:/var/run/docker.sock \
+          -v portainer_data:/data \
+          portainer/portainer-ce:latest \
+          --admin-password '{{ portainer_admin_password_bcrypt.stdout }}'
         ExecStop=/usr/bin/podman stop portainer
 
         [Install]
