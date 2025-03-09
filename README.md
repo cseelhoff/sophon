@@ -2,6 +2,6 @@
 
 Prereqs:
 1. Laptop (bootstrap)
-   a. Ansible
-   b. Internet connection for initial image downloads
-2. Hypervisor (QEMU or Vcenter)
+  1. Ansible
+  1. Internet connection for initial image downloads
+1. Hypervisor (QEMU or Vcenter)
