@@ -1,0 +1,12 @@
+---
+- name: Deploy CoreDNS to Portainer
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Set deployment variables
+      set_fact:
+        stack_name: "coredns"
+        docker_compose_path: "./coredns/docker-compose.yml"
+
+# Import the Portainer deployment playbook
+- import_playbook: portainer_deploy.yml

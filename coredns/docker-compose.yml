@@ -1,0 +1,14 @@
+version: '3'
+
+services:
+  coredns:
+    image: coredns/coredns:latest
+    container_name: coredns
+    restart: unless-stopped
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    volumes:
+      - Corefile:/Corefile
+      - /var/run/podman/podman.sock:/var/run/docker.sock:ro
+    command: -conf /Corefile

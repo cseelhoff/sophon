@@ -2,25 +2,19 @@
 - name: Deploy Stack to Portainer
   hosts: localhost
   gather_facts: no
-  # vars_files:
-  # - vars.yml
-  # - secrets.yml
-  vars:
-    portainer_url: "{{ lookup('env', 'PORTAINER_URL') }}"
-    username: "admin"
-    portainer_password: "{{ lookup('env', 'PORTAINER_PASSWORD') }}"
-    stack_name: "{{ lookup('env', 'STACK_NAME') }}"
-    docker_compose_path: "{{ lookup('env', 'DOCKER_COMPOSE_PATH') }}"
-  
+  vars_files:
+    - vars.yml
+    - secrets.yml
+
   tasks:
     - name: Authenticate with Portainer
       uri:
-        url: "{{ portainer_url }}/api/auth"
+        url: "{{ portainer_ip }}/api/auth"
         method: POST
         body_format: json
         body:
-          Username: "{{ username }}"
-          Password: "{{ portainer_password }}"
+          Username: "admin"
+          Password: "{{ portainer_admin_password }}"
         status_code: 200
       register: auth_response
     
