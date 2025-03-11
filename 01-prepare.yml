@@ -7,7 +7,7 @@
     # - secrets.yml
   tasks:
     # Find the IP address that Proxmox can reach
-    # - name: Get local IP address
+    - name: Get local IP address
       set_fact:
         local_ip: "{{ ansible_default_ipv4.address }}"
         # if running WSL2
