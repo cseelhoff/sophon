@@ -13,5 +13,5 @@ services:
       - /var/run/podman/podman.sock:/var/run/docker.sock:ro
     command: -conf /Corefile
     
-  volumes:
-    corefile_data:
+volumes:
+  corefile_data:
