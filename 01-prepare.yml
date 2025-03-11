@@ -46,7 +46,7 @@
         cmd: "mv {{ local_download_dir }}/{{ qcow2_final_filename }} {{ local_download_dir }}/{{ qcow2_img_filename }}"
       when: not qcow2_xz_stat.stat.exists
 
-    - name: Pull portainer image locally
+    - name: Pull container images locally
       command: podman pull docker.io/portainer/portainer-ce:2.27.1 docker.io/coredns/coredns:1.12.0
 
     - name: Save portainer image to tar file
@@ -54,7 +54,7 @@
       args:
         creates: "{{ local_download_dir }}/portainer-ce.tar"
 
-    - name: Save portainer image to tar file
+    - name: Save coredns image to tar file
       command: podman save -o {{ local_download_dir }}/coredns.tar coredns/coredns:1.12.0
       args:
         creates: "{{ local_download_dir }}/coredns.tar"
