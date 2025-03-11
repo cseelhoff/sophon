@@ -13,6 +13,23 @@
         validate_certs: false
         local_ip: "{{ ansible_default_ipv4.address }}"
   
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ portainer_ip }}"
+        port: 22
+        delay: 2
+        timeout: 300
+        state: started
+      delegate_to: localhost
+
+    - name: Add VM to inventory
+      add_host:
+        name: "{{ portainer_ip }}"
+        groups: new_vms
+        ansible_user: "{{ coreos_username }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
     - name: Download and load coreDNS image from local server
       ansible.builtin.raw: |
         cd /tmp && 
