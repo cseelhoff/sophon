@@ -7,6 +7,7 @@
       set_fact:
         stack_name: "coredns"
         docker_compose_path: "./coredns/docker-compose.yml"
+        validate_certs: false
 
 # Import the Portainer deployment playbook
 - import_playbook: portainer_deploy.yml
