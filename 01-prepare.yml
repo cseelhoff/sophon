@@ -47,15 +47,15 @@
       when: not qcow2_xz_stat.stat.exists
 
     - name: Pull container images locally
-      command: podman pull docker.io/portainer/portainer-ce:2.27.1 docker.io/coredns/coredns:1.12.0
+      command: podman pull docker.io/portainer/portainer-ce:{{ portainer_image_tag }} docker.io/coredns/coredns:{{ coredns_image_tag }}
 
     - name: Save portainer image to tar file
-      command: podman save -o {{ local_download_dir }}/portainer-ce.tar portainer/portainer-ce:2.27.1
+      command: podman save -o {{ local_download_dir }}/portainer-ce.tar portainer/portainer-ce:{{ portainer_image_tag }}
       args:
         creates: "{{ local_download_dir }}/portainer-ce.tar"
 
     - name: Save coredns image to tar file
-      command: podman save -o {{ local_download_dir }}/coredns.tar coredns/coredns:1.12.0
+      command: podman save -o {{ local_download_dir }}/coredns.tar coredns/coredns:{{ coredns_image_tag }}
       args:
         creates: "{{ local_download_dir }}/coredns.tar"
       

@@ -61,12 +61,11 @@
       set_fact:
         local_endpoint_id: "{{ endpoint_create_response.json.Id }}"
       when: endpoint_create_response is defined and endpoint_create_response.json is defined
-    
-    - name: Read Docker Compose file
-      slurp:
-        src: "{{ docker_compose_path }}"
-      register: docker_compose_file
-    
+
+    - name: Set docker compose content from variable
+      set_fact:
+        docker_compose_content_decoded: "{{ docker_compose_base64 | b64decode }}"
+        
     - name: Deploy stack to Portainer
       uri:
         url: "{{ portainer_url }}/api/stacks/create/standalone/string?endpointId={{ local_endpoint_id }}"
@@ -79,6 +78,6 @@
           env: "{{ stack_env_vars | default([]) }}"
           fromAppTemplate: false
           name: "{{ stack_name }}"
-          stackFileContent: "{{ docker_compose_file['content'] | b64decode }}"
+          stackFileContent: "{{ docker_compose_content_decoded }}"
         status_code: 200
         validate_certs: "{{ validate_certs }}"

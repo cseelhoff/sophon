@@ -8,10 +8,25 @@
   tasks:
     - name: Set deployment variables
       set_fact:
-        stack_name: "coredns"
-        docker_compose_path: "./coredns/docker-compose.yml"
         validate_certs: false
         local_ip: "{{ ansible_default_ipv4.address }}"
+        stack_name: "coredns"
+        docker_compose_content: |
+          version: '3'          
+          services:
+            coredns:
+              image: docker.io/coredns/coredns:{{ coredns_image_tag }}
+              container_name: coredns
+              restart: unless-stopped
+              ports:
+                - "{{ portainer_ip }}:53:53/udp"
+                - "{{ portainer_ip }}:53:53/tcp"
+              volumes:
+                - corefile_data:/Corefile
+                - /var/run/podman/podman.sock:/var/run/docker.sock:ro
+              command: -conf /Corefile              
+          volumes:
+            corefile_data:
   
     - name: Wait for SSH to be available
       wait_for:
@@ -31,7 +46,7 @@
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
     - name: Check if CoreDNS image exists
-      ansible.builtin.raw: podman images | grep -q "coredns/coredns[ ]*1.12.0"
+      ansible.builtin.raw: podman images | grep -q "{{ coredns_image_name }}[ ]*{{ coredns_image_tag }}"
       become: true
       delegate_to: "{{ portainer_ip }}"
       register: coredns_image_exists
@@ -59,5 +74,9 @@
       ansible.builtin.raw: systemctl restart systemd-resolved
       become: true
       delegate_to: "{{ portainer_ip }}"
+
+    - name: Set docker compose content in base64
+      set_fact:
+        docker_compose_base64: "{{ docker_compose_content | b64encode }}"
 
 - import_playbook: portainer_deploy.yml

@@ -95,12 +95,12 @@
         ExecStartPre=-/usr/bin/podman rm portainer
         ExecStart=/usr/bin/podman run --name portainer \
           -p 8000:8000 \
-          -p 9443:9443 \
+          -p {{ portainer_port }}:{{ portainer_port }} \
           --restart=always \
           --privileged \
           -v /run/podman/podman.sock:/var/run/docker.sock \
           -v portainer_data:/data \
-          portainer/portainer-ce:latest \
+          portainer/portainer-ce:{{ portainer_image_tag }} \
           --admin-password '{{ portainer_admin_password_bcrypt.stdout }}'
         ExecStop=/usr/bin/podman stop portainer
 
