@@ -39,15 +39,12 @@
       become: true
       delegate_to: "{{ portainer_ip }}"
 
-    - name: Disable DNSStubListener in resolved.conf
+    - name: Create new resolved.conf with DNSStubListener disabled
       ansible.builtin.raw: |
-        sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
-        if ! grep -q "DNSStubListener=no" /etc/systemd/resolved.conf; then
-          echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
-        fi
+        echo '[Resolve]' > /etc/systemd/resolved.conf
+        echo 'DNSStubListener=no' >> /etc/systemd/resolved.conf
       become: true
       delegate_to: "{{ portainer_ip }}"
-      register: resolved_conf_change
 
     - name: Restart systemd-resolved service
       ansible.builtin.raw: systemctl restart systemd-resolved
