@@ -67,20 +67,18 @@
         src: "{{ docker_compose_path }}"
       register: docker_compose_file
     
-    - name: Create new stack in Portainer
+    - name: Deploy stack to Portainer
       uri:
-        url: "{{ portainer_url }}/api/stacks"
+        url: "{{ portainer_url }}/api/stacks/create/standalone/string?endpointId={{ local_endpoint_id }}"
         method: POST
         headers:
           Authorization: "Bearer {{ auth_token }}"
+          Content-Type: "application/json"
         body_format: json
         body:
+          env: "{{ stack_env_vars | default([]) }}"
+          fromAppTemplate: false
           name: "{{ stack_name }}"
           stackFileContent: "{{ docker_compose_file['content'] | b64decode }}"
-          swarmID: ""
-          env: []
-          endpointId: "{{ local_endpoint_id }}"
-          type: 2
         status_code: 200
         validate_certs: "{{ validate_certs }}"
-    
