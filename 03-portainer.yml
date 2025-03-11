@@ -50,9 +50,9 @@
     - name: Download and load portainer image from local server
       ansible.builtin.raw: |
         cd /tmp && 
-        curl -o portainer-ce-latest.tar http://{{ local_ip }}:{{ http_file_server_port }}/portainer-ce-latest.tar && 
-        podman load -i portainer-ce-latest.tar &&
-        rm -f portainer-ce-latest.tar
+        curl -o portainer-ce.tar http://{{ local_ip }}:{{ http_file_server_port }}/portainer-ce.tar && 
+        podman load -i portainer-ce.tar &&
+        rm -f portainer-ce.tar
       when: portainer_image_check.stdout | trim == ""
       become: true
       delegate_to: "{{ portainer_ip }}"

@@ -8,6 +8,14 @@
         stack_name: "coredns"
         docker_compose_path: "./coredns/docker-compose.yml"
         validate_certs: false
+  
+    - name: Download and load coreDNS image from local server
+      ansible.builtin.raw: |
+        cd /tmp && 
+        curl -o coredns.tar http://{{ local_ip }}:{{ http_file_server_port }}/coredns.tar && 
+        podman load -i coredns.tar &&
+        rm -f coredns.tar
+      become: true
+      delegate_to: "{{ portainer_ip }}"
 
-# Import the Portainer deployment playbook
 - import_playbook: portainer_deploy.yml

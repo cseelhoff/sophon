@@ -47,12 +47,17 @@
       when: not qcow2_xz_stat.stat.exists
 
     - name: Pull portainer image locally
-      command: podman pull portainer/portainer-ce:latest
+      command: podman pull portainer/portainer-ce:2.27.1 coredns/coredns:1.12.0
 
     - name: Save portainer image to tar file
-      command: podman save -o {{ local_download_dir }}/portainer-ce-latest.tar portainer/portainer-ce:latest
+      command: podman save -o {{ local_download_dir }}/portainer-ce.tar portainer/portainer-ce:2.27.1
       args:
-        creates: "{{ local_download_dir }}/portainer-ce-latest.tar"
+        creates: "{{ local_download_dir }}/portainer-ce.tar"
+
+    - name: Save portainer image to tar file
+      command: podman save -o {{ local_download_dir }}/coredns.tar coredns/coredns:1.12.0
+      args:
+        creates: "{{ local_download_dir }}/coredns.tar"
       
     - name: Start Python HTTP server in background
       ansible.builtin.command:
