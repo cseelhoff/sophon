@@ -9,7 +9,7 @@
   tasks:
     - name: Authenticate with Portainer
       uri:
-        url: "{{ portainer_ip }}/api/auth"
+        url: "https://{{ portainer_ip }}:9443/api/auth"
         method: POST
         body_format: json
         body:
