@@ -30,6 +30,14 @@
         ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
+    - name: Check if CoreDNS image exists
+      ansible.builtin.raw: podman images | grep -q "coredns/coredns-1.12.0"
+      become: true
+      delegate_to: "{{ portainer_ip }}"
+      register: coredns_image_exists
+      failed_when: false
+      changed_when: false
+
     - name: Download and load coreDNS image from local server
       ansible.builtin.raw: |
         cd /tmp && 
@@ -38,6 +46,7 @@
         rm -f coredns.tar
       become: true
       delegate_to: "{{ portainer_ip }}"
+      when: coredns_image_exists.rc != 0
 
     - name: Create new resolved.conf with DNSStubListener disabled
       ansible.builtin.raw: |
