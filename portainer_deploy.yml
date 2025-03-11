@@ -1,0 +1,80 @@
+---
+- name: Deploy Stack to Portainer
+  hosts: localhost
+  gather_facts: no
+  # vars_files:
+  # - vars.yml
+  # - secrets.yml
+  vars:
+    portainer_url: "{{ lookup('env', 'PORTAINER_URL') }}"
+    username: "admin"
+    portainer_password: "{{ lookup('env', 'PORTAINER_PASSWORD') }}"
+    stack_name: "{{ lookup('env', 'STACK_NAME') }}"
+    docker_compose_path: "{{ lookup('env', 'DOCKER_COMPOSE_PATH') }}"
+  
+  tasks:
+    - name: Authenticate with Portainer
+      uri:
+        url: "{{ portainer_url }}/api/auth"
+        method: POST
+        body_format: json
+        body:
+          Username: "{{ username }}"
+          Password: "{{ portainer_password }}"
+        status_code: 200
+      register: auth_response
+    
+    - name: Set auth token variable
+      set_fact:
+        auth_token: "{{ auth_response.json.jwt }}"
+    
+    - name: Get endpoints
+      uri:
+        url: "{{ portainer_url }}/api/endpoints"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+        status_code: 200
+      register: endpoints_response
+    
+    - name: Find local endpoint ID
+      set_fact:
+        local_endpoint_id: "{{ endpoints_response.json[0].Id }}"
+      when: endpoints_response.json | length > 0
+    
+    - name: Create local endpoint if it doesn't exist
+      uri:
+        url: "{{ portainer_url }}/api/endpoints"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+        body_format: form-urlencoded
+        body:
+          Name: "local"
+          EndpointCreationType: 1
+        status_code: 200
+      register: endpoint_create_response
+      when: local_endpoint_id is not defined or local_endpoint_id == 'null'
+    
+    - name: Set endpoint ID from creation response
+      set_fact:
+        local_endpoint_id: "{{ endpoint_create_response.json.Id }}"
+      when: endpoint_create_response is defined and endpoint_create_response.json is defined
+    
+    - name: Read Docker Compose file
+      slurp:
+        src: "{{ docker_compose_path }}"
+      register: docker_compose_file
+    
+    - name: Deploy stack to Portainer
+      uri:
+        url: "{{ portainer_url }}/api/stacks?type=2&method=string&endpointId={{ local_endpoint_id }}"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ stack_name }}"
+          stackFileContent: "{{ docker_compose_file['content'] | b64decode }}"
+        status_code: 200
