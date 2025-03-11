@@ -4,5 +4,6 @@ pkgs.mkShell {
     ansible
     python3Packages.proxmoxer
     apacheHttpd  # Provides htpasswd
+    podman
   ];
 }
