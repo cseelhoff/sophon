@@ -1,13 +1,17 @@
 ---
 - name: Deploy CoreDNS to Portainer
   hosts: localhost
-  gather_facts: no
+  gather_facts: yes
+  vars_files:
+    - vars.yml
+    - secrets.yml
   tasks:
     - name: Set deployment variables
       set_fact:
         stack_name: "coredns"
         docker_compose_path: "./coredns/docker-compose.yml"
         validate_certs: false
+        local_ip: "{{ ansible_default_ipv4.address }}"
   
     - name: Download and load coreDNS image from local server
       ansible.builtin.raw: |

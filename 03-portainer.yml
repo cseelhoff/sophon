@@ -5,18 +5,18 @@
   vars_files:
     - vars.yml
     - secrets.yml
-  tasks:  
+  tasks:
     # Find the IP address that Proxmox can reach
     - name: Get local IP address
       set_fact:
-        # local_ip: "{{ ansible_default_ipv4.address }}"    
+        local_ip: "{{ ansible_default_ipv4.address }}"    
         # if running WSL2
         # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
         # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
         # TURN OFF WHEN DONE:
         # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
         # netsh interface portproxy show all
-        local_ip: "10.0.3.123"
+        # local_ip: "10.0.3.123"
 
     - name: Wait for SSH to be available
       wait_for:
