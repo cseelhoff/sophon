@@ -13,7 +13,7 @@
 
     - name: Authenticate with Portainer
       uri:
-        url: "https://{{ portainer_url }}/api/auth"
+        url: "{{ portainer_url }}/api/auth"
         method: POST
         body_format: json
         body:
