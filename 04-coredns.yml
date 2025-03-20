@@ -22,11 +22,20 @@
                 - "{{ portainer_ip }}:53:53/udp"
                 - "{{ portainer_ip }}:53:53/tcp"
               volumes:
-                - corefile_data:/Corefile
                 - /var/run/podman/podman.sock:/var/run/docker.sock:ro
-              command: -conf /Corefile              
-          volumes:
-            corefile_data:
+              environment:
+                - COREFILE=.:53 {
+                    forward . 8.8.8.8 8.8.4.4
+                    cache 30
+                    errors
+                    health
+                    prometheus :9153
+                    whoami
+                  }
+              entrypoint: 
+                - "/bin/sh"
+                - "-c"
+                - "echo \"$$COREFILE\" > /tmp/Corefile && /coredns -conf /tmp/Corefile"
   
     - name: Wait for SSH to be available
       wait_for:
