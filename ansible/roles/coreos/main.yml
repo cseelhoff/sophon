@@ -4,7 +4,6 @@
   gather_facts: true  # We need this for IP address discovery
   vars_files:
     - vars.yml
-    - secrets.yml
   tasks:  
     # Find the IP address that Proxmox can reach
     - name: Get local IP address
@@ -28,7 +27,24 @@
       ansible.builtin.slurp:
         src: "{{ ssh_public_key_path }}"
       register: ssh_key
-        
+
+    - name: Check for Proxmox API password in environment
+      set_fact:
+        proxmox_api_password: "{{ lookup('env', 'PROXMOX_API_PASSWORD') }}"
+      when: lookup('env', 'PROXMOX_API_PASSWORD') != ""
+      
+    - name: Prompt for Proxmox API password if not set
+      pause:
+        prompt: "Please enter the Proxmox password"
+        echo: no
+      register: proxmox_api_password
+      when: proxmox_api_password == ""
+      
+    - name: Set Portainer API password from prompt
+      set_fact:
+        proxmox_api_password: "{{ proxmox_api_password.user_input }}"
+      when: proxmox_api_password == "" and proxmox_api_password is defined
+
     - name: Obtain Proxmox API ticket
       uri:
         url: "https://{{ proxmox_api_host }}:8006/api2/json/access/ticket"
