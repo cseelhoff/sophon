@@ -18,29 +18,12 @@
         # netsh interface portproxy show all
         # local_ip: "10.0.3.123"
 
-    - name: Wait for SSH to be available
-      wait_for:
-        host: "{{ portainer_ip }}"
-        port: 22
-        delay: 2
-        timeout: 300
-        state: started
-      delegate_to: localhost
-
-    - name: Add VM to inventory
-      add_host:
-        name: "{{ portainer_ip }}"
-        groups: new_vms
-        ansible_user: "{{ coreos_username }}"
-        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
     - name: Check if portainer is installed
       ansible.builtin.raw: podman images -q docker.io/portainer/portainer-ce:latest
       register: portainer_image_check
       changed_when: false
       become: true
-      delegate_to: "{{ portainer_ip }}"
+      delegate_to: "{{ coreos_ip }}"
 
     - name: Debug portainer image check result
       debug:
@@ -55,19 +38,14 @@
         rm -f portainer-ce.tar
       when: portainer_image_check.stdout | trim == ""
       become: true
-      delegate_to: "{{ portainer_ip }}"
-
-    # - name: Stop the HTTP server
-    #   ansible.builtin.command:
-    #     cmd: "pkill -f 'python3 -m http.server {{ http_file_server_port }}'"
-    #   ignore_errors: yes
+      delegate_to: "{{ coreos_ip }}"
 
     - name: Check if portainer service exists
       ansible.builtin.raw: test -f /etc/systemd/system/portainer.service && echo "exists" || echo "not found"
       register: portainer_service_check
       changed_when: false
       become: true
-      delegate_to: "{{ portainer_ip }}"
+      delegate_to: "{{ coreos_ip }}"
 
     - name: Create bcrypt password for portainer admin
       ansible.builtin.shell: "htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2 | sed -e 's/\\$/\\$\\$/g'"
@@ -79,7 +57,7 @@
     - name: Enable and start podman.socket
       ansible.builtin.raw: systemctl enable --now podman.socket
       become: true
-      delegate_to: "{{ portainer_ip }}"
+      delegate_to: "{{ coreos_ip }}"
       when: portainer_service_check.stdout | trim == "not found"
 
     - name: Create portainer systemd service file
@@ -110,16 +88,16 @@
         chmod 644 /etc/systemd/system/portainer.service
       when: portainer_service_check.stdout | trim == "not found"
       become: true
-      delegate_to: "{{ portainer_ip }}"
+      delegate_to: "{{ coreos_ip }}"
 
     - name: Reload systemd daemon
       ansible.builtin.raw: systemctl daemon-reload
       when: portainer_service_check.stdout | trim == "not found"
       become: true
-      delegate_to: "{{ portainer_ip }}"
+      delegate_to: "{{ coreos_ip }}"
 
     - name: Start portainer and set to autostart
       ansible.builtin.raw: systemctl enable --now portainer
       register: portainer_start
       become: true
-      delegate_to: "{{ portainer_ip }}"
+      delegate_to: "{{ coreos_ip }}"

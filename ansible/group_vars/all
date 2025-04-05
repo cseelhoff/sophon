@@ -1,0 +1,9 @@
+---
+portainer_image_tag: "2.27.1"
+coredns_image_tag: "1.12.0"
+coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.xz"
+coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
+coreos_qcow2_final_filename: "{{ coreos_qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
+coreos_qcow2_img_filename: "{{ coreos_qcow2_final_filename }}.img"
+portainer_port: 9443
+http_file_server_port: 8000

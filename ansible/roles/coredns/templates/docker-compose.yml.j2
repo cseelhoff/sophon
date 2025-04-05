@@ -1,0 +1,24 @@
+version: '3'          
+services:
+  coredns:
+    image: docker.io/coredns/coredns:{{ coredns_image_tag }}
+    container_name: coredns
+    restart: unless-stopped
+    ports:
+      - "{{ coreos_ip }}:53:53/udp"
+      - "{{ coreos_ip }}:53:53/tcp"
+    volumes:
+      - /var/run/podman/podman.sock:/var/run/docker.sock:ro
+    environment:
+      - COREFILE=.:53 {
+          forward . 1.1.1.1
+          cache 30
+          errors
+          health
+          prometheus :9153
+          whoami
+        }
+    entrypoint: 
+      - "/bin/sh"
+      - "-c"
+      - "echo \"$$COREFILE\" > /tmp/Corefile && /coredns -conf /tmp/Corefile"

@@ -9,7 +9,7 @@
   tasks:
     - name: Set deployment variables
       set_fact:
-        portainer_url: "https://{{ portainer_ip }}:{{ portainer_port }}"
+        portainer_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
 
     - name: Authenticate with Portainer
       uri:

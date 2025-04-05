@@ -1,0 +1,14 @@
+---
+proxmox_api_host: "10.20.177.99"
+proxmox_node_name: "proxmox"
+proxmox_api_user: "root@pam"
+storage_pool: "local"
+coreos_vm_name: "portainer"
+coreos_cores: 2
+coreos_memory: 4096
+coreos_username: "admin"
+coreos_ip: "10.20.177.111"
+coreos_cidr: "24"
+coreos_gateway: "10.20.177.1"
+ssh_private_key_path: "~/.ssh/id_rsa"
+ssh_public_key_path: "{{ ssh_private_key_path }}.pub"

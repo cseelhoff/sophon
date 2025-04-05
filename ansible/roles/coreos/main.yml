@@ -18,6 +18,12 @@
         # netsh interface portproxy show all
         # local_ip: "10.0.3.123"
 
+    - name: Ensure SSH key exists
+      ansible.builtin.command:
+        cmd: "ssh-keygen -t rsa -b 4096 -f {{ ssh_private_key_path }} -N ''"
+      args:
+        creates: "{{ ssh_public_key_path }}"
+
     - name: Read SSH public key
       ansible.builtin.slurp:
         src: "{{ ssh_public_key_path }}"
@@ -41,15 +47,15 @@
 
     - name: Download QCOW2 to Proxmox from local server
       uri:
-        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/storage/{{ storage_pool }}/download-url"
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/download-url"
         method: POST
         headers:
           Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
           CSRFPreventionToken: "{{ pve_csrf_token }}"
         body:
           content: "iso"  # Proxmox treats this as a generic downloadable file
-          filename: "{{ qcow2_img_filename }}"
-          url: "http://{{ local_ip }}:{{ http_file_server_port }}/{{ qcow2_img_filename }}"
+          filename: "{{ coreos_qcow2_img_filename }}"
+          url: "http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}"
         body_format: json
         validate_certs: false
       register: qcow2_download
@@ -61,7 +67,7 @@
 
     - name: Wait for QCOW2 download to complete
       uri:
-        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ node }}/storage/{{ storage_pool }}/content"
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
@@ -69,7 +75,7 @@
         validate_certs: false
       register: storage_content
       until: >
-        storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + qcow2_img_filename) 
+        storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) 
         | map(attribute='format') | select('defined') | list | length > 0
       retries: 30
       delay: 10
@@ -84,7 +90,7 @@
           match-device=type:ethernet
 
           [ipv4]
-          address1={{ portainer_ip }}/24,10.20.177.1
+          address1={{ coreos_ip }}/{{ portainer_cidr }},{{ portainer_gateway }}
           method=manual
 
     - name: Create ignition JSON string
@@ -135,10 +141,10 @@
         api_host: "{{ proxmox_api_host }}"
         api_user: "{{ proxmox_api_user }}"
         api_password: "{{ proxmox_api_password }}"
-        node: "{{ node }}"
-        name: "{{ vm_name }}"
-        cores: "{{ cores }}"
-        memory: "{{ memory }}"
+        node: "{{ proxmox_node_name }}"
+        name: "{{ coreos_vm_name }}"
+        cores: "{{ coreos_cores }}"
+        memory: "{{ coreos_memory }}"
         ostype: "l26"
         onboot: true
         autostart: true
@@ -147,7 +153,7 @@
         state: present
         timeout: 600
         scsi:
-          scsi0: "local:iso/{{ qcow2_img_filename }},format=qcow2"
+          scsi0: "local:iso/{{ coreos_qcow2_img_filename }},format=qcow2"
         args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
       register: vm_create
       delegate_to: localhost
@@ -158,7 +164,24 @@
         api_host: "{{ proxmox_api_host }}"
         api_user: "{{ proxmox_api_user }}"
         api_password: "{{ proxmox_api_password }}"
-        node: "{{ node }}"
+        node: "{{ proxmox_node_name }}"
         vmid: "{{ vm_create.vmid }}"
         state: started
       delegate_to: localhost
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ coreos_ip }}"
+        port: 22
+        delay: 2
+        timeout: 300
+        state: started
+      delegate_to: localhost
+
+    - name: Add VM to inventory
+      add_host:
+        name: "{{ coreos_ip }}"
+        groups: new_vms
+        ansible_user: "{{ coreos_username }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
