@@ -274,10 +274,10 @@
   vars:
     vm_id: "{{ vm_create.vmid }}"
     storage: "{{ storage_pool }}"
-    coreos_qcow_path: "{{ coreos_qcow_path }}"
-    coreos_qcow2_img_filename: "{{ coreos_qcow2_img_filename }}"
-    coreos_qcow2_xz_filename: "{{ coreos_qcow2_xz_filename }}"
-    coreos_qcow2_final_filename: "{{ coreos_qcow2_final_filename }}"
+    # coreos_qcow_path: "{{ coreos_qcow_path }}"
+    # coreos_qcow2_img_filename: "{{ coreos_qcow2_img_filename }}"
+    # coreos_qcow2_xz_filename: "{{ coreos_qcow2_xz_filename }}"
+    # coreos_qcow2_final_filename: "{{ coreos_qcow2_final_filename }}"
     proxmox_host: "{{ proxmox_api_host }}"
     pass2: "{{ query('ansible.builtin.vars', 'proxmox_api_password') | first }}"
   # when: not core_qcow_exists or wrong_size_file

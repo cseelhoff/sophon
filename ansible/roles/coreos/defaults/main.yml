@@ -1,7 +1,7 @@
 ---
 proxmox_node_name: "proxmox"
 proxmox_api_user: "root@pam"
-storage_pool: "local"
+storage_pool: "local-lvm"
 coreos_vm_name: "coreos"
 coreos_cores: 2
 coreos_memory: 4096
