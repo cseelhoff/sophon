@@ -1,15 +1,6 @@
 ---
 - name: Deploy Stack to Portainer
-  hosts: localhost
-  gather_facts: no
-  vars_files:
-    - vars.yml
-
   tasks:
-    - name: Set deployment variables
-      set_fact:
-        portainer_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
-
     - name: Authenticate with Portainer
       uri:
         url: "{{ portainer_url }}/api/auth"

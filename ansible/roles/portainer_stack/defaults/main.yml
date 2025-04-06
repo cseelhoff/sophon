@@ -1,0 +1,5 @@
+---
+stack_name: "default_stack"
+stack_env_vars: []
+portainer_port: 9443
+validate_certs: false
