@@ -115,21 +115,7 @@
     file_download_filename: "{{ coreos_qcow2_xz_filename }}"
     extracted_filename: "{{ coreos_qcow2_final_filename }}"
     renamed_filename: "{{ coreos_qcow2_img_filename }}"
-    http_file_server_port: "{{ http_file_server_port }}"
-  when: not core_qcow_exists or wrong_size_file
-
-- name: Host CoreOS qcow2 image via HTTP file server
-  include_role:
-    name: http_file_server
-  vars:
-    file_to_serve: "{{ coreos_qcow2_img_filename }}"
-    server_port: "{{ http_file_server_port }}"
-    local_filename: "{{ coreos_qcow2_img_filename }}"
-    file_download_url: "{{ coreos_qcow2_url }}"
-    file_download_filename: "{{ coreos_qcow2_xz_filename }}"
-    extracted_filename: "{{ coreos_qcow2_final_filename }}"
-    renamed_filename: "{{ coreos_qcow2_img_filename }}"
-    http_file_server_port: "{{ http_file_server_port }}"
+    # http_file_server_port: "{{ http_file_server_port }}"
   when: not core_qcow_exists or wrong_size_file
 
 - name: Download QCOW2 to Proxmox from local server
