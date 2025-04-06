@@ -20,7 +20,7 @@
 
 - name: Start Python HTTP server in background
   ansible.builtin.command:
-    cmd: "python3 -m http.server {{ http_file_server_port }}"
+    cmd: "python3 -m http.server {{ server_port }}"
     chdir: "{{ local_download_dir }}"
   async: 600  # Keep running for 10 minutes
   poll: 0

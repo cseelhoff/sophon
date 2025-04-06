@@ -1,0 +1,7 @@
+---
+dest_dir: "/var/lib/vz/template/qcow/"
+coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.xz"
+# file_download_filename: "fedora-coreos-39.20240304.3.0-qemu.x86_64.qcow2.xz"
+# extracted_filename: "fedora-coreos-39.20240304.3.0-qemu.x86_64.qcow2"
+# renamed_filename: "fedora-coreos-39.20240304.3.0-qemu.x86_64.qcow2"
+# local_download_dir: "/tmp"

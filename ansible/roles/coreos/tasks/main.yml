@@ -164,7 +164,46 @@
       address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
       method=manual
 
-- name: Create ignition JSON string
+- name: Check for CoreOS admin password in environment
+  set_fact:
+    coreos_admin_password: "{{ lookup('env', 'COREOS_ADMIN_PASSWORD') }}"
+  when: lookup('env', 'COREOS_ADMIN_PASSWORD') != ""
+
+- name: Prompt for CoreOS admin password if not set
+  pause:
+    prompt: "Please enter the CoreOS admin password"
+    echo: no
+  register: coreos_admin_password_prompt
+  when: coreos_admin_password is not defined or coreos_admin_password == ""
+
+- name: Set CoreOS admin password from prompt
+  set_fact:
+    proxmox_api_password: "{{ coreos_admin_password_prompt.user_input }}"
+  when: coreos_admin_password_prompt is defined and coreos_admin_password_prompt.user_input is defined
+
+- name: Generate password hash for CoreOS user
+  ansible.builtin.set_fact:
+    coreos_password_hash: "{{ proxmox_api_password | password_hash('sha512') }}"
+  no_log: true
+
+- name: Process template using lookup plugin
+  set_fact:
+    ignition_config: "{{ lookup('template', 'ignition.json.j2') }}"
+
+# Modify the ignition json to replace commas with double-commas
+- name: Clean ignition JSON
+  set_fact:
+    ignition_config: "{{ ignition_config  | to_json | quote | regex_replace(',', ',,') }}"
+
+- name: Debug cleaned ignition JSON
+  debug:
+    msg: "Cleaned ignition config: {{ ignition_config }}"
+
+# Modify the ignition json to replace commas with double-commas
+# This is a workaround for a Proxmox bug where the ignition config is not parsed correctly
+- name: Generate ignition config from template
+  # set_fact:
+  #   ignition_config: "{{ lookup('template', 'ignition.json.j2') | to_json | quote | regex_replace(',', ',,') }}"
   set_fact:
     ignition_config: >-
       {
@@ -223,11 +262,25 @@
       net0: "virtio,bridge=vmbr0"
     state: present
     timeout: 600
-    scsi:
-      scsi0: "local:iso/{{ coreos_qcow2_img_filename }},format=qcow2"
+    # scsi:
+      # scsi0: "local-lvm:fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2,format=qcow2"
+      # scsi0: "local:iso/{{ coreos_qcow2_img_filename }},format=qcow2"
     args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
   register: vm_create
-  delegate_to: localhost
+
+- name: Run role import_coreos_qcow against the proxmox node
+  include_role:
+    name: import_coreos_qcow
+  vars:
+    vm_id: "{{ vm_create.vmid }}"
+    storage: "{{ storage_pool }}"
+    coreos_qcow_path: "{{ coreos_qcow_path }}"
+    coreos_qcow2_img_filename: "{{ coreos_qcow2_img_filename }}"
+    coreos_qcow2_xz_filename: "{{ coreos_qcow2_xz_filename }}"
+    coreos_qcow2_final_filename: "{{ coreos_qcow2_final_filename }}"
+    proxmox_host: "{{ proxmox_api_host }}"
+    pass2: "{{ query('ansible.builtin.vars', 'proxmox_api_password') | first }}"
+  # when: not core_qcow_exists or wrong_size_file
       
 # Start VM
 - name: Start VM on Proxmox
@@ -238,7 +291,7 @@
     node: "{{ proxmox_node_name }}"
     vmid: "{{ vm_create.vmid }}"
     state: started
-  delegate_to: localhost
+  # delegate_to: localhost
 
 - name: Wait for SSH to be available
   wait_for:
@@ -247,7 +300,7 @@
     delay: 2
     timeout: 300
     state: started
-  delegate_to: localhost
+  # delegate_to: localhost
 
 - name: Add VM to inventory
   add_host:

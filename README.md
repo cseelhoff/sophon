@@ -10,6 +10,7 @@ Prereqs:
 
 Running Deployment Scripts:
   1. (optional) `read -s PROXMOX_API_PASSWORD && export PROXMOX_API_PASSWORD`
+  1. (optional) `read -s COREOS_ADMIN_PASSWORD && export COREOS_ADMIN_PASSWORD`
   1. `cd ansible/`
   1. `ansible-playbook -i inventories/development coreos.yml`
   1. `ansible-playbook -i inventories/development portainer.yml`

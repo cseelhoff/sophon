@@ -1,0 +1,42 @@
+---
+- name: Create destination directory
+  ansible.builtin.file:
+    path: "{{ dest_dir }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "{{ proxmox_host }}"
+  vars:
+    ansible_ssh_password: "{{ pass2 }}"
+    ansible_ssh_user: root
+
+- name: Get base file name from url
+  ansible.builtin.set_fact:
+    coreos_qcow_xz_path: "{{ dest_dir }}/{{ coreos_url | basename }}"
+    coreos_qcow_path: "{{ coreos_qcow_path | regex_replace('.xz$', '') }}"
+  delegate_to: "{{ proxmox_host }}"
+
+- name: Check if qcow exists in /var/lib/vz/template/qcow/fedora-coreos-39.20240304.3.0-qemu.x86_64.qcow2
+  ansible.builtin.stat:
+    path: "{{ dest_dir }}/{{ file_download_filename }}"
+  register: local_file_stat
+  delegate_to: "{{ proxmox_host }}"
+
+- name : Download CoreOS image
+  ansible.builtin.get_url:
+    url: "{{ coreos_url }}"
+    dest: "{{ coreos_qcow_xz_path }}"
+    timeout: 600
+  when: not local_file_stat.stat.exists
+  delegate_to: "{{ proxmox_host }}"
+
+- name: Extract file from the .xz
+  ansible.builtin.command:
+    cmd: "xz -d {{ coreos_qcow_xz_path }}"
+  when: 
+    - not local_file_stat.stat.exists
+  delegate_to: "{{ proxmox_host }}"
+
+- name: Attach CoreOS qcow2 via qm importdisk
+  ansible.builtin.command:
+    cmd: "qm importdisk {{ vm_id }} {{ coreos_qcow_path }} {{ storage }} --format qcow2"
+  delegate_to: "{{ proxmox_host }}"

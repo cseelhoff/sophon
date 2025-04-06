@@ -1,0 +1,30 @@
+# filepath: /home/localadmin/sophon/ansible/roles/coreos/templates/ignition.json.j2
+{
+  "ignition": {
+    "version": "3.0.0"
+  },
+  "passwd": {
+    "users": [
+      {
+        "name": "{{ coreos_username }}",
+        "passwordHash": "{{ coreos_password_hash }}",
+        "sshAuthorizedKeys": ["{{ ssh_key['content'] | b64decode | trim }}"],
+        "groups": [
+          "sudo",
+          "docker"
+        ]
+      }
+    ]
+  },
+  "storage": {
+    "files": [
+      {
+        "path": "/etc/NetworkManager/system-connections/static.nmconnection",
+        "mode": 384,
+        "contents": {
+          "source": "data:text/plain;charset=utf-8;base64,{{ network_config | b64encode }}"
+        }
+      }
+    ]
+  }
+}
