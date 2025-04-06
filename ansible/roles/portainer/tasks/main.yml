@@ -1,14 +1,10 @@
 ---
-- name: Create a CoreOS VM on Proxmox
-  hosts: localhost
-  gather_facts: true  # We need this for IP address discovery
-  vars_files:
-    - vars.yml
+- name: Install Portainer
   tasks:
     # Find the IP address that Proxmox can reach
-    - name: Get local IP address
-      set_fact:
-        local_ip: "{{ ansible_default_ipv4.address }}"    
+    # - name: Get local IP address
+    #   set_fact:
+    #     local_ip: "{{ ansible_default_ipv4.address }}"    
         # if running WSL2
         # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
         # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
@@ -16,52 +12,40 @@
         # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
         # netsh interface portproxy show all
         # local_ip: "10.0.3.123"
-
     - name: Check if portainer is installed
       ansible.builtin.raw: podman images -q docker.io/portainer/portainer-ce:latest
       register: portainer_image_check
-      changed_when: false
-      become: true
-      delegate_to: "{{ coreos_ip }}"
+      # changed_when: false
 
-    - name: Debug portainer image check result
-      debug:
-        msg: "Image check result: '{{ portainer_image_check.stdout | trim }}'"
-      delegate_to: localhost
-
-    - name: Download and load portainer image from local server
+    - name: Download and load portainer image from HTTP file server
       ansible.builtin.raw: |
         cd /tmp && 
-        curl -o portainer-ce.tar http://{{ local_ip }}:{{ http_file_server_port }}/portainer-ce.tar && 
+        curl -o portainer-ce.tar http://{{ http_file_server_ip }}:{{ http_file_server_port }}/portainer-ce.tar && 
         podman load -i portainer-ce.tar &&
         rm -f portainer-ce.tar
       when: portainer_image_check.stdout | trim == ""
-      become: true
-      delegate_to: "{{ coreos_ip }}"
 
     - name: Check if portainer service exists
       ansible.builtin.raw: test -f /etc/systemd/system/portainer.service && echo "exists" || echo "not found"
       register: portainer_service_check
-      changed_when: false
-      become: true
-      delegate_to: "{{ coreos_ip }}"
+      # changed_when: false
 
-    - name: Check for Portainer admin password in environment
+    - name: Set initial admin password from environment if available
       set_fact:
         portainer_admin_password: "{{ lookup('env', 'PORTAINER_ADMIN_PASSWORD') }}"
-      when: lookup('env', 'PORTAINER_ADMIN_PASSWORD') != ""
+      when: lookup('env', 'PORTAINER_ADMIN_PASSWORD') | default('') != ""
       
-    - name: Prompt for Portainer admin password if not set
+    - name: Prompt for admin password if not set from environment
       pause:
         prompt: "Please enter the Portainer admin password"
         echo: no
-      register: portainer_admin_password_prompt
-      when: portainer_admin_password == ""
+      register: password_prompt
+      when: portainer_admin_password is not defined or portainer_admin_password == ""
       
-    - name: Set Portainer admin password from prompt
+    - name: Set final admin password
       set_fact:
-        portainer_admin_password: "{{ portainer_admin_password_prompt.user_input }}"
-      when: portainer_admin_password == "" and portainer_admin_password_prompt is defined
+        portainer_admin_password: "{{ password_prompt.user_input | default(portainer_admin_password) }}"
+      when: password_prompt is defined and password_prompt.user_input is defined
 
     - name: Create bcrypt password for portainer admin
       ansible.builtin.shell: "htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2 | sed -e 's/\\$/\\$\\$/g'"
@@ -73,33 +57,11 @@
     - name: Enable and start podman.socket
       ansible.builtin.raw: systemctl enable --now podman.socket
       become: true
-      delegate_to: "{{ coreos_ip }}"
       when: portainer_service_check.stdout | trim == "not found"
 
     - name: Create portainer systemd service file
       ansible.builtin.raw: |
-        cat > /etc/systemd/system/portainer.service << 'EOF'
-        [Unit]
-        Description=Portainer container
-        After=network.target
-        
-        [Service]
-        Restart=always
-        ExecStartPre=-/usr/bin/podman stop portainer
-        ExecStartPre=-/usr/bin/podman rm portainer
-        ExecStart=/usr/bin/podman run --name portainer \
-          -p 8000:8000 \
-          -p {{ portainer_port }}:{{ portainer_port }} \
-          --restart=always \
-          --privileged \
-          -v /run/podman/podman.sock:/var/run/docker.sock \
-          -v portainer_data:/data \
-          portainer/portainer-ce:{{ portainer_image_tag }} \
-          --admin-password '{{ portainer_admin_password_bcrypt.stdout }}'
-        ExecStop=/usr/bin/podman stop portainer
-
-        [Install]
-        WantedBy=multi-user.target
+        cat > /etc/systemd/system/portainer.service << 'EOF'        
         EOF
         chmod 644 /etc/systemd/system/portainer.service
       when: portainer_service_check.stdout | trim == "not found"

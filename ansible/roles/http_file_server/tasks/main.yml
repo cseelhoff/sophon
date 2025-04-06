@@ -1,0 +1,54 @@
+---
+# - name: Prepare HTTP File Server
+  # tasks:
+    # Find the IP address that Proxmox can reach
+    # - name: Get local IP address
+    #   set_fact:
+    #     local_ip: "{{ ansible_default_ipv4.address }}"
+        # if running WSL2
+        # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
+        # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
+        # TURN OFF WHEN DONE:
+        # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
+        # netsh interface portproxy show all
+        # local_ip: "10.0.3.123"
+- name: Create download directory
+  ansible.builtin.file:
+    path: "{{ local_download_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Start Python HTTP server in background
+  ansible.builtin.command:
+    cmd: "python3 -m http.server {{ http_file_server_port }}"
+    chdir: "{{ local_download_dir }}"
+  async: 600  # Keep running for 10 minutes
+  poll: 0
+  register: http_server_registration
+
+- name: Check if file exists locally
+  ansible.builtin.stat:
+    path: "{{ local_download_dir }}/{{ local_filename }}"
+  register: local_file_stat
+
+- name: Download local_filename locally
+  ansible.builtin.get_url:
+    url: "{{ file_download_url }}"
+    dest: "{{ local_download_dir }}/{{ file_download_filename }}"
+    timeout: 600
+  when: not local_file_stat.stat.exists
+
+- name: Extract file from the .xz locally
+  ansible.builtin.command:
+    cmd: "xz -d {{ local_download_dir }}/{{ file_download_filename }}"
+  when: 
+    - not local_file_stat.stat.exists
+    - extracted_filename is defined
+
+- name: Rename extracted file
+  ansible.builtin.command:
+    cmd: "mv {{ local_download_dir }}/{{ extracted_filename }} {{ local_download_dir }}/{{ renamed_filename }}"
+  when: 
+    - not local_file_stat.stat.exists
+    - extracted_filename is defined
+    - renamed_filename is defined

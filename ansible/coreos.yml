@@ -1,0 +1,6 @@
+---
+- name: Deploy CoreOS
+  hosts: localhost  # Or appropriate target
+  gather_facts: true
+  roles:
+    - coreos

@@ -1,19 +1,13 @@
 ---
 - name: Deploy CoreDNS to Portainer
-  hosts: localhost
-  gather_facts: yes
-  vars_files:
-    - vars.yml
   tasks:
     - name: Set deployment variables
       set_fact:
         validate_certs: false
         http_file_server_ip: "{{ ansible_default_ipv4.address }}"
-        stack_name: "coredns"
 
     - name: Check if CoreDNS image exists
       ansible.builtin.raw: podman images | grep -q "{{ coredns_image_name }}[ ]*{{ coredns_image_tag }}"
-      become: true
       delegate_to: "{{ coreos_ip }}"
       register: coredns_image_exists
       failed_when: false
@@ -25,7 +19,6 @@
         curl -o coredns.tar http://{{ http_file_server_ip }}:{{ http_file_server_port }}/coredns.tar && 
         podman load -i coredns.tar &&
         rm -f coredns.tar
-      become: true
       delegate_to: "{{ coreos_ip }}"
       when: coredns_image_exists.rc != 0
 
@@ -45,4 +38,10 @@
       set_fact:
         docker_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
 
-- import_playbook: portainer_deploy.yml
+    - name: Deploy CoreDNS stack using portainer
+      include_role:
+        name: portainer_deploy
+      vars:
+        portainer_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        stack_name: "coredns"
+        docker_compose_content_decoded: "{{ docker_compose_base64 | b64decode }}"
