@@ -6,8 +6,6 @@ storage_pool: "local"
 coreos_vm_name: "coreos"
 coreos_cores: 2
 coreos_memory: 4096
-coreos_username: "admin"
-ssh_private_key_path: "~/.ssh/id_rsa"
 ssh_public_key_path: "{{ ssh_private_key_path }}.pub"
 coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.xz"
 coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
