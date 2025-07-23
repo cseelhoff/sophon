@@ -1,8 +1,6 @@
 all:
-  children:
-    coreos:
-      hosts:
-        coreos:
-          ansible_host: "{{ coreos_ip }}"
-          ansible_user: "{{ coreos_username }}"
-          ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+  hosts:
+    coreos_ip:
+      ansible_host: "{{ coreos_ip }}"
+      ansible_user: "{{ coreos_username }}"
+      ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
