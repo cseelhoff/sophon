@@ -86,6 +86,10 @@
     path: "/tmp/{{ coreos_qcow2_img_filename }}"
   register: core_qcow_exists
   delegate_to: "{{ proxmox_api_host }}"
+  vars:
+    ansible_user: "{{ proxmox_api_username }}"
+    ansible_password: "{{ proxmox_api_password }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
   changed_when: false
 
 # - name: Check if CoreOS QCOW2 exists
@@ -131,6 +135,10 @@
     src: "{{ coreos_qcow2_img_filename }}"
     dest: "/tmp/{{ coreos_qcow2_img_filename }}"
   delegate_to: "{{ proxmox_api_host }}"
+  vars:
+    ansible_user: "{{ proxmox_api_username }}"
+    ansible_password: "{{ proxmox_api_password }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
   when: not core_qcow_exists.stat.exists
     
 # - name: Download QCOW2 to Proxmox {{ proxmox_node_name }}/storage/{{ storage_pool }} from http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}

@@ -1,6 +1,7 @@
 ---
 proxmox_node_name: "proxmox"
-proxmox_api_user: "root@pam"
+proxmox_api_username: "root"
+proxmox_api_user: "{{ proxmox_api_username }}@pam"
 storage_pool: "local"
 coreos_vm_name: "coreos"
 coreos_cores: 2
