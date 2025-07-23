@@ -11,6 +11,21 @@
     # netsh interface portproxy show all
     # local_ip: "10.0.3.123"
 
+# Prepare local download cache directory
+- name: Host CoreOS qcow2 image {{ coreos_qcow2_img_filename }} via HTTP file server
+  include_role:
+    name: http_file_server
+  vars:
+    file_to_serve: "{{ coreos_qcow2_img_filename }}"
+    server_port: "{{ http_file_server_port }}"
+    local_filename: "{{ coreos_qcow2_img_filename }}"
+    file_download_url: "{{ coreos_qcow2_url }}"
+    file_download_filename: "{{ coreos_qcow2_xz_filename }}"
+    extracted_filename: "{{ coreos_qcow2_final_filename }}"
+    renamed_filename: "{{ coreos_qcow2_img_filename }}"
+    # http_file_server_port: "{{ http_file_server_port }}"
+  when: not core_qcow_exists or wrong_size_file
+
 - name: Ensure SSH key exists
   ansible.builtin.command:
     cmd: "ssh-keygen -t rsa -b 4096 -f {{ ssh_private_key_path }} -N ''"
@@ -55,40 +70,47 @@
     pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
     pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
 
-- name: Check if qcow2.img exists on proxmox
-  uri:
-    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content"
-    method: GET
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-      CSRFPreventionToken: "{{ pve_csrf_token }}"
-    validate_certs: false
-  register: storage_content
-  failed_when: false
+# - name: Check if qcow2.img exists on proxmox
+#   uri:
+#     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content"
+#     method: GET
+#     headers:
+#       Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+#       CSRFPreventionToken: "{{ pve_csrf_token }}"
+#     validate_certs: false
+#   register: storage_content
+#   failed_when: false
 
-- name: Check if CoreOS QCOW2 exists
-  set_fact:
-    core_qcow_exists: "{{ storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) | list | length > 0 }}"
+- name: Check if CoreOS QCOW2 exists and is correct size on remote proxmox /tmp/ directory using ssh command
+  ansible.builtin.stat:
+    path: "/tmp/{{ coreos_qcow2_img_filename }}"
+  register: core_qcow_exists
+  delegate_to: "{{ proxmox_api_host }}"
+  changed_when: false
 
-- name: Check if CoreOS QCOW2 exists with correct size
-  set_fact:
-    file_correct_size: "{{ storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) | selectattr('size', 'equalto', 1811611648) | list | length > 0 }}"
-    when: core_qcow_exists
+# - name: Check if CoreOS QCOW2 exists
+#   set_fact:
+#     core_qcow_exists: "{{ storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) | list | length > 0 }}"
 
-- name: Check if file exists with incorrect size
-  set_fact:
-    wrong_size_file: "{{ core_qcow_exists and not file_correct_size }}"
+# - name: Check if CoreOS QCOW2 exists with correct size
+#   set_fact:
+#     file_correct_size: "{{ storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) | selectattr('size', 'equalto', 1811611648) | list | length > 0 }}"
+#     when: core_qcow_exists
 
-- name: Delete existing file with incorrect size
-  uri:
-    url: "https://{{ proxmox_api_host }}:8006/api2/extjs/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content//{{ storage_pool }}:iso/{{ coreos_qcow2_img_filename }}?delay=5"
-    method: DELETE
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-      CSRFPreventionToken: "{{ pve_csrf_token }}"
-    validate_certs: false
-  # register: delete_file_result
-  when: wrong_size_file
+# - name: Check if file exists with incorrect size
+#   set_fact:
+#     wrong_size_file: "{{ core_qcow_exists and not file_correct_size }}"
+
+# - name: Delete existing file with incorrect size
+#   uri:
+#     url: "https://{{ proxmox_api_host }}:8006/api2/extjs/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content//{{ storage_pool }}:iso/{{ coreos_qcow2_img_filename }}?delay=5"
+#     method: DELETE
+#     headers:
+#       Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+#       CSRFPreventionToken: "{{ pve_csrf_token }}"
+#     validate_certs: false
+#   # register: delete_file_result
+#   when: wrong_size_file
   
 # - name: Wait for file deletion to complete
 #   uri:
@@ -104,52 +126,45 @@
 #   delay: 3
 #   when: wrong_size_file
 
-- name: Host CoreOS qcow2 image via HTTP file server
-  include_role:
-    name: http_file_server
-  vars:
-    file_to_serve: "{{ coreos_qcow2_img_filename }}"
-    server_port: "{{ http_file_server_port }}"
-    local_filename: "{{ coreos_qcow2_img_filename }}"
-    file_download_url: "{{ coreos_qcow2_url }}"
-    file_download_filename: "{{ coreos_qcow2_xz_filename }}"
-    extracted_filename: "{{ coreos_qcow2_final_filename }}"
-    renamed_filename: "{{ coreos_qcow2_img_filename }}"
-    # http_file_server_port: "{{ http_file_server_port }}"
-  when: not core_qcow_exists or wrong_size_file
+- name: Use SCP to copy CoreOS QCOW2 image to Proxmox /tmp/ directory (this is a workaround for Proxmox not supporting direct HTTP downloads of QCOW2 files). ssh creds are proxmox_api_user and proxmox_api_password
+  ansible.builtin.copy:
+    src: "{{ coreos_qcow2_img_filename }}"
+    dest: "/tmp/{{ coreos_qcow2_img_filename }}"
+  delegate_to: "{{ proxmox_api_host }}"
+  when: not core_qcow_exists.stat.exists
+    
+# - name: Download QCOW2 to Proxmox {{ proxmox_node_name }}/storage/{{ storage_pool }} from http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}
+#   uri:
+#     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/download-url"
+#     method: POST
+#     headers:
+#       Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+#       CSRFPreventionToken: "{{ pve_csrf_token }}"
+#     body:
+#       content: "iso"  # Proxmox treats this as a generic downloadable file
+#       filename: "{{ coreos_qcow2_img_filename }}"
+#       url: "http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}"
+#     body_format: json
+#     validate_certs: false
+#   register: qcow2_download
+#   when: not core_qcow_exists or wrong_size_file
+#   failed_when: qcow2_download.status != 200 and "already exists" not in (qcow2_download.content|default("")|string)
 
-- name: Download QCOW2 to Proxmox from local server
-  uri:
-    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/download-url"
-    method: POST
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-      CSRFPreventionToken: "{{ pve_csrf_token }}"
-    body:
-      content: "iso"  # Proxmox treats this as a generic downloadable file
-      filename: "{{ coreos_qcow2_img_filename }}"
-      url: "http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}"
-    body_format: json
-    validate_certs: false
-  register: qcow2_download
-  when: not core_qcow_exists or wrong_size_file
-  failed_when: qcow2_download.status != 200 and "already exists" not in (qcow2_download.content|default("")|string)
-
-- name: Wait for QCOW2 download to complete
-  uri:
-    url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content"
-    method: GET
-    headers:
-      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-      CSRFPreventionToken: "{{ pve_csrf_token }}"
-    validate_certs: false
-  register: storage_content
-  until: >
-    storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) 
-    | map(attribute='format') | select('defined') | list | length > 0
-  retries: 30
-  delay: 10
-  when: not core_qcow_exists or wrong_size_file
+# - name: Wait for QCOW2 download to complete
+#   uri:
+#     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/content"
+#     method: GET
+#     headers:
+#       Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+#       CSRFPreventionToken: "{{ pve_csrf_token }}"
+#     validate_certs: false
+#   register: storage_content
+#   until: >
+#     storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) 
+#     | map(attribute='format') | select('defined') | list | length > 0
+#   retries: 30
+#   delay: 10
+#   when: not core_qcow_exists or wrong_size_file
 
 # Define the ignition config as a variable for easier reading
 - name: Create network_config file contents
@@ -207,6 +222,7 @@
     msg: "Cleaned ignition config: {{ ignition_config }}"
 
 # Create the VM using the QCOW2 image in one step
+#   changed from scsi0: "local:iso/{{ coreos_qcow2_img_filename }},format=qcow2"
 - name: Create VM on Proxmox with imported disk
   community.general.proxmox_kvm:
     api_host: "{{ proxmox_api_host }}"
@@ -224,7 +240,7 @@
     state: present
     timeout: 600
     scsi:
-      scsi0: "local:iso/{{ coreos_qcow2_img_filename }},format=qcow2"
+      scsi0: "/tmp/{{ coreos_qcow2_img_filename }},format=qcow2"
     args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
   register: vm_create
   delegate_to: localhost

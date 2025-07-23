@@ -12,6 +12,10 @@
         # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
         # netsh interface portproxy show all
         # local_ip: "10.0.3.123"
+        # if running IPTABLES:
+        # sudo iptables -I INPUT 1 -p tcp --dport 8000 -j ACCEPT
+        # TURN OFF WHEN DONE:
+        # sudo iptables -D INPUT -p tcp --dport 8000 -j ACCEPT
 - name: Create download directory {{ local_download_dir }}
   ansible.builtin.file:
     path: "{{ local_download_dir }}"
