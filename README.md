@@ -13,5 +13,5 @@ Running Deployment Scripts:
   1. `cd ansible/`
   1. `nano inventories/development/group_vars/all.yml`
   1. `ansible-playbook -i inventories/development coreos.yml`
-  1. `ansible-playbook -i inventories/development portainer.yml`
+  1. `ansible-playbook -i inventories/development/inventory.yml`
   1. `ansible-playbook -i inventories/development coredns.yml`
