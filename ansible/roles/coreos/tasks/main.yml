@@ -24,7 +24,7 @@
     extracted_filename: "{{ coreos_qcow2_final_filename }}"
     renamed_filename: "{{ coreos_qcow2_img_filename }}"
     # http_file_server_port: "{{ http_file_server_port }}"
-  when: not core_qcow_exists or wrong_size_file
+  # when: not core_qcow_exists or wrong_size_file
 
 - name: Ensure SSH key exists
   ansible.builtin.command:
