@@ -81,6 +81,13 @@
 #   register: storage_content
 #   failed_when: false
 
+- name: Debug SSH connection variables
+  debug:
+    msg: 
+      - "proxmox_api_username: {{ proxmox_api_username }}"
+      - "proxmox_api_host: {{ proxmox_api_host }}"
+      - "proxmox_api_password is defined: {{ proxmox_api_password is defined }}"
+
 - name: Check if CoreOS QCOW2 exists and is correct size on remote proxmox /tmp/ directory using ssh command
   ansible.builtin.stat:
     path: "/tmp/{{ coreos_qcow2_img_filename }}"
@@ -88,8 +95,11 @@
   delegate_to: "{{ proxmox_api_host }}"
   vars:
     ansible_user: "{{ proxmox_api_username }}"
+    ansible_ssh_user: "{{ proxmox_api_username }}"
     ansible_password: "{{ proxmox_api_password }}"
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    ansible_ssh_pass: "{{ proxmox_api_password }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+    ansible_connection: ssh
   changed_when: false
 
 # - name: Check if CoreOS QCOW2 exists
@@ -137,8 +147,11 @@
   delegate_to: "{{ proxmox_api_host }}"
   vars:
     ansible_user: "{{ proxmox_api_username }}"
+    ansible_ssh_user: "{{ proxmox_api_username }}"
     ansible_password: "{{ proxmox_api_password }}"
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    ansible_ssh_pass: "{{ proxmox_api_password }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+    ansible_connection: ssh
   when: not core_qcow_exists.stat.exists
     
 # - name: Download QCOW2 to Proxmox {{ proxmox_node_name }}/storage/{{ storage_pool }} from http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}
