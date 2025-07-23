@@ -81,27 +81,6 @@
 #   register: storage_content
 #   failed_when: false
 
-- name: Debug SSH connection variables
-  debug:
-    msg: 
-      - "proxmox_api_username: {{ proxmox_api_username }}"
-      - "proxmox_api_host: {{ proxmox_api_host }}"
-      - "proxmox_api_password is defined: {{ proxmox_api_password is defined }}"
-
-- name: Check if CoreOS QCOW2 exists and is correct size on remote proxmox /tmp/ directory using ssh command
-  ansible.builtin.stat:
-    path: "/tmp/{{ coreos_qcow2_img_filename }}"
-  register: core_qcow_exists
-  delegate_to: "{{ proxmox_api_host }}"
-  vars:
-    ansible_user: "{{ proxmox_api_username }}"
-    ansible_ssh_user: "{{ proxmox_api_username }}"
-    ansible_password: "{{ proxmox_api_password }}"
-    ansible_ssh_pass: "{{ proxmox_api_password }}"
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no"
-    ansible_connection: ssh
-  changed_when: false
-
 # - name: Check if CoreOS QCOW2 exists
 #   set_fact:
 #     core_qcow_exists: "{{ storage_content.json.data | selectattr('volid', 'equalto', storage_pool + ':iso/' + coreos_qcow2_img_filename) | list | length > 0 }}"
@@ -140,20 +119,6 @@
 #   delay: 3
 #   when: wrong_size_file
 
-- name: Use SCP to copy CoreOS QCOW2 image to Proxmox /tmp/ directory (this is a workaround for Proxmox not supporting direct HTTP downloads of QCOW2 files). ssh creds are proxmox_api_user and proxmox_api_password
-  ansible.builtin.copy:
-    src: "{{ coreos_qcow2_img_filename }}"
-    dest: "/tmp/{{ coreos_qcow2_img_filename }}"
-  delegate_to: "{{ proxmox_api_host }}"
-  vars:
-    ansible_user: "{{ proxmox_api_username }}"
-    ansible_ssh_user: "{{ proxmox_api_username }}"
-    ansible_password: "{{ proxmox_api_password }}"
-    ansible_ssh_pass: "{{ proxmox_api_password }}"
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no"
-    ansible_connection: ssh
-  when: not core_qcow_exists.stat.exists
-    
 # - name: Download QCOW2 to Proxmox {{ proxmox_node_name }}/storage/{{ storage_pool }} from http://{{ local_ip }}:{{ http_file_server_port }}/{{ coreos_qcow2_img_filename }}
 #   uri:
 #     url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ proxmox_node_name }}/storage/{{ storage_pool }}/download-url"
@@ -244,6 +209,8 @@
 
 # Create the VM using the QCOW2 image in one step
 #   changed from scsi0: "local:iso/{{ coreos_qcow2_img_filename }},format=qcow2"
+#   you may need to run this command first:
+#     scp /tmp/coreos_images/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.img root@192.168.100.2:/tmp/
 - name: Create VM on Proxmox with imported disk
   community.general.proxmox_kvm:
     api_host: "{{ proxmox_api_host }}"
@@ -264,7 +231,7 @@
       scsi0: "/tmp/{{ coreos_qcow2_img_filename }},format=qcow2"
     args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
   register: vm_create
-  delegate_to: localhost
+  # delegate_to: localhost
       
 # Start VM
 - name: Start VM on Proxmox
@@ -275,7 +242,7 @@
     node: "{{ proxmox_node_name }}"
     vmid: "{{ vm_create.vmid }}"
     state: started
-  delegate_to: localhost
+  # delegate_to: localhost
 
 - name: Wait for SSH to be available
   wait_for:
@@ -284,7 +251,7 @@
     delay: 2
     timeout: 300
     state: started
-  delegate_to: localhost
+  # delegate_to: localhost
 
 - name: Add VM to inventory
   add_host:
