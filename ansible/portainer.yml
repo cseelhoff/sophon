@@ -1,0 +1,6 @@
+---
+- name: Deploy Portainer
+  hosts: coreos_ip  # Or appropriate target
+  gather_facts: true
+  roles:
+    - portainer

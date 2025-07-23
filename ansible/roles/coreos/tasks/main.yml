@@ -227,8 +227,9 @@
       net0: "virtio,bridge=vmbr0"
     state: present
     timeout: 600
-    scsi:
-      scsi0: "/tmp/{{ coreos_qcow2_img_filename }},format=qcow2"
+    virtio:
+      virtio0: "local-lvm:0,import-from=/tmp/{{ coreos_qcow2_img_filename }},size=32G"
+    boot: "order=virtio0"
     args: "-fw_cfg name=opt/com.coreos/config,string={{ ignition_config }}"
   register: vm_create
   # delegate_to: localhost
