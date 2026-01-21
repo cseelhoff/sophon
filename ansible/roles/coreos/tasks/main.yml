@@ -41,23 +41,18 @@
 - name: Check for Proxmox API password in environment
   ansible.builtin.set_fact:
     coreos_proxmox_api_password: "{{ lookup('env', 'PROXMOX_API_PASSWORD') }}"
-  when: lookup('env', 'PROXMOX_API_PASSWORD') != ""
+  when:
+    - coreos_proxmox_api_password is not defined or coreos_proxmox_api_password == ""
+    - lookup('env', 'PROXMOX_API_PASSWORD') != ""
 
-- name: Prompt for Proxmox API password if not set
-  ansible.builtin.pause:
-    prompt: "Enter Proxmox password for {{ coreos_proxmox_api_user }}"
-    echo: false
-  register: coreos_proxmox_password_prompt
+- name: Validate Proxmox API password is set
+  ansible.builtin.fail:
+    msg: "Proxmox API password not set. Run site.yml which prompts for it, or set PROXMOX_API_PASSWORD env var."
   when: coreos_proxmox_api_password is not defined or coreos_proxmox_api_password == ""
-
-- name: Set Proxmox API password from prompt
-  ansible.builtin.set_fact:
-    coreos_proxmox_api_password: "{{ coreos_proxmox_password_prompt.user_input }}"
-  when: coreos_proxmox_password_prompt.user_input is defined
 
 - name: Obtain Proxmox API ticket
   ansible.builtin.uri:
-    url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/access/ticket"
+    url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/access/ticket"
     method: POST
     body:
       username: "{{ coreos_proxmox_api_user }}"
@@ -74,19 +69,11 @@
 # -----------------------------------------------------------------------------
 # CoreOS Image: Check if exists on Proxmox
 # -----------------------------------------------------------------------------
-- name: Check if QCOW2 exists on Proxmox
-  ansible.builtin.uri:
-    url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
-    method: GET
-    headers:
-      Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
-    validate_certs: false
-  register: coreos_storage_content
-  failed_when: false
-
+# Note: Proxmox API cannot check /tmp directly. We assume image exists if user
+# provides coreos_skip_image_download=true, otherwise we try to download/prompt.
 - name: Set image exists fact
   ansible.builtin.set_fact:
-    coreos_image_exists: "{{ coreos_storage_content.json.data | default([]) | selectattr('volid', 'search', coreos_qcow2_img_filename) | list | length > 0 }}"
+    coreos_image_exists: "{{ coreos_skip_image_download | default(false) | bool }}"
 
 # -----------------------------------------------------------------------------
 # CoreOS Image: Download (non-airgapped mode)
@@ -94,22 +81,9 @@
 - name: Download and prepare CoreOS image
   when: not coreos_image_exists and not (coreos_airgapped_mode | default(false))
   block:
-    - name: Create temp directory on Proxmox
-      ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/execute"
-        method: POST
-        headers:
-          Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
-          CSRFPreventionToken: "{{ coreos_pve_csrf_token }}"
-        body:
-          command: "mkdir -p /tmp/sophon"
-        body_format: form-urlencoded
-        validate_certs: false
-      failed_when: false
-
     - name: Attempt to download CoreOS image via Proxmox API
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/download-url"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/download-url"
         method: POST
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
@@ -137,14 +111,16 @@
 
           Option 1 - SSH (if SSH access is available):
           ----------------------------------------------------------------------------
-          ssh {{ coreos_proxmox_api_user }}@{{ coreos_proxmox_api_host }} \
-            'cd /tmp && curl -LO {{ coreos_qcow2_url }} && \
+          ssh {{ coreos_proxmox_api_username }}@{{ coreos_proxmox_api_host }} \
+            'cd /tmp && \
+            curl -LO {{ coreos_qcow2_url }} && \
             xz -d {{ coreos_qcow2_xz_filename }} && \
             mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}'
 
           Option 2 - Console (run directly on Proxmox shell):
           ----------------------------------------------------------------------------
-          cd /tmp && curl -LO {{ coreos_qcow2_url }} && \
+          cd /tmp && \
+            curl -LO {{ coreos_qcow2_url }} && \
             xz -d {{ coreos_qcow2_xz_filename }} && \
             mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}
 
@@ -154,7 +130,7 @@
 
     - name: Wait for download task to complete
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
@@ -189,7 +165,7 @@
 
     - name: Trigger Proxmox to download from local HTTP server
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/download-url"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/download-url"
         method: POST
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
@@ -204,7 +180,7 @@
 
     - name: Wait for local download to complete
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
@@ -223,6 +199,7 @@
       [connection]
       id=Wired connection 1
       type=ethernet
+      match-device=type:ethernet
 
       [ipv4]
       method=auto
@@ -234,48 +211,79 @@
       [connection]
       id=Wired connection 1
       type=ethernet
+      match-device=type:ethernet
 
       [ipv4]
       address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
       method=manual
   when: coreos_network_mode == "static"
 
-- name: Create ignition config
+- name: Create ignition JSON
   ansible.builtin.set_fact:
     coreos_ignition_config: >-
       {
-        "ignition": {"version": "3.0.0"},
+        "ignition": {
+          "version": "3.0.0"
+        },
         "passwd": {
-          "users": [{
-            "name": "{{ coreos_username }}",
-            "passwordHash": "$y$j9T$icTH9ilSsldG.Sew1Ipk./$P4/ewJbHmjiKy99l7Z9bcen5dVYRf0SetM3C2l8VKn2",
-            "sshAuthorizedKeys": ["{{ coreos_ssh_key['content'] | b64decode | trim }}"],
-            "groups": ["sudo", "docker"]
-          }]
+          "users": [
+            {
+              "name": "{{ coreos_username }}",
+              "passwordHash": "{{ coreos_password_hash }}",
+              "sshAuthorizedKeys": ["{{ coreos_ssh_key['content'] | b64decode | trim }}"],
+              "groups": [
+                "sudo",
+                "docker"
+              ]
+            }
+          ]
         },
         "storage": {
-          "files": [{
-            "path": "/etc/NetworkManager/system-connections/eth0.nmconnection",
-            "mode": 384,
-            "contents": {"source": "data:text/plain;charset=utf-8;base64,{{ coreos_network_config | b64encode }}"}
-          }]
+          "files": [
+            {
+              "path": "/etc/NetworkManager/system-connections/static.nmconnection",
+              "mode": 384,
+              "contents": {
+                "source": "data:text/plain;charset=utf-8;base64,{{ coreos_network_config | b64encode }}"
+              }
+            }
+          ]
         }
       }
 
-- name: Escape ignition config for Proxmox args
+- name: Escape commas for Proxmox
   ansible.builtin.set_fact:
-    # Proxmox parses "args" as a comma-separated list and requires literal commas
-    # inside a single argument to be escaped by doubling them (",,"). We JSON-encode
-    # and quote the ignition config, then replace "," with ",," to satisfy this
-    # Proxmox API/CLI escaping requirement.
-    coreos_ignition_config_escaped: "{{ coreos_ignition_config | to_json | quote | regex_replace(',', ',,') }}"
+    coreos_ignition_config: "{{ coreos_ignition_config | to_json | quote | regex_replace(',', ',,') }}"
+
+- name: Debug escaped ignition config
+  ansible.builtin.debug:
+    msg: "Escaped ignition config: {{ coreos_ignition_config }}"
 
 # -----------------------------------------------------------------------------
 # VM Creation
 # -----------------------------------------------------------------------------
+- name: Check if VM with same name already exists
+  ansible.builtin.uri:
+    url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
+    validate_certs: false
+  register: coreos_existing_vms
+
+- name: Set existing VM fact
+  ansible.builtin.set_fact:
+    coreos_existing_vm: "{{ coreos_existing_vms.json.data | selectattr('name', 'eq', coreos_vm_name) | list | first | default(none) }}"
+
+- name: Display existing VM info
+  ansible.builtin.debug:
+    msg: "Found existing VM '{{ coreos_vm_name }}' with VMID {{ coreos_existing_vm.vmid }}"
+  when: coreos_existing_vm is not none
+
 - name: Create CoreOS VM on Proxmox
   community.general.proxmox_kvm:
     api_host: "{{ coreos_proxmox_api_host }}"
+    api_port: "{{ coreos_proxmox_api_port }}"
     api_user: "{{ coreos_proxmox_api_user }}"
     api_password: "{{ coreos_proxmox_api_password }}"
     node: "{{ coreos_proxmox_node_name }}"
@@ -292,12 +300,20 @@
     virtio:
       virtio0: "{{ coreos_proxmox_storage }}:0,import-from=/tmp/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
     boot: "order=virtio0"
-    args: "-fw_cfg name=opt/com.coreos/config,string={{ coreos_ignition_config_escaped }}"
+    args: "-fw_cfg name=opt/com.coreos/config,string={{ coreos_ignition_config }}"
   register: coreos_vm_create
+  when: coreos_existing_vm is none
+
+- name: Use existing VM ID if VM already exists
+  ansible.builtin.set_fact:
+    coreos_vm_create:
+      vmid: "{{ coreos_existing_vm.vmid }}"
+  when: coreos_existing_vm is not none
 
 - name: Start CoreOS VM
   community.general.proxmox_kvm:
     api_host: "{{ coreos_proxmox_api_host }}"
+    api_port: "{{ coreos_proxmox_api_port }}"
     api_user: "{{ coreos_proxmox_api_user }}"
     api_password: "{{ coreos_proxmox_api_password }}"
     node: "{{ coreos_proxmox_node_name }}"
@@ -313,7 +329,7 @@
     - name: Wait for QEMU guest agent to report IP
       ansible.builtin.uri:
         url: >-
-          https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{-
+          https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{-
           coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/agent/network-get-interfaces
         method: GET
         headers:
@@ -327,7 +343,22 @@
         map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | list | length > 0
       retries: 30
       delay: 10
-      failed_when: false
+
+    - name: Fail if VM did not get IP address
+      ansible.builtin.fail:
+        msg: |
+          CoreOS VM failed to obtain an IP address via DHCP.
+          
+          This usually means:
+          1. The VM failed to boot (check Proxmox console for boot errors)
+          2. QEMU guest agent is not installed/running
+          3. Network configuration in ignition is incorrect
+          
+          Check the VM console in Proxmox for more details.
+      when: >
+        coreos_vm_network.status != 200 or
+        (coreos_vm_network.json.data.result | default([]) | selectattr('name', 'ne', 'lo') |
+        map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | list | length == 0)
 
     - name: Extract VM IP address
       ansible.builtin.set_fact:
@@ -338,12 +369,10 @@
               flatten |
               selectattr('ip-address-type', 'eq', 'ipv4') |
               first)['ip-address'] }}
-      when: coreos_vm_network.status == 200
 
     - name: Display VM IP
       ansible.builtin.debug:
         msg: "CoreOS VM IP address: {{ coreos_ip }}"
-      when: coreos_ip is defined
 
 - name: Wait for SSH to be available
   ansible.builtin.wait_for:

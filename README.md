@@ -36,7 +36,6 @@ This project follows an **air-gapped deployment** pattern: container images are 
 | CoreOS VM | ✅ Ready | - | Fedora CoreOS on Proxmox |
 | Portainer | ✅ Ready | 9443 | Container management |
 | CoreDNS | ✅ Ready | 53 | DNS server |
-| DNS Sync | ✅ Ready | - | Traefik→CoreDNS sync |
 | Traefik | ✅ Ready | 80, 443, 8080 | Reverse proxy + SSL |
 | Homepage | ✅ Ready | 3000 | Admin dashboard |
 | Gitea | ✅ Ready | 3001, 222 | Git + CI/CD |
@@ -106,20 +105,23 @@ nix develop
 cd ansible/
 ansible-galaxy install -r requirements.yml
 
-# Configure variables
-cp inventories/production/group_vars/vault.yml.example inventories/production/group_vars/vault.yml
-nano inventories/development/group_vars/all.yml
-
-# Optional: Set Proxmox API password
-read -s PROXMOX_API_PASSWORD && export PROXMOX_API_PASSWORD
-
-# Deploy everything
+# Deploy everything (prompts for Proxmox host, domain, and password)
 ansible-playbook -i inventories/development/inventory.yml site.yml
+
+# Or provide parameters explicitly (for scripting/CI)
+ansible-playbook -i inventories/development/inventory.yml site.yml \
+  -e coreos_proxmox_api_host=192.168.1.100 \
+  -e domain_name=homelab.local \
+  -e vault_proxmox_api_password=secret
 
 # Deploy specific services
 ansible-playbook -i inventories/development/inventory.yml site.yml --tags "traefik,homepage"
 
 # Production deployment with vault
+ansible-playbook -i inventories/production/inventory.yml site.yml --ask-vault-pass
+```
+
+**Note:** Service passwords (Portainer, Keycloak, etc.) are auto-generated and displayed at playbook completion. Save them securely!
 ansible-playbook -i inventories/production/inventory site.yml --ask-vault-pass
 ```
 
@@ -149,7 +151,6 @@ sophon/
 │   │   ├── portainer/           # Container management
 │   │   ├── portainer_stack/     # Stack deployment API
 │   │   ├── coredns/             # DNS server
-│   │   ├── dns_sync/            # Traefik→DNS sync sidecar
 │   │   ├── traefik/             # Reverse proxy + SSL
 │   │   ├── homepage/            # Dashboard
 │   │   ├── gitea/               # Git server + Actions

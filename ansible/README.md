@@ -7,12 +7,15 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 Deploy a complete homelab in one command:
 
 ```bash
-ansible-playbook -i localhost, ansible/site.yml \
-  -e proxmox_api_host=pve.example.com \
-  -e domain_name=homelab.local
+cd ansible && ansible-playbook -i inventories/development/inventory.yml site.yml
 ```
 
-That's it! This will:
+That's it! You'll be prompted for:
+1. **Proxmox API host** (e.g., `192.168.1.100` or `pve.example.com`)
+2. **Domain name** (e.g., `homelab.local`)
+3. **Proxmox password** (hidden input)
+
+The playbook will then:
 1. Prompt for your Proxmox password (API authentication)
 2. Use your existing `~/.ssh/id_rsa` key (or generate one)
 3. Download Fedora CoreOS to Proxmox storage
@@ -23,34 +26,32 @@ That's it! This will:
 
 If your Proxmox server can't reach the internet, the playbook will fail gracefully with SSH/console commands you can run manually to transfer the CoreOS image.
 
+### Scripting / CI (Skip Prompts)
+
+For non-interactive use, provide values via `-e` flags:
+
+```bash
+ansible-playbook -i inventories/development/inventory.yml site.yml \
+  -e coreos_proxmox_api_host=pve.example.com \
+  -e domain_name=homelab.local \
+  -e coreos_proxmox_api_password=secret
+```
+
 ### Common Options
 
 ```bash
 # Use a specific SSH key
-ansible-playbook -i localhost, ansible/site.yml \
-  -e proxmox_api_host=pve.example.com \
-  -e domain_name=homelab.local \
+ansible-playbook -i inventories/development/inventory.yml site.yml \
   -e ssh_private_key_path=~/.ssh/my_key
 
 # Use static IP instead of DHCP
-ansible-playbook -i localhost, ansible/site.yml \
-  -e proxmox_api_host=pve.example.com \
-  -e domain_name=homelab.local \
+ansible-playbook -i inventories/development/inventory.yml site.yml \
   -e coreos_network_mode=static \
   -e coreos_ip=10.0.0.100
 
 # Specify Proxmox storage
-ansible-playbook -i localhost, ansible/site.yml \
-  -e proxmox_api_host=pve.example.com \
-  -e domain_name=homelab.local \
-  -e proxmox_storage=local-zfs
-
-# Save Proxmox password in environment
-export PROXMOX_PASSWORD=your-password
-ansible-playbook -i localhost, ansible/site.yml \
-  -e proxmox_api_host=pve.example.com \
-  -e domain_name=homelab.local \
-  -e proxmox_api_password="$PROXMOX_PASSWORD"
+ansible-playbook -i inventories/development/inventory.yml site.yml \
+  -e coreos_proxmox_storage=local-zfs
 ```
 
 ### Inventory-Based Deployment

@@ -2,13 +2,70 @@
 # Sophon Infrastructure Master Playbook
 # Deploys all services in the correct order
 #
-# Quick Start (one-liner):
-#   ansible-playbook -i localhost, ansible/site.yml -e proxmox_api_host=pve.example.com -e domain_name=homelab.local
+# Quick Start:
+#   cd ansible && ansible-playbook -i inventories/development/inventory.yml site.yml
+#   (You will be prompted for Proxmox host, domain name, and password if not configured)
 #
-# With inventory:
-#   ansible-playbook -i inventories/development/inventory.yml site.yml
-#   ansible-playbook -i inventories/development/inventory.yml site.yml --tags "dns,proxy"
-#   ansible-playbook -i inventories/development/inventory.yml site.yml --skip-tags "gitea"
+# With explicit parameters (for scripting/CI):
+#   ansible-playbook -i inventories/development/inventory.yml site.yml \
+#     -e coreos_proxmox_api_host=pve.example.com \
+#     -e domain_name=homelab.local \
+#     -e coreos_proxmox_api_password=secret
+#
+# Deploy specific services:
+#   ansible-playbook -i inventories/development/inventory.yml site.yml --tags "traefik,homepage"
+
+- name: Prompt for Required Variables
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: Prompt for Proxmox API host
+      ansible.builtin.pause:
+        prompt: "Enter Proxmox API host (e.g., 192.168.1.100 or pve.example.com)"
+      register: prompted_proxmox_host
+      when: coreos_proxmox_api_host is not defined or coreos_proxmox_api_host == ""
+
+    - name: Set Proxmox API host from prompt
+      ansible.builtin.set_fact:
+        coreos_proxmox_api_host: "{{ prompted_proxmox_host.user_input }}"
+      when: prompted_proxmox_host.user_input is defined
+
+    - name: Prompt for domain name
+      ansible.builtin.pause:
+        prompt: "Enter domain name suffix (e.g., homelab.local)"
+      register: prompted_domain_name
+      when: domain_name is not defined or domain_name == ""
+
+    - name: Set domain name from prompt
+      ansible.builtin.set_fact:
+        domain_name: "{{ prompted_domain_name.user_input }}"
+      when: prompted_domain_name.user_input is defined
+
+    - name: Prompt for Proxmox API password
+      ansible.builtin.pause:
+        prompt: "Enter Proxmox API password"
+        echo: false
+      register: prompted_proxmox_password
+      when: coreos_proxmox_api_password is not defined or coreos_proxmox_api_password == ""
+
+    - name: Set Proxmox API password from prompt
+      ansible.builtin.set_fact:
+        coreos_proxmox_api_password: "{{ prompted_proxmox_password.user_input }}"
+      when: prompted_proxmox_password.user_input is defined
+
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - coreos_proxmox_api_host is defined and coreos_proxmox_api_host | length > 0
+          - domain_name is defined and domain_name | length > 0
+          - coreos_proxmox_api_password is defined and coreos_proxmox_api_password | length > 0
+        fail_msg: |
+          Missing required variables. Provide via:
+          - Interactive prompt (run playbook without -e flags)
+          - Command line: -e coreos_proxmox_api_host=... -e domain_name=... -e coreos_proxmox_api_password=...
+          - Inventory group_vars/all.yml or vault.yml
 
 - name: Deploy CoreOS VM
   hosts: localhost

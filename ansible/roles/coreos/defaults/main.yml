@@ -6,6 +6,7 @@ coreos_enabled: true
 # Proxmox Connection (required - pass via command line or inventory)
 # =============================================================================
 # coreos_proxmox_api_host: "pve.example.com"  # Required: Proxmox server FQDN or IP
+coreos_proxmox_api_port: 8006  # Default Proxmox API port (use 443 if behind reverse proxy)
 coreos_proxmox_api_username: "root"
 coreos_proxmox_api_user: "{{ coreos_proxmox_api_username }}@pam"
 coreos_proxmox_node_name: "proxmox"
@@ -19,6 +20,9 @@ coreos_cores: 2
 coreos_memory: 4096
 coreos_disk_size: "32G"
 coreos_username: "admin"
+# Default password hash for 'admin' user (password: changeme)
+# Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
+coreos_password_hash: "$y$j9T$icTH9ilSsldG.Sew1Ipk./$P4/ewJbHmjiKy99l7Z9bcen5dVYRf0SetM3C2l8VKn2"
 
 # Network mode: "dhcp" or "static"
 # DHCP is recommended for quick start - VM gets IP from your network's DHCP server
