@@ -101,7 +101,7 @@
           CSRFPreventionToken: "{{ coreos_pve_csrf_token }}"
         body:
           content: "iso"
-          filename: "{{ coreos_qcow2_final_filename }}"
+          filename: "{{ coreos_qcow2_img_filename }}"
           url: "{{ coreos_qcow2_url }}"
         body_format: json
         validate_certs: false
@@ -174,7 +174,7 @@
         http_file_server_local_filename: "{{ coreos_qcow2_img_filename }}"
         http_file_server_download_url: "{{ coreos_qcow2_url }}"
         http_file_server_download_filename: "{{ coreos_qcow2_xz_filename }}"
-        http_file_server_extracted_filename: "{{ coreos_qcow2_final_filename }}"
+        http_file_server_extracted_filename: "{{ coreos_qcow2_img_filename }}"
         http_file_server_renamed_filename: "{{ coreos_qcow2_img_filename }}"
 
     - name: Trigger Proxmox to download from local HTTP server
@@ -207,22 +207,76 @@
 # -----------------------------------------------------------------------------
 # Ignition Configuration
 # -----------------------------------------------------------------------------
-# Step 1: Create ignition config as a dictionary
+# Step 1: Create network config for NetworkManager
+- name: Create DHCP network config
+  ansible.builtin.set_fact:
+    coreos_network_config: |
+      [connection]
+      id=Wired connection 1
+      type=ethernet
+      match-device=type:ethernet
+
+      [ipv4]
+      method=auto
+  when: coreos_network_mode == "dhcp"
+
+- name: Create static network config
+  ansible.builtin.set_fact:
+    coreos_network_config: |
+      [connection]
+      id=Wired connection 1
+      type=ethernet
+      match-device=type:ethernet
+
+      [ipv4]
+      address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
+      method=manual
+  when: coreos_network_mode == "static"
+
+# Step 2: Create ignition config as a dictionary
 - name: Create ignition config dict
   ansible.builtin.set_fact:
     coreos_ignition_dict:
       ignition:
         version: "3.4.0"
+      passwd:
+        users:
+          - name: "{{ coreos_username }}"
+            passwordHash: "{{ coreos_password_hash }}"
+            sshAuthorizedKeys:
+              - "{{ coreos_ssh_key['content'] | b64decode | trim }}"
+            groups:
+              - sudo
+              - docker
+      storage:
+        files:
+          - path: "/etc/NetworkManager/system-connections/wired.nmconnection"
+            mode: 384
+            contents:
+              source: "data:text/plain;charset=utf-8;base64,{{ coreos_network_config | b64encode }}"
 
-# Step 2: Convert to JSON and build the args string
-# The working format is: -fw_cfg name=opt/com.coreos/config,string='<JSON>'
-- name: Build args string
+# Step 3: Base64 encode the ignition config to avoid all escaping issues
+# Then wrap it in a minimal config that references it via data URI
+- name: Convert ignition to JSON and base64 encode
   ansible.builtin.set_fact:
-    coreos_vm_args: "-fw_cfg name=opt/com.coreos/config,string='{{ coreos_ignition_dict | to_json }}'"
+    coreos_ignition_json: "{{ coreos_ignition_dict | to_json }}"
 
-- name: Debug args
-  ansible.builtin.debug:
-    msg: "Args: {{ coreos_vm_args }}"
+- name: Base64 encode the ignition config
+  ansible.builtin.set_fact:
+    coreos_ignition_b64: "{{ coreos_ignition_json | b64encode }}"
+
+- name: Create wrapper ignition config that merges the base64 config
+  ansible.builtin.set_fact:
+    coreos_wrapper_config:
+      ignition:
+        version: "3.4.0"
+        config:
+          merge:
+            - source: "data:;base64,{{ coreos_ignition_b64 }}"
+
+- name: Convert wrapper to compact JSON (no spaces)
+  ansible.builtin.set_fact:
+    coreos_wrapper_json: "{{ coreos_wrapper_config | to_json | regex_replace(': ', ':') | regex_replace(', ', ',') }}"
 
 # -----------------------------------------------------------------------------
 # VM Creation
@@ -258,6 +312,7 @@
     ostype: "l26"
     onboot: true
     autostart: true
+    agent: "enabled=1"
     net:
       net0: "virtio,bridge=vmbr0"
     state: present
@@ -265,27 +320,40 @@
     virtio:
       virtio0: "{{ coreos_proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
     boot: "order=virtio0"
-    args: "{{ coreos_vm_args }}"
   register: coreos_vm_create
   when: coreos_existing_vm is none
-
-- name: Debug VM creation result
-  ansible.builtin.debug:
-    var: coreos_vm_create
-    verbosity: 0
-
-- name: Debug - show exact args that were passed
-  ansible.builtin.debug:
-    msg: |
-      HARDCODED args value: -fw_cfg name=opt/com.coreos/config,string={"ignition":{"version":"3.0.0"}}
-      VM created: {{ coreos_vm_create.changed | default(false) }}
-      VMID: {{ coreos_vm_create.vmid | default('unknown') }}
 
 - name: Use existing VM ID if VM already exists
   ansible.builtin.set_fact:
     coreos_vm_create:
       vmid: "{{ coreos_existing_vm.vmid }}"
   when: coreos_existing_vm is not none
+
+# Set args via direct API call to bypass Ansible module escaping issues
+# Only commas INSIDE the JSON string value need to be doubled, not the fw_cfg separator comma
+- name: Escape quotes in wrapper JSON
+  ansible.builtin.set_fact:
+    coreos_wrapper_quoted: "{{ coreos_wrapper_json | regex_replace('\"', '\\\\\"') }}"
+
+- name: Double commas inside the JSON value only
+  ansible.builtin.set_fact:
+    coreos_json_escaped: "{{ coreos_wrapper_quoted | regex_replace(',', ',,') }}"
+
+- name: Build args string (single comma for fw_cfg separator, doubled commas in JSON)
+  ansible.builtin.set_fact:
+    coreos_args_escaped: "-fw_cfg name=opt/com.coreos/config,string={{ coreos_json_escaped }}"
+
+- name: Set VM args via Proxmox API
+  ansible.builtin.uri:
+    url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/config"
+    method: PUT
+    headers:
+      Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
+      CSRFPreventionToken: "{{ coreos_pve_csrf_token }}"
+    body:
+      args: "{{ coreos_args_escaped }}"
+    body_format: form-urlencoded
+    validate_certs: false
 
 - name: Start CoreOS VM
   community.proxmox.proxmox_kvm:
@@ -298,9 +366,15 @@
     state: started
 
 # -----------------------------------------------------------------------------
-# Debug: Query VM config to see actual args stored
+# Post-Creation: Get VM IP and wait for SSH
 # -----------------------------------------------------------------------------
-- name: Query VM config from Proxmox
+# Get the VM's MAC address from creation result or existing VM config
+- name: Get VM MAC address from creation result
+  ansible.builtin.set_fact:
+    coreos_vm_mac: "{{ coreos_vm_create.mac.net0 | lower }}"
+  when: coreos_vm_create.mac is defined
+
+- name: Get VM config if MAC not in creation result
   ansible.builtin.uri:
     url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/config"
     method: GET
@@ -308,71 +382,56 @@
       Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
     validate_certs: false
   register: coreos_vm_config
+  when: coreos_vm_mac is not defined
 
-- name: Debug - Show VM args as stored in Proxmox
+- name: Extract MAC from VM config
+  ansible.builtin.set_fact:
+    coreos_vm_mac: "{{ coreos_vm_config.json.data.net0 | regex_search('([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})') | lower }}"
+  when: coreos_vm_mac is not defined
+
+- name: Display VM MAC address
   ansible.builtin.debug:
-    msg: |
-      VM Config args field: {{ coreos_vm_config.json.data.args | default('NOT SET') }}
-      
-      Full args (repr): {{ coreos_vm_config.json.data.args | default('') | string }}
+    msg: "CoreOS VM MAC address: {{ coreos_vm_mac }}"
 
-- name: Pause to check console
-  ansible.builtin.pause:
-    prompt: "Check VM console for boot errors. Press Enter to continue or Ctrl+C to abort"
-
-# -----------------------------------------------------------------------------
-# Post-Creation: Get VM IP and wait for SSH
-# -----------------------------------------------------------------------------
 - name: Wait for VM to get IP address (DHCP mode)
   when: coreos_network_mode == "dhcp"
   block:
-    - name: Wait for QEMU guest agent to report IP
-      ansible.builtin.uri:
-        url: >-
-          https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{-
-          coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/agent/network-get-interfaces
-        method: GET
-        headers:
-          Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
-        validate_certs: false
-        status_code: [200, 500]
-      register: coreos_vm_network
-      until: >
-        coreos_vm_network.status == 200 and
-        coreos_vm_network.json.data.result | default([]) | selectattr('name', 'ne', 'lo') |
-        map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | list | length > 0
+    - name: Wait for VM to appear in ARP table
+      ansible.builtin.shell: |
+        # Ping broadcast to populate ARP table
+        ping -c 1 -b 255.255.255.255 2>/dev/null || true
+        # Also try pinging common gateway
+        ping -c 1 {{ ansible_default_ipv4.gateway | default('192.168.1.1') }} 2>/dev/null || true
+        # Check ARP table for our MAC
+        arp -an | grep -i "{{ coreos_vm_mac }}" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+      register: coreos_arp_result
+      until: coreos_arp_result.stdout | length > 0
       retries: 30
       delay: 10
+      changed_when: false
 
-    - name: Fail if VM did not get IP address
+    - name: Fail if VM IP not found via ARP
       ansible.builtin.fail:
         msg: |
-          CoreOS VM failed to obtain an IP address via DHCP.
+          CoreOS VM IP address not found via ARP lookup.
           
-          This usually means:
-          1. The VM failed to boot (check Proxmox console for boot errors)
-          2. QEMU guest agent is not installed/running
-          3. Network configuration in ignition is incorrect
+          MAC address: {{ coreos_vm_mac }}
           
-          Check the VM console in Proxmox for more details.
-      when: >
-        coreos_vm_network.status != 200 or
-        (coreos_vm_network.json.data.result | default([]) | selectattr('name', 'ne', 'lo') |
-        map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | list | length == 0)
+          Possible causes:
+          1. VM is not on the same network segment as the Ansible controller
+          2. VM failed to boot (check Proxmox console)
+          3. VM hasn't obtained a DHCP lease yet
+          
+          Try manually: arp -an | grep -i "{{ coreos_vm_mac }}"
+      when: coreos_arp_result.stdout | length == 0
 
-    - name: Extract VM IP address
+    - name: Set VM IP from ARP result
       ansible.builtin.set_fact:
-        coreos_ip: >-
-          {{ (coreos_vm_network.json.data.result |
-              selectattr('name', 'ne', 'lo') |
-              map(attribute='ip-addresses') |
-              flatten |
-              selectattr('ip-address-type', 'eq', 'ipv4') |
-              first)['ip-address'] }}
+        coreos_ip: "{{ coreos_arp_result.stdout | trim }}"
 
     - name: Display VM IP
       ansible.builtin.debug:
-        msg: "CoreOS VM IP address: {{ coreos_ip }}"
+        msg: "CoreOS VM IP address: {{ coreos_ip }} (discovered via ARP)"
 
 - name: Wait for SSH to be available
   ansible.builtin.wait_for:

@@ -34,7 +34,7 @@ provisioner:
         coreos_qcow2_img_filename: "fedora-coreos.qcow2.img"
         coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/latest/x86_64/"
         coreos_qcow2_xz_filename: "fedora-coreos-qemu.x86_64.qcow2.xz"
-        coreos_qcow2_final_filename: "fedora-coreos-qemu.x86_64.qcow2"
+        coreos_qcow2_img_filename: "fedora-coreos-qemu.x86_64.qcow2"
         coreos_proxmox_storage: "local"
 
 scenario:
