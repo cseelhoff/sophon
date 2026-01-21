@@ -411,7 +411,7 @@
 
         # Try arp-scan if available (most reliable)
         if command -v arp-scan >/dev/null 2>&1; then
-          IP=$(sudo arp-scan --localnet 2>/dev/null | grep -i "$MAC" | awk '{print $1}' | head -1)
+          IP=$(arp-scan --localnet 2>/dev/null | grep -i "$MAC" | awk '{print $1}' | head -1)
           if [ -n "$IP" ]; then echo "$IP"; exit 0; fi
         fi
 
@@ -422,6 +422,7 @@
       retries: 30
       delay: 10
       changed_when: false
+      become: true
 
     - name: Fail if VM IP not found via ARP
       ansible.builtin.fail:
