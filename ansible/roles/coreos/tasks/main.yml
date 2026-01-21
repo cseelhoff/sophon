@@ -6,6 +6,10 @@
 # -----------------------------------------------------------------------------
 # Pre-flight: Validate required variables
 # -----------------------------------------------------------------------------
+- name: Capture controller IP for HTTP file server
+  ansible.builtin.set_fact:
+    coreos_controller_ip: "{{ ansible_default_ipv4.address | default(ansible_all_ipv4_addresses[0] | default('127.0.0.1')) }}"
+
 - name: Validate coreos_proxmox_api_host is defined
   ansible.builtin.fail:
     msg: |
@@ -163,7 +167,7 @@
   block:
     - name: Get local IP for HTTP server
       ansible.builtin.set_fact:
-        coreos_local_ip: "{{ ansible_default_ipv4.address }}"
+        coreos_local_ip: "{{ coreos_controller_ip }}"
 
     - name: Include HTTP file server role
       ansible.builtin.include_role:
@@ -239,6 +243,10 @@
     coreos_ignition_dict:
       ignition:
         version: "3.4.0"
+      kernel_arguments:
+        should_exist:
+          - "console=tty0"
+          - "console=ttyS0,115200n8"
       passwd:
         users:
           - name: "{{ coreos_username }}"
@@ -253,7 +261,7 @@
           - path: "/etc/hostname"
             mode: 420
             contents:
-              inline: "{{ coreos_vm_name }}"
+              source: "data:,{{ coreos_vm_name }}"
           - path: "/etc/NetworkManager/system-connections/wired.nmconnection"
             mode: 384
             contents:
@@ -317,6 +325,8 @@
     onboot: true
     autostart: true
     agent: "enabled=1"
+    serial:
+      serial0: "socket"
     net:
       net0: "virtio,bridge=vmbr0"
     state: present
@@ -422,7 +432,6 @@
       retries: 30
       delay: 10
       changed_when: false
-      become: true
 
     - name: Fail if VM IP not found via ARP
       ansible.builtin.fail:
@@ -464,7 +473,7 @@
     ansible_ssh_private_key_file: "{{ coreos_ssh_private_key_path }}"
     ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     ansible_python_interpreter: /usr/bin/python3
-    http_file_server_ip: "{{ ansible_default_ipv4.address }}"
+    http_file_server_ip: "{{ coreos_controller_ip }}"
   when: coreos_ip is defined
 
 - name: Save coreos_ip for subsequent plays
