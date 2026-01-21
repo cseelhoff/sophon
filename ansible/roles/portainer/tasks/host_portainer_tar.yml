@@ -14,4 +14,3 @@
   command: podman save -o {{ local_download_dir }}/coredns.tar coredns/coredns:{{ coredns_image_tag }}
   args:
     creates: "{{ local_download_dir }}/coredns.tar"
-  

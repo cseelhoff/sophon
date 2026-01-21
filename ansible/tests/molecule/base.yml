@@ -26,14 +26,14 @@ provisioner:
         traefik_domain: sophon.test
         coreos_ip: localhost
         timezone: UTC
-        
+
         # Service directories
         docker_home: /tmp/sophon/docker
-        
+
         # Portainer settings
         portainer_port: 9443
         validate_certs: false
-        
+
         # HTTP file server (disabled for molecule tests)
         http_file_server_ip: localhost
         http_file_server_port: 8000

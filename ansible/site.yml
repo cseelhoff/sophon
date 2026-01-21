@@ -128,7 +128,7 @@
           ============================================================================
           GENERATED CREDENTIALS - SAVE THESE SECURELY
           ============================================================================
-          
+
           Portainer Admin:     {{ portainer_admin_password | default('not generated') }}
           Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
           Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
@@ -137,9 +137,9 @@
           OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
           Guacamole DB:        {{ guacamole_db_password | default('not generated') }}
           Kopia:               {{ kopia_password | default('not generated') }}
-          
+
           CoreOS VM IP:        {{ coreos_ip | default('check Proxmox console') }}
-          
+
           ============================================================================
           Store these credentials in your password manager!
           ============================================================================

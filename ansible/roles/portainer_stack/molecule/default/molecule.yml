@@ -6,7 +6,7 @@ provisioner:
         # Portainer API connection
         portainer_url: "https://localhost:9443"
         portainer_api_key: "test-api-key"
-        
+
         # Stack configuration
         stack_name: "test-stack"
         docker_compose_content_decoded: |
