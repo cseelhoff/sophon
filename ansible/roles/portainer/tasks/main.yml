@@ -2,7 +2,7 @@
 # Find the IP address that Proxmox can reach
 # - name: Get local IP address
 #   set_fact:
-#     local_ip: "{{ ansible_default_ipv4.address }}"    
+#     local_ip: "{{ ansible_default_ipv4.address }}"
     # if running WSL2
     # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
     # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
@@ -17,8 +17,8 @@
 
 - name: Download and load portainer image from HTTP file server
   ansible.builtin.raw: |
-    cd /tmp && 
-    curl -o portainer-ce.tar http://{{ http_file_server_ip }}:{{ http_file_server_port }}/portainer-ce.tar && 
+    cd /tmp &&
+    curl -o portainer-ce.tar http://{{ http_file_server_ip }}:{{ http_file_server_port }}/portainer-ce.tar &&
     podman load -i portainer-ce.tar &&
     rm -f portainer-ce.tar
   when: portainer_image_check.stdout | trim == ""
@@ -29,19 +29,19 @@
   # changed_when: false
 
 - name: Set initial admin password from environment if available
-  set_fact:
+  ansible.builtin.set_fact:
     portainer_admin_password: "{{ lookup('env', 'PORTAINER_ADMIN_PASSWORD') }}"
   when: lookup('env', 'PORTAINER_ADMIN_PASSWORD') | default('') != ""
-  
+
 - name: Prompt for admin password if not set from environment
-  pause:
+  ansible.builtin.pause:
     prompt: "Please enter the Portainer admin password"
-    echo: no
+    echo: false
   register: password_prompt
   when: portainer_admin_password is not defined or portainer_admin_password == ""
-  
+
 - name: Set final admin password
-  set_fact:
+  ansible.builtin.set_fact:
     portainer_admin_password: "{{ password_prompt.user_input | default(portainer_admin_password) }}"
   when: password_prompt is defined and password_prompt.user_input is defined
 
@@ -51,7 +51,7 @@
   changed_when: false
   delegate_to: localhost
   when: portainer_service_check.stdout | trim == "not found"
-  
+
 - name: Enable and start podman.socket
   ansible.builtin.raw: systemctl enable --now podman.socket
   become: true
@@ -59,7 +59,7 @@
 
 - name: Create portainer systemd service file
   ansible.builtin.raw: |
-    cat > /etc/systemd/system/portainer.service << 'EOF'        
+    cat > /etc/systemd/system/portainer.service << 'EOF'
     EOF
     chmod 644 /etc/systemd/system/portainer.service
   when: portainer_service_check.stdout | trim == "not found"

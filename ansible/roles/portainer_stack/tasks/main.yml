@@ -1,73 +1,68 @@
 ---
-- name: Deploy Stack to Portainer
-  tasks:
-    - name: Authenticate with Portainer
-      uri:
-        url: "{{ portainer_url }}/api/auth"
-        method: POST
-        body_format: json
-        body:
-          Username: "admin"
-          Password: "{{ portainer_admin_password }}"
-        status_code: 200
-        validate_certs: "{{ validate_certs }}"
-      register: auth_response
-    
-    - name: Set auth token variable
-      set_fact:
-        auth_token: "{{ auth_response.json.jwt }}"
-    
-    - name: Get endpoints
-      uri:
-        url: "{{ portainer_url }}/api/endpoints"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ auth_token }}"
-        status_code: 200
-        validate_certs: "{{ validate_certs }}"
-      register: endpoints_response
-    
-    - name: Find local endpoint ID
-      set_fact:
-        local_endpoint_id: "{{ endpoints_response.json[0].Id }}"
-      when: endpoints_response.json | length > 0
-    
-    - name: Create local endpoint if it doesn't exist
-      uri:
-        url: "{{ portainer_url }}/api/endpoints"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ auth_token }}"
-        body_format: form-urlencoded
-        body:
-          Name: "local"
-          EndpointCreationType: 1
-        status_code: 200
-        validate_certs: "{{ validate_certs }}"
-      register: endpoint_create_response
-      when: local_endpoint_id is not defined or local_endpoint_id == 'null'
-    
-    - name: Set endpoint ID from creation response
-      set_fact:
-        local_endpoint_id: "{{ endpoint_create_response.json.Id }}"
-      when: endpoint_create_response is defined and endpoint_create_response.json is defined
+# Deploy Stack to Portainer
+- name: Authenticate with Portainer
+  ansible.builtin.uri:
+    url: "{{ portainer_stack_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    status_code: 200
+    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
+  register: portainer_stack_auth_response
 
-    - name: Set docker compose content from variable
-      set_fact:
-        docker_compose_content_decoded: "{{ docker_compose_base64 | b64decode }}"
-        
-    - name: Deploy stack to Portainer
-      uri:
-        url: "{{ portainer_url }}/api/stacks/create/standalone/string?endpointId={{ local_endpoint_id }}"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ auth_token }}"
-          Content-Type: "application/json"
-        body_format: json
-        body:
-          env: "{{ stack_env_vars | default([]) }}"
-          fromAppTemplate: false
-          name: "{{ stack_name }}"
-          stackFileContent: "{{ docker_compose_content_decoded }}"
-        status_code: 200
-        validate_certs: "{{ validate_certs }}"
+- name: Set auth token variable
+  ansible.builtin.set_fact:
+    portainer_stack_auth_token: "{{ portainer_stack_auth_response.json.jwt }}"
+
+- name: Get endpoints
+  ansible.builtin.uri:
+    url: "{{ portainer_stack_url }}/api/endpoints"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    status_code: 200
+    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
+  register: portainer_stack_endpoints_response
+
+- name: Find local endpoint ID
+  ansible.builtin.set_fact:
+    portainer_stack_endpoint_id: "{{ portainer_stack_endpoints_response.json[0].Id }}"
+  when: portainer_stack_endpoints_response.json | length > 0
+
+- name: Create local endpoint if it doesn't exist
+  ansible.builtin.uri:
+    url: "{{ portainer_stack_url }}/api/endpoints"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    body_format: form-urlencoded
+    body:
+      Name: "local"
+      EndpointCreationType: 1
+    status_code: 200
+    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
+  register: portainer_stack_endpoint_create_response
+  when: portainer_stack_endpoint_id is not defined or portainer_stack_endpoint_id == 'null'
+
+- name: Set endpoint ID from creation response
+  ansible.builtin.set_fact:
+    portainer_stack_endpoint_id: "{{ portainer_stack_endpoint_create_response.json.Id }}"
+  when: portainer_stack_endpoint_create_response is defined and portainer_stack_endpoint_create_response.json is defined
+
+- name: Deploy stack to Portainer
+  ansible.builtin.uri:
+    url: "{{ portainer_stack_url }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      env: "{{ portainer_stack_env_vars | default([]) }}"
+      fromAppTemplate: false
+      name: "{{ portainer_stack_name }}"
+      stackFileContent: "{{ portainer_stack_compose_content }}"
+    status_code: 200
+    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"

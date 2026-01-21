@@ -1,0 +1,20 @@
+##   _____             _
+##  / ____|           | |
+## | (___   ___  _ __ | |__   ___  _ __
+##  \___ \ / _ \| '_ \| '_ \ / _ \| '_ \
+##  ____) | (_) | |_) | | | | (_) | | | |
+## |_____/ \___/| .__/|_| |_|\___/|_| |_|
+##              | |
+##              |_|  Production Environment
+##
+## https://github.com/your-org/sophon
+
+[all]
+# Run from remote workstation
+sophon-prod ansible_host=10.0.0.100
+
+# Or run directly on the server
+# sophon-prod ansible_connection=local ansible_host=localhost
+
+[coreos]
+sophon-prod

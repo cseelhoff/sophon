@@ -1,0 +1,42 @@
+---
+# Gitea configuration
+gitea_enabled: true
+gitea_image_name: "gitea/gitea"
+gitea_image_tag: "1.22"
+
+# Database - using SQLite for simplicity (can switch to PostgreSQL)
+gitea_db_type: "sqlite3"
+
+# Directories
+gitea_data_dir: "/opt/gitea"
+
+# Network
+gitea_port_http: 3001
+gitea_port_ssh: 222
+
+# Domain
+gitea_hostname: "git"
+gitea_domain: "{{ traefik_domain | default('example.local') }}"
+gitea_root_url: "https://{{ gitea_hostname }}.{{ gitea_domain }}"
+
+# SSH
+gitea_ssh_domain: "{{ gitea_hostname }}.{{ gitea_domain }}"
+
+# App settings
+gitea_app_name: "Sophon Git"
+gitea_run_mode: "prod"
+
+# Disable registration after initial setup (security)
+gitea_disable_registration: false
+
+# Actions runner support
+gitea_actions_enabled: true
+
+# Keycloak OIDC Integration
+gitea_oauth_enabled: false
+gitea_oauth_provider: "openidConnect"
+gitea_oauth_name: "Keycloak"
+gitea_oauth_icon: "gitea"
+# gitea_oauth_client_id: "gitea"
+# gitea_oauth_client_secret: "{{ vault_keycloak_gitea_client_secret }}"
+# gitea_oauth_auto_discover_url: "https://keycloak.{{ domain_name }}/realms/{{ keycloak_realm }}/.well-known/openid-configuration"

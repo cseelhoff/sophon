@@ -1,0 +1,37 @@
+---
+# Traefik configuration
+traefik_enabled: true
+traefik_image_name: "traefik"
+traefik_image_tag: "v3.2"
+
+# Directories
+traefik_config_dir: "/opt/traefik"
+traefik_data_dir: "/opt/traefik/data"
+
+# Network ports
+traefik_port_http: 80
+traefik_port_https: 443
+traefik_port_ui: 8080
+
+# Domain configuration
+traefik_domain: "example.local"
+traefik_fqdn: "traefik.{{ traefik_domain }}"
+
+# Let's Encrypt / ACME configuration
+traefik_acme_email: "admin@example.com"
+traefik_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
+# traefik_acme_server: "https://acme-staging-v02.api.letsencrypt.org/directory" # staging
+
+# DNS provider for ACME DNS challenge (cloudflare, route53, etc)
+traefik_dns_provider: "cloudflare"
+# traefik_cf_dns_api_token: "" # Set via environment variable or vault
+
+# Log level
+traefik_log_level: "INFO"
+
+# Dashboard authentication (htpasswd format)
+# Generate with: htpasswd -nB admin | sed -e 's/\$/\$\$/g'
+# traefik_dashboard_auth: "admin:$$2y$$..." # Set via vault
+
+# Validate backend certs (set to false for self-signed)
+traefik_insecure_skip_verify: true

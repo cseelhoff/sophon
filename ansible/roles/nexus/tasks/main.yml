@@ -1,0 +1,351 @@
+---
+# Deploy Nexus Repository Manager
+
+- name: Deploy Nexus
+  when: nexus_enabled is true
+  block:
+    - name: Set deployment variables
+      ansible.builtin.set_fact:
+        nexus_validate_certs: false
+        nexus_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Check if Nexus image exists
+      ansible.builtin.raw: podman images | grep -q "nexus3[ ]*{{ nexus_image_tag }}"
+      delegate_to: "{{ coreos_ip }}"
+      register: nexus_image_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Download and load Nexus image from HTTP file server
+      ansible.builtin.raw: |
+        cd /tmp &&
+        curl -o nexus.tar http://{{ nexus_file_server_ip }}:{{ http_file_server_port }}/nexus.tar &&
+        podman load -i nexus.tar &&
+        rm -f nexus.tar
+      delegate_to: "{{ coreos_ip }}"
+      when: nexus_image_exists.rc != 0
+
+    - name: Create Nexus data directory
+      ansible.builtin.raw: |
+        mkdir -p {{ nexus_data_dir }}/data
+        chown -R 200:200 {{ nexus_data_dir }}/data
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Generate docker-compose content in base64
+      ansible.builtin.set_fact:
+        nexus_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+
+    - name: Deploy Nexus stack using portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "nexus"
+        portainer_stack_compose_content: "{{ nexus_compose_base64 | b64decode }}"
+
+    - name: Wait for Nexus to be ready
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/status"
+        method: GET
+        status_code: 200
+        validate_certs: false
+      register: nexus_status
+      until: nexus_status.status == 200
+      retries: 60
+      delay: 10
+      when: nexus_provision_repos | default(false)
+
+    - name: Check if admin.password file exists (first run)
+      ansible.builtin.raw: test -f {{ nexus_data_dir }}/data/admin.password && cat {{ nexus_data_dir }}/data/admin.password
+      delegate_to: "{{ coreos_ip }}"
+      register: nexus_initial_password
+      failed_when: false
+      changed_when: false
+      when: nexus_provision_repos | default(false)
+
+    - name: Set Nexus password variable
+      ansible.builtin.set_fact:
+        nexus_current_password: "{{ nexus_initial_password.stdout | trim if nexus_initial_password.rc == 0 else nexus_admin_password }}"
+      when: nexus_provision_repos | default(false)
+
+    - name: Change Nexus admin password (first run only)
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password"
+        method: PUT
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_initial_password.stdout | trim }}"
+        force_basic_auth: true
+        body: "{{ nexus_admin_password }}"
+        headers:
+          Content-Type: "text/plain"
+        status_code: 204
+        validate_certs: false
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_initial_password.rc == 0
+        - nexus_admin_password is defined
+
+    - name: Set active security realms
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/security/realms/active"
+        method: PUT
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: "{{ nexus_active_realms }}"
+        headers:
+          Content-Type: "application/json"
+        status_code: 204
+        validate_certs: false
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+
+    - name: Get existing repositories
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories"
+        method: GET
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: existing_repos
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+
+    - name: Create docker-hosted repository
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/hosted"
+        method: POST
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "docker-hosted"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+            writePolicy: "ALLOW"
+          docker:
+            v1Enabled: false
+            forceBasicAuth: false
+        status_code: [201, 400]
+        validate_certs: false
+      register: docker_hosted_result
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+        - "'docker-hosted' not in (existing_repos.json | map(attribute='name') | list)"
+
+    - name: Verify docker-hosted exists after 400 response
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/hosted/docker-hosted"
+        method: GET
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        validate_certs: false
+      when:
+        - docker_hosted_result is defined
+        - docker_hosted_result.status | default(0) == 400
+
+    - name: Create docker-proxy repository (Docker Hub)
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+        method: POST
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "docker-proxy"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          proxy:
+            remoteUrl: "https://registry-1.docker.io"
+            contentMaxAge: 1440
+            metadataMaxAge: 1440
+          negativeCache:
+            enabled: true
+            timeToLive: 1440
+          httpClient:
+            blocked: false
+            autoBlock: false
+          docker:
+            v1Enabled: false
+            forceBasicAuth: false
+          dockerProxy:
+            indexType: "HUB"
+        status_code: [201, 400]
+        validate_certs: false
+      register: docker_proxy_result
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+        - "'docker-proxy' not in (existing_repos.json | map(attribute='name') | list)"
+
+    - name: Verify docker-proxy exists after 400 response
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy/docker-proxy"
+        method: GET
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        validate_certs: false
+      when:
+        - docker_proxy_result is defined
+        - docker_proxy_result.status | default(0) == 400
+
+    - name: Create ghcr-proxy repository (GitHub Container Registry)
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+        method: POST
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "ghcr-proxy"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          proxy:
+            remoteUrl: "https://ghcr.io"
+            contentMaxAge: 1440
+            metadataMaxAge: 1440
+          negativeCache:
+            enabled: true
+            timeToLive: 1440
+          httpClient:
+            blocked: false
+            autoBlock: false
+          docker:
+            v1Enabled: false
+            forceBasicAuth: false
+          dockerProxy:
+            indexType: "REGISTRY"
+        status_code: [201, 400]
+        validate_certs: false
+      register: ghcr_proxy_result
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+        - "'ghcr-proxy' not in (existing_repos.json | map(attribute='name') | list)"
+
+    - name: Verify ghcr-proxy exists after 400 response
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy/ghcr-proxy"
+        method: GET
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        validate_certs: false
+      when:
+        - ghcr_proxy_result is defined
+        - ghcr_proxy_result.status | default(0) == 400
+
+    - name: Create quay-proxy repository (Quay.io)
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+        method: POST
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "quay-proxy"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          proxy:
+            remoteUrl: "https://quay.io"
+            contentMaxAge: 1440
+            metadataMaxAge: 1440
+          negativeCache:
+            enabled: true
+            timeToLive: 1440
+          httpClient:
+            blocked: false
+            autoBlock: false
+          docker:
+            v1Enabled: false
+            forceBasicAuth: false
+          dockerProxy:
+            indexType: "REGISTRY"
+        status_code: [201, 400]
+        validate_certs: false
+      register: quay_proxy_result
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+        - "'quay-proxy' not in (existing_repos.json | map(attribute='name') | list)"
+
+    - name: Verify quay-proxy exists after 400 response
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy/quay-proxy"
+        method: GET
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        validate_certs: false
+      when:
+        - quay_proxy_result is defined
+        - quay_proxy_result.status | default(0) == 400
+
+    - name: Create docker-group repository
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
+        method: POST
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "docker-group"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          group:
+            memberNames:
+              - "docker-hosted"
+              - "docker-proxy"
+              - "ghcr-proxy"
+              - "quay-proxy"
+          docker:
+            v1Enabled: false
+            forceBasicAuth: false
+            httpPort: "{{ nexus_docker_registry_port }}"
+        status_code: [201, 400]
+        validate_certs: false
+      register: docker_group_result
+      when:
+        - nexus_provision_repos | default(false)
+        - nexus_admin_password is defined
+        - "'docker-group' not in (existing_repos.json | map(attribute='name') | list)"
+
+    - name: Verify docker-group exists after 400 response
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/group/docker-group"
+        method: GET
+        user: "{{ nexus_admin_user }}"
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        validate_certs: false
+      when:
+        - docker_group_result is defined
+        - docker_group_result.status | default(0) == 400

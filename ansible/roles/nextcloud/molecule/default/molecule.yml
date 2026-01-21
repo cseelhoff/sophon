@@ -1,0 +1,10 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        nextcloud_enabled: true
+        nextcloud_data_dir: "/tmp/nextcloud"
+        nextcloud_admin_user: "admin"
+        nextcloud_admin_password: "testpassword123"
+        nextcloud_db_password: "testpassword123"

@@ -42,17 +42,17 @@
     timeout: 600
   when: not local_file_stat.stat.exists
 
-- name: Extract file from {{ local_download_dir }}/{{ file_download_filename }} locally 
+- name: Extract file from {{ local_download_dir }}/{{ file_download_filename }} locally
   ansible.builtin.command:
     cmd: "xz -d {{ local_download_dir }}/{{ file_download_filename }}"
-  when: 
+  when:
     - not local_file_stat.stat.exists
     - extracted_filename is defined
 
 - name: Rename extracted file to {{ local_download_dir }}/{{ renamed_filename }}
   ansible.builtin.command:
     cmd: "mv {{ local_download_dir }}/{{ extracted_filename }} {{ local_download_dir }}/{{ renamed_filename }}"
-  when: 
+  when:
     - not local_file_stat.stat.exists
     - extracted_filename is defined
     - renamed_filename is defined

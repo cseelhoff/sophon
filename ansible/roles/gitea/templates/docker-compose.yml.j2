@@ -1,0 +1,47 @@
+version: '3'
+
+services:
+  gitea:
+    image: {{ gitea_image_name }}:{{ gitea_image_tag }}
+    container_name: gitea
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE={{ gitea_db_type }}
+      - GITEA__database__PATH=/data/gitea/gitea.db
+      - GITEA__server__ROOT_URL={{ gitea_root_url }}
+      - GITEA__server__SSH_DOMAIN={{ gitea_ssh_domain }}
+      - GITEA__server__SSH_PORT={{ gitea_port_ssh }}
+      - GITEA__server__LFS_START_SERVER=true
+{% if gitea_actions_enabled %}
+      - GITEA__actions__ENABLED=true
+{% endif %}
+    volumes:
+      - {{ gitea_data_dir }}/data:/data
+      - {{ gitea_data_dir }}/config/app.ini:/data/gitea/conf/app.ini
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "{{ gitea_port_http }}:3000"
+      - "{{ gitea_port_ssh }}:22"
+    networks:
+      - proxy
+      - gitea
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.entrypoints=https"
+      - "traefik.http.routers.gitea.rule=Host(`{{ gitea_hostname }}.{{ gitea_domain }}`)"
+      - "traefik.http.routers.gitea.tls=true"
+      - "traefik.http.routers.gitea.tls.certresolver=letsencrypt"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+      - "homepage.group=Services"
+      - "homepage.name=Gitea"
+      - "homepage.icon=gitea"
+      - "homepage.href={{ gitea_root_url }}"
+      - "homepage.description=Git Server"
+
+networks:
+  proxy:
+    external: true
+  gitea:
+    driver: bridge

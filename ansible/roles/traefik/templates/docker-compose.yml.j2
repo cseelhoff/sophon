@@ -1,0 +1,43 @@
+version: '3'
+
+services:
+  traefik:
+    image: {{ traefik_image_name }}:{{ traefik_image_tag }}
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - proxy
+    ports:
+      - "{{ traefik_port_http }}:80"
+      - "{{ traefik_port_https }}:443"
+      - "{{ traefik_port_ui }}:8080"
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /run/podman/podman.sock:/var/run/docker.sock:ro
+      - {{ traefik_config_dir }}/traefik.yml:/traefik.yml:ro
+      - {{ traefik_config_dir }}/config.yml:/config.yml:ro
+      - {{ traefik_data_dir }}:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=http"
+      - "traefik.http.routers.traefik.rule=Host(`{{ traefik_fqdn }}`)"
+      - "traefik.http.middlewares.traefik-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.traefik.middlewares=traefik-https-redirect"
+      - "traefik.http.routers.traefik-secure.entrypoints=https"
+      - "traefik.http.routers.traefik-secure.rule=Host(`{{ traefik_fqdn }}`)"
+      - "traefik.http.routers.traefik-secure.tls=true"
+      - "traefik.http.routers.traefik-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-secure.service=api@internal"
+{% if traefik_dashboard_auth is defined %}
+      - "traefik.http.middlewares.traefik-auth.basicauth.users={{ traefik_dashboard_auth }}"
+      - "traefik.http.routers.traefik-secure.middlewares=traefik-auth"
+{% endif %}
+
+networks:
+  proxy:
+    name: proxy
+    driver: bridge

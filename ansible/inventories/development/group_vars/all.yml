@@ -1,7 +1,66 @@
 ---
+# =============================================================================
+# Sophon Development Environment Configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Proxmox Configuration
+# -----------------------------------------------------------------------------
 proxmox_api_host: "10.20.177.99"
+proxmox_api_user: "root@pam"
+# proxmox_api_password: "" # Set via environment or vault
+
+# -----------------------------------------------------------------------------
+# CoreOS VM Configuration
+# -----------------------------------------------------------------------------
 coreos_ip: "10.20.177.111"
 coreos_cidr: "24"
 coreos_gateway: "10.20.177.1"
 coreos_username: "admin"
 ssh_private_key_path: "~/.ssh/id_rsa"
+
+# -----------------------------------------------------------------------------
+# HTTP File Server (for air-gapped image distribution)
+# -----------------------------------------------------------------------------
+http_file_server_ip: "{{ ansible_default_ipv4.address }}"
+http_file_server_port: 8000
+
+# -----------------------------------------------------------------------------
+# Domain Configuration
+# -----------------------------------------------------------------------------
+domain_name: "sophon.local"
+traefik_domain: "{{ domain_name }}"
+
+# -----------------------------------------------------------------------------
+# Portainer Configuration
+# -----------------------------------------------------------------------------
+portainer_port: 9443
+# portainer_admin_password: "" # Set via environment or vault
+
+# -----------------------------------------------------------------------------
+# Service Ports
+# -----------------------------------------------------------------------------
+coredns_dns_port: 53
+traefik_port_http: 80
+traefik_port_https: 443
+traefik_port_ui: 8080
+homepage_port: 3000
+gitea_port_http: 3001
+gitea_port_ssh: 222
+guacamole_port: 8090
+nexus_port: 8081
+keycloak_port: 8082
+nextcloud_port: 8083
+n8n_port: 5678
+
+# -----------------------------------------------------------------------------
+# TLS/ACME Configuration
+# -----------------------------------------------------------------------------
+traefik_acme_email: "admin@{{ domain_name }}"
+traefik_dns_provider: "cloudflare"
+# traefik_cf_dns_api_token: "" # Set via environment or vault
+
+# -----------------------------------------------------------------------------
+# Validate Certs (set false for self-signed)
+# -----------------------------------------------------------------------------
+validate_certs: false

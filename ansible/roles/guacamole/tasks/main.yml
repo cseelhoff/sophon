@@ -1,0 +1,67 @@
+---
+# Deploy Apache Guacamole Remote Desktop Gateway
+
+- name: Deploy Guacamole
+  when: guacamole_enabled is true
+  block:
+    - name: Set deployment variables
+      ansible.builtin.set_fact:
+        guacamole_validate_certs: false
+        guacamole_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Check if Guacamole image exists
+      ansible.builtin.raw: podman images | grep -q "guacamole/guacamole[ ]*{{ guacamole_image_tag }}"
+      delegate_to: "{{ coreos_ip }}"
+      register: guacamole_image_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Download and load Guacamole images from HTTP file server
+      ansible.builtin.raw: |
+        cd /tmp &&
+        curl -o guacamole.tar http://{{ guacamole_file_server_ip }}:{{ http_file_server_port }}/guacamole.tar &&
+        podman load -i guacamole.tar &&
+        curl -o guacd.tar http://{{ guacamole_file_server_ip }}:{{ http_file_server_port }}/guacd.tar &&
+        podman load -i guacd.tar &&
+        rm -f guacamole.tar guacd.tar
+      delegate_to: "{{ coreos_ip }}"
+      when: guacamole_image_exists.rc != 0
+
+    - name: Create Guacamole directories
+      ansible.builtin.raw: |
+        mkdir -p {{ guacamole_data_dir }}/init
+        mkdir -p {{ guacamole_data_dir }}/db
+        mkdir -p {{ guacamole_data_dir }}/drive
+        mkdir -p {{ guacamole_data_dir }}/record
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Check if init script exists
+      ansible.builtin.raw: test -f {{ guacamole_data_dir }}/init/initdb.sql && echo "exists"
+      delegate_to: "{{ coreos_ip }}"
+      register: initdb_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Generate PostgreSQL init script for Guacamole
+      ansible.builtin.raw: |
+        podman run --rm {{ guacamole_image_name }}:{{ guacamole_image_tag }} \
+          /opt/guacamole/bin/initdb.sh --postgresql > {{ guacamole_data_dir }}/init/initdb.sql
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+      when: "'exists' not in initdb_exists.stdout"
+
+    - name: Generate docker-compose content in base64
+      ansible.builtin.set_fact:
+        guacamole_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+
+    - name: Deploy Guacamole stack using portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "guacamole"
+        portainer_stack_compose_content: "{{ guacamole_compose_base64 | b64decode }}"
+        portainer_stack_env_vars:
+          - name: POSTGRES_PASSWORD
+            value: "{{ guacamole_db_password | default('guacamole') }}"

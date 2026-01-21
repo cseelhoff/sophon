@@ -1,0 +1,50 @@
+---
+# Deploy Gitea Git Server
+
+- name: Set deployment variables
+  ansible.builtin.set_fact:
+    gitea_validate_certs: false
+    gitea_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+- name: Check if Gitea image exists
+  ansible.builtin.raw: podman images | grep -q "gitea[ ]*{{ gitea_image_tag }}"
+  delegate_to: "{{ coreos_ip }}"
+  register: gitea_image_exists
+  failed_when: false
+  changed_when: false
+
+- name: Download and load Gitea image from HTTP file server
+  ansible.builtin.raw: |
+    cd /tmp &&
+    curl -o gitea.tar http://{{ gitea_file_server_ip }}:{{ http_file_server_port }}/gitea.tar &&
+    podman load -i gitea.tar &&
+    rm -f gitea.tar
+  delegate_to: "{{ coreos_ip }}"
+  when: gitea_image_exists.rc != 0
+
+- name: Create Gitea directories
+  ansible.builtin.raw: |
+    mkdir -p {{ gitea_data_dir }}/data
+    mkdir -p {{ gitea_data_dir }}/config
+  delegate_to: "{{ coreos_ip }}"
+  become: true
+
+- name: Create Gitea app.ini configuration
+  ansible.builtin.raw: |
+    cat > {{ gitea_data_dir }}/config/app.ini << 'APPINI'
+    {{ lookup('template', 'app.ini.j2') }}
+    APPINI
+  delegate_to: "{{ coreos_ip }}"
+  become: true
+
+- name: Generate docker-compose content in base64
+  ansible.builtin.set_fact:
+    gitea_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+
+- name: Deploy Gitea stack using portainer
+  ansible.builtin.include_role:
+    name: portainer_stack
+  vars:
+    portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+    portainer_stack_name: "gitea"
+    portainer_stack_compose_content: "{{ gitea_compose_base64 | b64decode }}"

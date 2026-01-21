@@ -1,0 +1,94 @@
+---
+# =============================================================================
+# Ansible Vault - Secrets Template
+# =============================================================================
+# Copy this file to vault.yml and encrypt with: ansible-vault encrypt vault.yml
+# Never commit the unencrypted vault.yml to version control!
+#
+# Usage:
+#   ansible-playbook -i inventories/production/inventory site.yml --ask-vault-pass
+#   # Or with vault password file:
+#   ansible-playbook -i inventories/production/inventory site.yml --vault-password-file ~/.vault_pass
+#
+# To edit encrypted vault:
+#   ansible-vault edit inventories/production/group_vars/vault.yml
+#
+# To view encrypted vault:
+#   ansible-vault view inventories/production/group_vars/vault.yml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Infrastructure Secrets
+# Generate passwords with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_proxmox_api_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Portainer
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_portainer_admin_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Traefik / Let's Encrypt
+# Get from Cloudflare Dashboard > API Tokens
+# -----------------------------------------------------------------------------
+vault_cloudflare_api_token: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Gitea
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_gitea_admin_password: "CHANGE_ME"
+vault_gitea_db_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Nexus Repository Manager
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_nexus_admin_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# OpenLDAP
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_openldap_admin_password: "CHANGE_ME"
+vault_openldap_config_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Keycloak SSO
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_keycloak_admin_password: "CHANGE_ME"
+vault_keycloak_db_password: "CHANGE_ME"
+
+# OIDC Client Secrets - Generate with: openssl rand -hex 32
+vault_keycloak_gitea_client_secret: "CHANGE_ME"
+vault_keycloak_nextcloud_client_secret: "CHANGE_ME"
+vault_keycloak_guacamole_client_secret: "CHANGE_ME"
+vault_keycloak_n8n_client_secret: "CHANGE_ME"
+vault_keycloak_portainer_client_secret: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Nextcloud
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_nextcloud_admin_password: "CHANGE_ME"
+vault_nextcloud_db_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Guacamole
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_guacamole_db_password: "CHANGE_ME"
+
+# -----------------------------------------------------------------------------
+# Backup / Kopia
+# Generate with: openssl rand -base64 32 | tr '+/' '00'
+# -----------------------------------------------------------------------------
+vault_kopia_password: "CHANGE_ME"
+vault_backup_encryption_passphrase: "CHANGE_ME"
+
+# S3/MinIO credentials (if using cloud backup)
+# vault_s3_access_key: "CHANGE_ME"
+# vault_s3_secret_key: "CHANGE_ME"

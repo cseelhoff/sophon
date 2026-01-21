@@ -1,0 +1,64 @@
+---
+# Deploy OpenLDAP Directory Service
+
+- name: Set deployment variables
+  ansible.builtin.set_fact:
+    openldap_validate_certs: false
+    openldap_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+- name: Check if OpenLDAP image exists
+  ansible.builtin.raw: podman images | grep -q "openldap[ ]*{{ openldap_image_tag }}"
+  delegate_to: "{{ coreos_ip }}"
+  register: openldap_image_exists
+  failed_when: false
+  changed_when: false
+
+- name: Download and load OpenLDAP image from HTTP file server
+  ansible.builtin.raw: |
+    cd /tmp &&
+    curl -o openldap.tar http://{{ openldap_file_server_ip }}:{{ http_file_server_port }}/openldap.tar &&
+    podman load -i openldap.tar &&
+    rm -f openldap.tar
+  delegate_to: "{{ coreos_ip }}"
+  when: openldap_image_exists.rc != 0
+
+- name: Check if phpLDAPadmin image exists
+  ansible.builtin.raw: podman images | grep -q "phpldapadmin[ ]*{{ phpldapadmin_image_tag }}"
+  delegate_to: "{{ coreos_ip }}"
+  register: phpldapadmin_image_exists
+  failed_when: false
+  changed_when: false
+
+- name: Download and load phpLDAPadmin image from HTTP file server
+  ansible.builtin.raw: |
+    cd /tmp &&
+    curl -o phpldapadmin.tar http://{{ openldap_file_server_ip }}:{{ http_file_server_port }}/phpldapadmin.tar &&
+    podman load -i phpldapadmin.tar &&
+    rm -f phpldapadmin.tar
+  delegate_to: "{{ coreos_ip }}"
+  when: phpldapadmin_image_exists.rc != 0
+
+- name: Create OpenLDAP directories
+  ansible.builtin.raw: |
+    mkdir -p {{ openldap_data_dir }}/database
+    mkdir -p {{ openldap_data_dir }}/config
+    mkdir -p {{ openldap_data_dir }}/certs
+  delegate_to: "{{ coreos_ip }}"
+  become: true
+
+- name: Generate docker-compose content in base64
+  ansible.builtin.set_fact:
+    openldap_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+
+- name: Deploy OpenLDAP stack using portainer
+  ansible.builtin.include_role:
+    name: portainer_stack
+  vars:
+    portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+    portainer_stack_name: "openldap"
+    portainer_stack_compose_content: "{{ openldap_compose_base64 | b64decode }}"
+    portainer_stack_env_vars:
+      - name: LDAP_ADMIN_PASSWORD
+        value: "{{ openldap_admin_password | default('admin') }}"
+      - name: LDAP_CONFIG_PASSWORD
+        value: "{{ openldap_config_password | default('config') }}"

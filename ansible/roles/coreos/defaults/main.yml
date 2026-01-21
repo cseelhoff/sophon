@@ -1,14 +1,55 @@
 ---
-proxmox_node_name: "proxmox"
-proxmox_api_username: "root"
-proxmox_api_user: "{{ proxmox_api_username }}@pam"
-storage_pool: "local"
-coreos_vm_name: "coreos"
+# Enable/disable this role
+coreos_enabled: true
+
+# =============================================================================
+# Proxmox Connection (required - pass via command line or inventory)
+# =============================================================================
+# coreos_proxmox_api_host: "pve.example.com"  # Required: Proxmox server FQDN or IP
+coreos_proxmox_api_username: "root"
+coreos_proxmox_api_user: "{{ coreos_proxmox_api_username }}@pam"
+coreos_proxmox_node_name: "proxmox"
+coreos_proxmox_storage: "local-lvm"
+
+# =============================================================================
+# CoreOS VM Configuration
+# =============================================================================
+coreos_vm_name: "sophon-coreos"
 coreos_cores: 2
 coreos_memory: 4096
-ssh_public_key_path: "{{ ssh_private_key_path }}.pub"
+coreos_disk_size: "32G"
+coreos_username: "admin"
+
+# Network mode: "dhcp" or "static"
+# DHCP is recommended for quick start - VM gets IP from your network's DHCP server
+coreos_network_mode: "dhcp"
+
+# Static IP settings (only used when coreos_network_mode: "static")
+# coreos_ip: "10.0.1.10"
+# coreos_cidr: "24"
+# coreos_gateway: "10.0.1.1"
+
+# =============================================================================
+# SSH Configuration
+# =============================================================================
+coreos_ssh_private_key_path: "~/.ssh/id_rsa"
+coreos_ssh_public_key_path: "{{ coreos_ssh_private_key_path }}.pub"
+
+# =============================================================================
+# CoreOS Image
+# =============================================================================
 coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.xz"
 coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
 coreos_qcow2_final_filename: "{{ coreos_qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
 coreos_qcow2_img_filename: "{{ coreos_qcow2_final_filename }}.img"
-http_file_server_port: 8000
+
+# =============================================================================
+# Deployment Mode
+# =============================================================================
+# When false: Download image directly to Proxmox (requires internet on Proxmox)
+# When true: Use local HTTP file server to transfer image (for air-gapped environments)
+coreos_airgapped_mode: false
+
+# HTTP file server settings (only used when coreos_airgapped_mode: true)
+coreos_http_file_server_port: 8000
+coreos_local_download_dir: "/tmp/sophon_images"

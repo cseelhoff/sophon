@@ -1,5 +1,166 @@
 ---
-proxmox_api_host: "10.20.177.99"
-coreos_ip: "10.20.177.111"
+##   _____             _
+##  / ____|           | |
+## | (___   ___  _ __ | |__   ___  _ __
+##  \___ \ / _ \| '_ \| '_ \ / _ \| '_ \
+##  ____) | (_) | |_) | | | | (_) | | | |
+## |_____/ \___/| .__/|_| |_|\___/|_| |_|
+##              | |
+##              |_|  Production Environment
+##
+## https://github.com/your-org/sophon
+
+# =============================================================================
+# Production Environment Configuration
+# =============================================================================
+# Sensitive values should be stored in vault.yml (see vault.yml.example)
+
+# -----------------------------------------------------------------------------
+# Proxmox Configuration
+# -----------------------------------------------------------------------------
+proxmox_api_host: "10.0.0.10"
+proxmox_api_user: "root@pam"
+# proxmox_api_password: "{{ vault_proxmox_api_password }}"
+proxmox_node_name: "proxmox"
+
+# -----------------------------------------------------------------------------
+# CoreOS VM Configuration
+# -----------------------------------------------------------------------------
+coreos_ip: "10.0.0.100"
 coreos_cidr: "24"
-coreos_gateway: "10.20.177.1"
+coreos_gateway: "10.0.0.1"
+coreos_username: "admin"
+coreos_cores: 4
+coreos_memory: 8192
+coreos_vm_name: "sophon-prod"
+
+# SSH Configuration
+ssh_private_key_path: "~/.ssh/sophon_prod"
+
+# -----------------------------------------------------------------------------
+# HTTP File Server (for air-gapped image distribution)
+# -----------------------------------------------------------------------------
+http_file_server_ip: "{{ ansible_default_ipv4.address }}"
+http_file_server_port: 8000
+
+# -----------------------------------------------------------------------------
+# Domain Configuration
+# -----------------------------------------------------------------------------
+domain_name: "sophon.example.com"
+traefik_domain: "{{ domain_name }}"
+timezone: "UTC"
+
+# -----------------------------------------------------------------------------
+# Portainer Configuration
+# -----------------------------------------------------------------------------
+portainer_enabled: true
+portainer_port: 9443
+# portainer_admin_password: "{{ vault_portainer_admin_password }}"
+
+# -----------------------------------------------------------------------------
+# CoreDNS Configuration
+# -----------------------------------------------------------------------------
+coredns_enabled: true
+coredns_dns_port: 53
+
+# -----------------------------------------------------------------------------
+# Traefik Configuration
+# -----------------------------------------------------------------------------
+traefik_enabled: true
+traefik_port_http: 80
+traefik_port_https: 443
+traefik_port_ui: 8080
+traefik_acme_email: "admin@{{ domain_name }}"
+traefik_dns_provider: "cloudflare"
+# traefik_cf_dns_api_token: "{{ vault_cloudflare_api_token }}"
+
+# -----------------------------------------------------------------------------
+# Homepage Dashboard
+# -----------------------------------------------------------------------------
+homepage_enabled: true
+homepage_port: 3000
+
+# -----------------------------------------------------------------------------
+# Gitea Configuration
+# -----------------------------------------------------------------------------
+gitea_enabled: true
+gitea_port_http: 3001
+gitea_port_ssh: 222
+gitea_domain: "git.{{ domain_name }}"
+# gitea_admin_password: "{{ vault_gitea_admin_password }}"
+
+# -----------------------------------------------------------------------------
+# Nexus Repository
+# -----------------------------------------------------------------------------
+nexus_enabled: true
+nexus_port: 8081
+nexus_docker_port: 5000
+
+# -----------------------------------------------------------------------------
+# OpenLDAP Configuration
+# -----------------------------------------------------------------------------
+openldap_enabled: true
+openldap_port: 389
+openldap_ssl_port: 636
+phpldapadmin_port: 8089
+openldap_organisation: "Sophon"
+openldap_domain: "{{ domain_name }}"
+# openldap_admin_password: "{{ vault_openldap_admin_password }}"
+# openldap_config_password: "{{ vault_openldap_config_password }}"
+
+# -----------------------------------------------------------------------------
+# Keycloak SSO Configuration
+# -----------------------------------------------------------------------------
+keycloak_enabled: true
+keycloak_port: 8180
+keycloak_realm: "sophon"
+# keycloak_admin_password: "{{ vault_keycloak_admin_password }}"
+# keycloak_db_password: "{{ vault_keycloak_db_password }}"
+
+# OIDC Client Configuration (stored in vault)
+# keycloak_gitea_client_secret: "{{ vault_keycloak_gitea_client_secret }}"
+# keycloak_nextcloud_client_secret: "{{ vault_keycloak_nextcloud_client_secret }}"
+# keycloak_guacamole_client_secret: "{{ vault_keycloak_guacamole_client_secret }}"
+# keycloak_n8n_client_secret: "{{ vault_keycloak_n8n_client_secret }}"
+# keycloak_portainer_client_secret: "{{ vault_keycloak_portainer_client_secret }}"
+
+# -----------------------------------------------------------------------------
+# Nextcloud Configuration
+# -----------------------------------------------------------------------------
+nextcloud_enabled: true
+nextcloud_port: 8083
+# nextcloud_admin_password: "{{ vault_nextcloud_admin_password }}"
+# nextcloud_db_password: "{{ vault_nextcloud_db_password }}"
+
+# -----------------------------------------------------------------------------
+# n8n Workflow Automation
+# -----------------------------------------------------------------------------
+n8n_enabled: true
+n8n_port: 5678
+
+# -----------------------------------------------------------------------------
+# Guacamole Remote Desktop
+# -----------------------------------------------------------------------------
+guacamole_enabled: true
+guacamole_port: 8090
+# guacamole_db_password: "{{ vault_guacamole_db_password }}"
+
+# -----------------------------------------------------------------------------
+# Backup Configuration
+# -----------------------------------------------------------------------------
+backup_enabled: true
+backup_schedule: "0 2 * * *"
+backup_retention_days: 30
+backup_local_path: "/backup"
+
+kopia_enabled: true
+kopia_port: 51515
+kopia_retention_keep_daily: 30
+kopia_retention_keep_weekly: 12
+kopia_retention_keep_monthly: 24
+# kopia_server_password: "{{ vault_kopia_password }}"
+
+# -----------------------------------------------------------------------------
+# TLS/Certificate Settings
+# -----------------------------------------------------------------------------
+validate_certs: true

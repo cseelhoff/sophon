@@ -1,5 +1,11 @@
 ---
-stack_name: "default_stack"
-stack_env_vars: []
-portainer_port: 9443
-validate_certs: false
+# Portainer Stack Role Defaults
+# These variables use the portainer_stack_ prefix per ansible-lint conventions
+
+portainer_stack_name: "default_stack"
+portainer_stack_env_vars: []
+portainer_stack_validate_certs: false
+portainer_stack_compose_content: ""
+
+# URL is typically set by the calling role
+# portainer_stack_url: "https://{{ coreos_ip }}:9443"

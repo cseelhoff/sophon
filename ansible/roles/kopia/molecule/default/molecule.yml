@@ -1,0 +1,9 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        kopia_enabled: true
+        kopia_data_dir: "/tmp/kopia"
+        kopia_repository_path: "/tmp/kopia-repo"
+        kopia_server_password: "testpassword123"

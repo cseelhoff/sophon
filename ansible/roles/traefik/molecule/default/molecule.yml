@@ -1,0 +1,9 @@
+---
+# Molecule test configuration for traefik role
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        traefik_enabled: true
+        traefik_config_dir: /tmp/sophon/traefik
+        traefik_data_dir: /tmp/sophon/traefik/data

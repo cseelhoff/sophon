@@ -1,0 +1,16 @@
+##   _____             _
+##  / ____|           | |
+## | (___   ___  _ __ | |__   ___  _ __
+##  \___ \ / _ \| '_ \| '_ \ / _ \| '_ \
+##  ____) | (_) | |_) | | | | (_) | | | |
+## |_____/ \___/| .__/|_| |_|\___/|_| |_|
+##              | |
+##              |_|  Integration Testing
+##
+## https://github.com/your-org/sophon
+
+[all]
+sophon-test ansible_connection=local ansible_host=localhost
+
+[coreos]
+sophon-test

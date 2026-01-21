@@ -1,0 +1,7 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        coredns_enabled: true
+        coredns_data_dir: "/tmp/coredns"

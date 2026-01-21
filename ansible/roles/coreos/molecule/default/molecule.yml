@@ -1,0 +1,42 @@
+---
+# CoreOS role molecule test
+# Note: This role requires Proxmox API access and cannot be fully tested in isolation
+# This config validates the role syntax and variable handling only
+
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        # Proxmox connection (mocked for testing)
+        proxmox_api_host: "192.168.1.100"
+        proxmox_api_user: "root@pam"
+        proxmox_node_name: "pve"
+        
+        # VM configuration
+        coreos_vm_name: "test-coreos"
+        coreos_ip: "10.0.1.50"
+        coreos_cidr: "24"
+        coreos_gateway: "10.0.1.1"
+        coreos_cores: 2
+        coreos_memory: 4096
+        coreos_username: "admin"
+        
+        # SSH
+        ssh_private_key_path: "~/.ssh/id_rsa"
+        ssh_public_key_path: "~/.ssh/id_rsa.pub"
+        
+        # HTTP file server
+        http_file_server_port: 8000
+        
+        # CoreOS image
+        coreos_qcow2_img_filename: "fedora-coreos.qcow2.img"
+        coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/latest/x86_64/"
+        coreos_qcow2_xz_filename: "fedora-coreos-qemu.x86_64.qcow2.xz"
+        coreos_qcow2_final_filename: "fedora-coreos-qemu.x86_64.qcow2"
+        storage_pool: "local"
+
+# Skip actual provisioning - this role requires real Proxmox
+scenario:
+  test_sequence:
+    - syntax
+    - lint

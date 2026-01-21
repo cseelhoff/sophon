@@ -1,0 +1,146 @@
+---
+# Sophon Infrastructure Master Playbook
+# Deploys all services in the correct order
+#
+# Quick Start (one-liner):
+#   ansible-playbook -i localhost, ansible/site.yml -e proxmox_api_host=pve.example.com -e domain_name=homelab.local
+#
+# With inventory:
+#   ansible-playbook -i inventories/development/inventory.yml site.yml
+#   ansible-playbook -i inventories/development/inventory.yml site.yml --tags "dns,proxy"
+#   ansible-playbook -i inventories/development/inventory.yml site.yml --skip-tags "gitea"
+
+- name: Deploy CoreOS VM
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [coreos, infrastructure]
+  roles:
+    - coreos
+
+- name: Deploy Portainer
+  hosts: coreos
+  gather_facts: true
+  tags: [portainer, infrastructure]
+  roles:
+    - portainer
+
+- name: Deploy CoreDNS
+  hosts: coreos
+  gather_facts: true
+  tags: [coredns, dns, infrastructure]
+  roles:
+    - coredns
+
+- name: Deploy Traefik
+  hosts: coreos
+  gather_facts: true
+  tags: [traefik, proxy, infrastructure]
+  roles:
+    - traefik
+
+- name: Deploy DNS Sync
+  hosts: coreos
+  gather_facts: true
+  tags: [dns_sync, dns, infrastructure]
+  roles:
+    - dns_sync
+
+- name: Deploy Homepage
+  hosts: coreos
+  gather_facts: true
+  tags: [homepage, dashboard]
+  roles:
+    - homepage
+
+- name: Deploy Gitea
+  hosts: coreos
+  gather_facts: true
+  tags: [gitea, git, development]
+  roles:
+    - gitea
+
+- name: Deploy Nexus
+  hosts: coreos
+  gather_facts: true
+  tags: [nexus, artifacts, development]
+  roles:
+    - nexus
+
+- name: Deploy OpenLDAP
+  hosts: coreos
+  gather_facts: true
+  tags: [openldap, ldap, identity]
+  roles:
+    - openldap
+
+- name: Deploy Keycloak
+  hosts: coreos
+  gather_facts: true
+  tags: [keycloak, sso, identity]
+  roles:
+    - keycloak
+
+- name: Deploy Nextcloud
+  hosts: coreos
+  gather_facts: true
+  tags: [nextcloud, files, collaboration]
+  roles:
+    - nextcloud
+
+- name: Deploy n8n
+  hosts: coreos
+  gather_facts: true
+  tags: [n8n, automation, workflow]
+  roles:
+    - n8n
+
+- name: Deploy Guacamole
+  hosts: coreos
+  gather_facts: true
+  tags: [guacamole, remote, access]
+  roles:
+    - guacamole
+
+- name: Deploy Backup
+  hosts: coreos
+  gather_facts: true
+  tags: [backup, infrastructure]
+  roles:
+    - backup
+
+- name: Deploy Kopia
+  hosts: coreos
+  gather_facts: true
+  tags: [kopia, backup, infrastructure]
+  roles:
+    - kopia
+
+- name: Display Generated Credentials
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: Display generated passwords
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          GENERATED CREDENTIALS - SAVE THESE SECURELY
+          ============================================================================
+          
+          Portainer Admin:     {{ portainer_admin_password | default('not generated') }}
+          Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
+          Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
+          Nextcloud Admin:     {{ nextcloud_admin_password | default('not generated') }}
+          Nexus Admin:         {{ nexus_admin_password | default('not generated') }}
+          OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
+          Guacamole DB:        {{ guacamole_db_password | default('not generated') }}
+          Kopia:               {{ kopia_password | default('not generated') }}
+          
+          CoreOS VM IP:        {{ coreos_ip | default('check Proxmox console') }}
+          
+          ============================================================================
+          Store these credentials in your password manager!
+          ============================================================================
+      when: portainer_admin_password is defined or keycloak_admin_password is defined

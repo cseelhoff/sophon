@@ -1,0 +1,9 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        gitea_enabled: true
+        gitea_data_dir: "/tmp/gitea"
+        gitea_admin_user: "gitea_admin"
+        gitea_admin_password: "testpassword123"

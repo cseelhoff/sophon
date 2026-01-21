@@ -1,0 +1,10 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        keycloak_enabled: true
+        keycloak_data_dir: "/tmp/keycloak"
+        keycloak_admin_user: "admin"
+        keycloak_admin_password: "testpassword123"
+        keycloak_db_password: "testpassword123"

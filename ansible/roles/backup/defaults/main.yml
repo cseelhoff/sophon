@@ -1,0 +1,37 @@
+---
+# Backup configuration using offen/docker-volume-backup
+backup_enabled: true
+backup_image_name: "offen/docker-volume-backup"
+backup_image_tag: "v2.43.0"
+
+# Schedule (cron format)
+backup_schedule: "0 2 * * *"  # Daily at 2 AM
+
+# Directories
+backup_data_dir: "/opt/backup"
+
+# Retention
+backup_retention_days: 7
+
+# Backup destination - choose one or more:
+# Local backup
+backup_local_enabled: true
+backup_local_path: "/backup"
+
+# NFS/SMB mount (configure in host)
+backup_remote_mount: ""
+
+# S3/MinIO
+backup_s3_enabled: false
+# backup_s3_endpoint: "s3.amazonaws.com"
+# backup_s3_bucket: "sophon-backups"
+# backup_s3_access_key: ""
+# backup_s3_secret_key: ""
+
+# Notifications
+backup_notification_enabled: false
+# backup_notification_url: ""  # Gotify, ntfy, etc.
+
+# Encryption (optional)
+backup_encryption_enabled: false
+# backup_gpg_passphrase: ""

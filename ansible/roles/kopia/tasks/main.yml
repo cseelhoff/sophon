@@ -1,0 +1,48 @@
+---
+# Deploy Kopia for filesystem-level backups
+
+- name: Deploy Kopia
+  when: kopia_enabled is true
+  block:
+    - name: Set deployment variables
+      ansible.builtin.set_fact:
+        kopia_validate_certs: false
+        kopia_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Check if kopia image exists
+      ansible.builtin.raw: podman images | grep -q "kopia/kopia[ ]*{{ kopia_image_tag }}"
+      delegate_to: "{{ coreos_ip }}"
+      register: kopia_image_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Download and load kopia image from HTTP file server
+      ansible.builtin.raw: |
+        cd /tmp &&
+        curl -o kopia.tar http://{{ kopia_file_server_ip }}:{{ http_file_server_port }}/kopia.tar &&
+        podman load -i kopia.tar &&
+        rm -f kopia.tar
+      delegate_to: "{{ coreos_ip }}"
+      when: kopia_image_exists.rc != 0
+
+    - name: Create kopia directories
+      ansible.builtin.raw: |
+        mkdir -p {{ kopia_config_dir }}
+        mkdir -p {{ kopia_cache_dir }}
+        mkdir -p {{ kopia_logs_dir }}
+        mkdir -p {{ kopia_repository_path }}
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Generate docker-compose content in base64
+      ansible.builtin.set_fact:
+        kopia_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+
+    - name: Deploy kopia stack using portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "kopia"
+        portainer_stack_compose_content: "{{ kopia_compose_base64 | b64decode }}"
+        portainer_stack_env_vars: "{{ kopia_env_vars | default([]) }}"

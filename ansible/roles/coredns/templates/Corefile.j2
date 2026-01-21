@@ -1,0 +1,18 @@
+. {
+    forward . {{ coredns_forward_dns }}
+    log
+    errors
+    cache 30
+    reload
+}
+
+{% if coredns_local_zones is defined %}
+{% for zone in coredns_local_zones %}
+{{ zone.name }} {
+    file /zones/{{ zone.file }}
+    reload 5s
+    log
+    errors
+}
+{% endfor %}
+{% endif %}

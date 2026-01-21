@@ -1,0 +1,72 @@
+---
+# Deploy Traefik to Portainer
+
+- name: Deploy Traefik
+  when: traefik_enabled is true
+  block:
+    - name: Set deployment variables
+      ansible.builtin.set_fact:
+        traefik_validate_certs: false
+        traefik_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Check if Traefik image exists
+      ansible.builtin.raw: podman images | grep -q "{{ traefik_image_name }}[ ]*{{ traefik_image_tag }}"
+      delegate_to: "{{ coreos_ip }}"
+      register: traefik_image_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Download and load Traefik image from HTTP file server
+      ansible.builtin.raw: |
+        cd /tmp &&
+        curl -o traefik.tar http://{{ traefik_file_server_ip }}:{{ http_file_server_port }}/traefik.tar &&
+        podman load -i traefik.tar &&
+        rm -f traefik.tar
+      delegate_to: "{{ coreos_ip }}"
+      when: traefik_image_exists.rc != 0
+
+    - name: Create Traefik directories
+      ansible.builtin.raw: |
+        mkdir -p {{ traefik_config_dir }}
+        mkdir -p {{ traefik_data_dir }}
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Create traefik.yml configuration
+      ansible.builtin.raw: |
+        cat > {{ traefik_config_dir }}/traefik.yml << 'TRAEFIKYML'
+        {{ lookup('template', 'traefik.yml.j2') }}
+        TRAEFIKYML
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Create config.yml for file provider
+      ansible.builtin.raw: |
+        cat > {{ traefik_config_dir }}/config.yml << 'CONFIGYML'
+        {{ lookup('template', 'config.yml.j2') }}
+        CONFIGYML
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Create empty acme.json with correct permissions
+      ansible.builtin.raw: |
+        touch {{ traefik_data_dir }}/acme.json
+        chmod 600 {{ traefik_data_dir }}/acme.json
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Generate docker-compose content in base64
+      ansible.builtin.set_fact:
+        traefik_compose_base64: "{{ lookup('template', 'docker-compose.yml.j2') | b64encode }}"
+
+    - name: Deploy Traefik stack using portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "traefik"
+        portainer_stack_compose_content: "{{ traefik_compose_base64 | b64decode }}"
+        portainer_stack_env_vars:
+          - name: CF_DNS_API_TOKEN
+            value: "{{ traefik_cf_dns_api_token | default('') }}"
+  when: traefik_enabled is true

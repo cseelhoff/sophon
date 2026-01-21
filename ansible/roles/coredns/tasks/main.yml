@@ -1,10 +1,13 @@
 ---
-- name: Deploy CoreDNS to Portainer
-  tasks:
+# Deploy CoreDNS to Portainer
+
+- name: Deploy CoreDNS
+  when: coredns_enabled is true
+  block:
     - name: Set deployment variables
-      set_fact:
-        validate_certs: false
-        http_file_server_ip: "{{ ansible_default_ipv4.address }}"
+      ansible.builtin.set_fact:
+        coredns_validate_certs: false
+        coredns_file_server_ip: "{{ ansible_default_ipv4.address }}"
 
     - name: Check if CoreDNS image exists
       ansible.builtin.raw: podman images | grep -q "{{ coredns_image_name }}[ ]*{{ coredns_image_tag }}"
@@ -13,14 +16,27 @@
       failed_when: false
       changed_when: false
 
-    - name: Download and load coreDNS image from HTTP file server
+    - name: Download and load CoreDNS image from HTTP file server
       ansible.builtin.raw: |
-        cd /tmp && 
-        curl -o coredns.tar http://{{ http_file_server_ip }}:{{ http_file_server_port }}/coredns.tar && 
+        cd /tmp &&
+        curl -o coredns.tar http://{{ coredns_file_server_ip }}:{{ http_file_server_port }}/coredns.tar &&
         podman load -i coredns.tar &&
         rm -f coredns.tar
       delegate_to: "{{ coreos_ip }}"
       when: coredns_image_exists.rc != 0
+
+    - name: Create CoreDNS config directory
+      ansible.builtin.raw: mkdir -p {{ coredns_config_dir }}
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Create Corefile configuration
+      ansible.builtin.raw: |
+        cat > {{ coredns_config_dir }}/Corefile << 'COREFILE'
+        {{ lookup('template', 'Corefile.j2') }}
+        COREFILE
+      delegate_to: "{{ coreos_ip }}"
+      become: true
 
     - name: Create new resolved.conf with DNSStubListener disabled
       ansible.builtin.raw: |
@@ -35,13 +51,13 @@
       delegate_to: "{{ coreos_ip }}"
 
     - name: Generate docker-compose content in base64
-      set_fact:
-        docker_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+      ansible.builtin.set_fact:
+        coredns_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
 
     - name: Deploy CoreDNS stack using portainer
-      include_role:
-        name: portainer_deploy
+      ansible.builtin.include_role:
+        name: portainer_stack
       vars:
-        portainer_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
-        stack_name: "coredns"
-        docker_compose_content_decoded: "{{ docker_compose_base64 | b64decode }}"
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "coredns"
+        portainer_stack_compose_content: "{{ coredns_compose_base64 | b64decode }}"

@@ -1,0 +1,76 @@
+version: '3'
+
+services:
+  guacamole-db:
+    image: {{ guacamole_db_image_name }}:{{ guacamole_db_image_tag }}
+    container_name: guacamole-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB={{ guacamole_db_name }}
+      - POSTGRES_USER={{ guacamole_db_user }}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - PGDATA=/var/lib/postgresql/data/guacamole
+    volumes:
+      - {{ guacamole_data_dir }}/init:/docker-entrypoint-initdb.d:ro
+      - {{ guacamole_data_dir }}/db:/var/lib/postgresql/data
+    networks:
+      - guacamole
+
+  guacd:
+    image: {{ guacd_image_name }}:{{ guacd_image_tag }}
+    container_name: guacd
+    restart: unless-stopped
+    volumes:
+      - {{ guacamole_data_dir }}/drive:/drive:rw
+      - {{ guacamole_data_dir }}/record:/record:rw
+    networks:
+      - guacamole
+
+  guacamole:
+    image: {{ guacamole_image_name }}:{{ guacamole_image_tag }}
+    container_name: guacamole
+    restart: unless-stopped
+    depends_on:
+      - guacamole-db
+      - guacd
+    environment:
+      - GUACD_HOSTNAME=guacd
+      - POSTGRESQL_HOSTNAME=guacamole-db
+      - POSTGRESQL_DATABASE={{ guacamole_db_name }}
+      - POSTGRESQL_USER={{ guacamole_db_user }}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD}
+{% if guacamole_oidc_enabled %}
+      # OIDC/SSO Configuration
+      - OPENID_AUTHORIZATION_ENDPOINT={{ guacamole_oidc_issuer_url }}/protocol/openid-connect/auth
+      - OPENID_JWKS_ENDPOINT={{ guacamole_oidc_issuer_url }}/protocol/openid-connect/certs
+      - OPENID_ISSUER={{ guacamole_oidc_issuer_url }}
+      - OPENID_CLIENT_ID={{ guacamole_oidc_client_id }}
+      - OPENID_REDIRECT_URI={{ guacamole_oidc_redirect_uri }}
+{% endif %}
+    ports:
+      - "{{ guacamole_port }}:8080"
+    networks:
+      - guacamole
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.guacamole.entrypoints=https"
+      - "traefik.http.routers.guacamole.rule=Host(`{{ guacamole_hostname }}.{{ guacamole_domain }}`)"
+      - "traefik.http.routers.guacamole.tls=true"
+      - "traefik.http.routers.guacamole.tls.certresolver=letsencrypt"
+      - "traefik.http.services.guacamole.loadbalancer.server.port=8080"
+      # Guacamole serves from /guacamole path
+      - "traefik.http.routers.guacamole.middlewares=guacamole-prefix"
+      - "traefik.http.middlewares.guacamole-prefix.addprefix.prefix=/guacamole"
+      # Homepage integration
+      - "homepage.group=Infrastructure"
+      - "homepage.name=Guacamole"
+      - "homepage.icon=guacamole"
+      - "homepage.href=https://{{ guacamole_hostname }}.{{ guacamole_domain }}"
+      - "homepage.description=Remote Desktop Gateway"
+
+networks:
+  guacamole:
+    driver: bridge
+  proxy:
+    external: true

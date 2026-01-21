@@ -1,0 +1,8 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        guacamole_enabled: true
+        guacamole_data_dir: "/tmp/guacamole"
+        guacamole_db_password: "testpassword123"

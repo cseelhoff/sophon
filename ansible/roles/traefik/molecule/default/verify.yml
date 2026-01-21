@@ -1,0 +1,18 @@
+---
+# Verify traefik role
+- name: Verify Traefik
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check if traefik config directory exists
+      ansible.builtin.stat:
+        path: /tmp/sophon/traefik
+      register: traefik_dir
+
+    - name: Assert traefik directory exists
+      ansible.builtin.assert:
+        that:
+          - traefik_dir.stat.exists
+          - traefik_dir.stat.isdir
+        fail_msg: "Traefik config directory does not exist"
+        success_msg: "Traefik config directory exists"

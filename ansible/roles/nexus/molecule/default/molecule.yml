@@ -1,0 +1,7 @@
+---
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        nexus_enabled: true
+        nexus_data_dir: "/tmp/nexus"
