@@ -6,6 +6,5 @@ portainer_stack_name: "default_stack"
 portainer_stack_env_vars: []
 portainer_stack_validate_certs: false
 portainer_stack_compose_content: ""
-
 # URL is typically set by the calling role
 # portainer_stack_url: "https://{{ coreos_ip }}:9443"

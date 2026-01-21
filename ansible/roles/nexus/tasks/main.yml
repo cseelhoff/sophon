@@ -111,7 +111,7 @@
         password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         validate_certs: false
-      register: existing_repos
+      register: nexus_existing_repos
       when:
         - nexus_provision_repos | default(false)
         - nexus_admin_password is defined
@@ -136,11 +136,11 @@
             forceBasicAuth: false
         status_code: [201, 400]
         validate_certs: false
-      register: docker_hosted_result
+      register: nexus_docker_hosted_result
       when:
         - nexus_provision_repos | default(false)
         - nexus_admin_password is defined
-        - "'docker-hosted' not in (existing_repos.json | map(attribute='name') | list)"
+        - "'docker-hosted' not in (nexus_existing_repos.json | map(attribute='name') | list)"
 
     - name: Verify docker-hosted exists after 400 response
       ansible.builtin.uri:
@@ -152,7 +152,7 @@
         status_code: 200
         validate_certs: false
       when:
-        - docker_hosted_result is defined
+        - nexus_docker_hosted_result is defined
         - docker_hosted_result.status | default(0) == 400
 
     - name: Create docker-proxy repository (Docker Hub)
@@ -186,11 +186,11 @@
             indexType: "HUB"
         status_code: [201, 400]
         validate_certs: false
-      register: docker_proxy_result
+      register: nexus_docker_proxy_result
       when:
         - nexus_provision_repos | default(false)
         - nexus_admin_password is defined
-        - "'docker-proxy' not in (existing_repos.json | map(attribute='name') | list)"
+        - "'docker-proxy' not in (nexus_existing_repos.json | map(attribute='name') | list)"
 
     - name: Verify docker-proxy exists after 400 response
       ansible.builtin.uri:
@@ -202,7 +202,7 @@
         status_code: 200
         validate_certs: false
       when:
-        - docker_proxy_result is defined
+        - nexus_docker_proxy_result is defined
         - docker_proxy_result.status | default(0) == 400
 
     - name: Create ghcr-proxy repository (GitHub Container Registry)
@@ -236,11 +236,11 @@
             indexType: "REGISTRY"
         status_code: [201, 400]
         validate_certs: false
-      register: ghcr_proxy_result
+      register: nexus_ghcr_proxy_result
       when:
         - nexus_provision_repos | default(false)
         - nexus_admin_password is defined
-        - "'ghcr-proxy' not in (existing_repos.json | map(attribute='name') | list)"
+        - "'ghcr-proxy' not in (nexus_existing_repos.json | map(attribute='name') | list)"
 
     - name: Verify ghcr-proxy exists after 400 response
       ansible.builtin.uri:
@@ -252,7 +252,7 @@
         status_code: 200
         validate_certs: false
       when:
-        - ghcr_proxy_result is defined
+        - nexus_ghcr_proxy_result is defined
         - ghcr_proxy_result.status | default(0) == 400
 
     - name: Create quay-proxy repository (Quay.io)
@@ -286,11 +286,11 @@
             indexType: "REGISTRY"
         status_code: [201, 400]
         validate_certs: false
-      register: quay_proxy_result
+      register: nexus_quay_proxy_result
       when:
         - nexus_provision_repos | default(false)
         - nexus_admin_password is defined
-        - "'quay-proxy' not in (existing_repos.json | map(attribute='name') | list)"
+        - "'quay-proxy' not in (nexus_existing_repos.json | map(attribute='name') | list)"
 
     - name: Verify quay-proxy exists after 400 response
       ansible.builtin.uri:
@@ -302,7 +302,7 @@
         status_code: 200
         validate_certs: false
       when:
-        - quay_proxy_result is defined
+        - nexus_quay_proxy_result is defined
         - quay_proxy_result.status | default(0) == 400
 
     - name: Create docker-group repository
@@ -331,11 +331,11 @@
             httpPort: "{{ nexus_docker_registry_port }}"
         status_code: [201, 400]
         validate_certs: false
-      register: docker_group_result
+      register: nexus_docker_group_result
       when:
         - nexus_provision_repos | default(false)
         - nexus_admin_password is defined
-        - "'docker-group' not in (existing_repos.json | map(attribute='name') | list)"
+        - "'docker-group' not in (nexus_existing_repos.json | map(attribute='name') | list)"
 
     - name: Verify docker-group exists after 400 response
       ansible.builtin.uri:
@@ -347,5 +347,5 @@
         status_code: 200
         validate_certs: false
       when:
-        - docker_group_result is defined
+        - nexus_docker_group_result is defined
         - docker_group_result.status | default(0) == 400

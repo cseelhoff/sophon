@@ -40,7 +40,7 @@ services:
       - "homepage.description=Directory Service"
 
   phpldapadmin:
-    image: {{ phpldapadmin_image_name }}:{{ phpldapadmin_image_tag }}
+    image: {{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
     container_name: phpldapadmin
     restart: unless-stopped
     environment:

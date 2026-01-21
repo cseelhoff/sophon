@@ -39,7 +39,7 @@
     - name: Check if init script exists
       ansible.builtin.raw: test -f {{ guacamole_data_dir }}/init/initdb.sql && echo "exists"
       delegate_to: "{{ coreos_ip }}"
-      register: initdb_exists
+      register: guacamole_initdb_exists
       failed_when: false
       changed_when: false
 
@@ -49,7 +49,7 @@
           /opt/guacamole/bin/initdb.sh --postgresql > {{ guacamole_data_dir }}/init/initdb.sql
       delegate_to: "{{ coreos_ip }}"
       become: true
-      when: "'exists' not in initdb_exists.stdout"
+      when: "'exists' not in guacamole_initdb_exists.stdout"
 
     - name: Generate docker-compose content in base64
       ansible.builtin.set_fact:

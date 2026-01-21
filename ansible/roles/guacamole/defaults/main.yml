@@ -3,8 +3,8 @@
 guacamole_enabled: true
 guacamole_image_name: "guacamole/guacamole"
 guacamole_image_tag: "1.5.5"
-guacd_image_name: "guacamole/guacd"
-guacd_image_tag: "1.5.5"
+guacamole_guacd_image_name: "guacamole/guacd"
+guacamole_guacd_image_tag: "1.5.5"
 
 # Database
 guacamole_db_image_name: "postgres"

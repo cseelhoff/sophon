@@ -25,7 +25,7 @@
 - name: Check if PostgreSQL image exists
   ansible.builtin.raw: podman images | grep -q "postgres[ ]*{{ nextcloud_db_image_tag }}"
   delegate_to: "{{ coreos_ip }}"
-  register: postgres_image_exists
+  register: nextcloud_postgres_image_exists
   failed_when: false
   changed_when: false
 
@@ -36,7 +36,7 @@
     podman load -i postgres.tar &&
     rm -f postgres.tar
   delegate_to: "{{ coreos_ip }}"
-  when: postgres_image_exists.rc != 0
+  when: nextcloud_postgres_image_exists.rc != 0
 
 - name: Create Nextcloud directories
   ansible.builtin.raw: |

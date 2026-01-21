@@ -23,9 +23,9 @@
   when: openldap_image_exists.rc != 0
 
 - name: Check if phpLDAPadmin image exists
-  ansible.builtin.raw: podman images | grep -q "phpldapadmin[ ]*{{ phpldapadmin_image_tag }}"
+  ansible.builtin.raw: podman images | grep -q "phpldapadmin[ ]*{{ openldap_phpldapadmin_image_tag }}"
   delegate_to: "{{ coreos_ip }}"
-  register: phpldapadmin_image_exists
+  register: openldap_phpldapadmin_image_exists
   failed_when: false
   changed_when: false
 
@@ -36,7 +36,7 @@
     podman load -i phpldapadmin.tar &&
     rm -f phpldapadmin.tar
   delegate_to: "{{ coreos_ip }}"
-  when: phpldapadmin_image_exists.rc != 0
+  when: openldap_phpldapadmin_image_exists.rc != 0
 
 - name: Create OpenLDAP directories
   ansible.builtin.raw: |

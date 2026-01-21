@@ -1,15 +1,6 @@
 ---
-# Find the IP address that Proxmox can reach
-# - name: Get local IP address
-#   set_fact:
-#     local_ip: "{{ ansible_default_ipv4.address }}"
-    # if running WSL2
-    # netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=172.22.33.97
-    # netsh advfirewall firewall add rule name="Allow TCP Port 8000" dir=in action=allow protocol=TCP localport=8000
-    # TURN OFF WHEN DONE:
-    # netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
-    # netsh interface portproxy show all
-    # local_ip: "10.0.3.123"
+# Portainer Role Tasks
+
 - name: Check if portainer is installed
   ansible.builtin.raw: podman images -q docker.io/portainer/portainer-ce:latest
   register: portainer_image_check
@@ -37,16 +28,18 @@
   ansible.builtin.pause:
     prompt: "Please enter the Portainer admin password"
     echo: false
-  register: password_prompt
+  register: portainer_password_prompt
   when: portainer_admin_password is not defined or portainer_admin_password == ""
 
 - name: Set final admin password
   ansible.builtin.set_fact:
-    portainer_admin_password: "{{ password_prompt.user_input | default(portainer_admin_password) }}"
-  when: password_prompt is defined and password_prompt.user_input is defined
+    portainer_admin_password: "{{ portainer_password_prompt.user_input | default(portainer_admin_password) }}"
+  when: portainer_password_prompt is defined and portainer_password_prompt.user_input is defined
 
 - name: Create bcrypt password for portainer admin
-  ansible.builtin.shell: "htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2 | sed -e 's/\\$/\\$\\$/g'"
+  ansible.builtin.shell:
+    cmd: "set -o pipefail && htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2 | sed -e 's/\\$/\\$\\$/g'"
+    executable: /bin/bash
   register: portainer_admin_password_bcrypt
   changed_when: false
   delegate_to: localhost

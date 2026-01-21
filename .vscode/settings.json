@@ -1,3 +1,5 @@
 {
-    "ansible.python.interpreterPath": "/bin/python3"
+    "ansible.python.interpreterPath": "/nix/store/qzc04a3npl70cyyy6flnnrb2ig3kayxm-python3-3.13.11/bin/python",
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python-envs.pythonProjects": []
 }

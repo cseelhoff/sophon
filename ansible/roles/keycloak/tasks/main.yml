@@ -29,11 +29,11 @@
 
 - name: Generate realm import configuration
   ansible.builtin.set_fact:
-    realm_config_base64: "{{ lookup('template', 'templates/realm-export.json.j2') | b64encode }}"
+    keycloak_realm_config_base64: "{{ lookup('template', 'templates/realm-export.json.j2') | b64encode }}"
 
 - name: Deploy realm configuration to CoreOS
   ansible.builtin.raw: |
-    echo '{{ realm_config_base64 }}' | base64 -d > {{ keycloak_data_dir }}/import/{{ keycloak_realm }}-realm.json
+    echo '{{ keycloak_realm_config_base64 }}' | base64 -d > {{ keycloak_data_dir }}/import/{{ keycloak_realm }}-realm.json
   delegate_to: "{{ coreos_ip }}"
   become: true
 

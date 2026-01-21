@@ -2,4 +2,5 @@
 # Enable/disable this role
 http_file_server_enabled: true
 
-local_download_dir: "/tmp/coreos_images"
+http_file_server_local_download_dir: "/tmp/coreos_images"
+http_file_server_port: 8000

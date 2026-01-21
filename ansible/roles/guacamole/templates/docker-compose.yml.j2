@@ -17,7 +17,7 @@ services:
       - guacamole
 
   guacd:
-    image: {{ guacd_image_name }}:{{ guacd_image_tag }}
+    image: {{ guacamole_guacd_image_name }}:{{ guacamole_guacd_image_tag }}
     container_name: guacd
     restart: unless-stopped
     volumes:

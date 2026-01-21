@@ -69,4 +69,3 @@
         portainer_stack_env_vars:
           - name: CF_DNS_API_TOKEN
             value: "{{ traefik_cf_dns_api_token | default('') }}"
-  when: traefik_enabled is true
