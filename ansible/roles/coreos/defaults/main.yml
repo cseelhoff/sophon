@@ -42,10 +42,16 @@ coreos_ssh_public_key_path: "{{ coreos_ssh_private_key_path }}.pub"
 # =============================================================================
 # CoreOS Image
 # =============================================================================
-coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/41.20250215.3.0/x86_64/fedora-coreos-41.20250215.3.0-qemu.x86_64.qcow2.xz"
+coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"
 coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
 coreos_qcow2_final_filename: "{{ coreos_qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
-coreos_qcow2_img_filename: "{{ coreos_qcow2_final_filename }}.img"
+coreos_qcow2_img_filename: "{{ coreos_qcow2_final_filename }}"
+# Hardlink with .iso extension so it appears in Proxmox GUI ISO list
+coreos_qcow2_iso_filename: "{{ coreos_qcow2_final_filename }}.iso"
+
+# Proxmox storage for the CoreOS image (ISO storage is queryable via API)
+coreos_image_storage: "local"
+coreos_image_storage_path: "/var/lib/vz/template/iso"
 
 # =============================================================================
 # Deployment Mode

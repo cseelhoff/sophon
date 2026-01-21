@@ -67,13 +67,24 @@
     coreos_pve_csrf_token: "{{ coreos_pve_ticket.json.data.CSRFPreventionToken }}"
 
 # -----------------------------------------------------------------------------
-# CoreOS Image: Check if exists on Proxmox
+# CoreOS Image: Check if exists on Proxmox via API
 # -----------------------------------------------------------------------------
-# Note: Proxmox API cannot check /tmp directly. We assume image exists if user
-# provides coreos_skip_image_download=true, otherwise we try to download/prompt.
+- name: Check if CoreOS image already exists in Proxmox storage
+  ansible.builtin.uri:
+    url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/{{ coreos_image_storage }}/content"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
+    validate_certs: false
+  register: coreos_storage_content
+
 - name: Set image exists fact
   ansible.builtin.set_fact:
-    coreos_image_exists: "{{ coreos_skip_image_download | default(false) | bool }}"
+    coreos_image_exists: "{{ coreos_storage_content.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0 }}"
+
+- name: Display image status
+  ansible.builtin.debug:
+    msg: "{{ 'CoreOS image found in storage, skipping download' if coreos_image_exists else 'CoreOS image not found, will download' }}"
 
 # -----------------------------------------------------------------------------
 # CoreOS Image: Download (non-airgapped mode)
@@ -90,7 +101,7 @@
           CSRFPreventionToken: "{{ coreos_pve_csrf_token }}"
         body:
           content: "iso"
-          filename: "{{ coreos_qcow2_xz_filename }}"
+          filename: "{{ coreos_qcow2_final_filename }}"
           url: "{{ coreos_qcow2_url }}"
         body_format: json
         validate_certs: false
@@ -112,17 +123,20 @@
           Option 1 - SSH (if SSH access is available):
           ----------------------------------------------------------------------------
           ssh {{ coreos_proxmox_api_username }}@{{ coreos_proxmox_api_host }} \
-            'cd /tmp && \
+            'cd {{ coreos_image_storage_path }} && \
             curl -LO {{ coreos_qcow2_url }} && \
             xz -d {{ coreos_qcow2_xz_filename }} && \
-            mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}'
+            ln {{ coreos_qcow2_img_filename }} {{ coreos_qcow2_iso_filename }}'
 
           Option 2 - Console (run directly on Proxmox shell):
           ----------------------------------------------------------------------------
-          cd /tmp && \
+          cd {{ coreos_image_storage_path }} && \
             curl -LO {{ coreos_qcow2_url }} && \
             xz -d {{ coreos_qcow2_xz_filename }} && \
-            mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}
+            ln {{ coreos_qcow2_img_filename }} {{ coreos_qcow2_iso_filename }}
+
+          The hardlink (.iso) makes the image visible in Proxmox GUI.
+          Deleting the .iso from GUI removes both files when done.
 
           After the download completes, re-run this playbook.
           ============================================================================
@@ -130,13 +144,13 @@
 
     - name: Wait for download task to complete
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/{{ coreos_image_storage }}/content"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
         validate_certs: false
       register: coreos_download_check
-      until: coreos_download_check.json.data | selectattr('volid', 'search', coreos_qcow2_xz_filename) | list | length > 0
+      until: coreos_download_check.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0
       retries: 60
       delay: 10
       when: coreos_download_attempt.status == 200
@@ -165,14 +179,14 @@
 
     - name: Trigger Proxmox to download from local HTTP server
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/download-url"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/{{ coreos_image_storage }}/download-url"
         method: POST
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
           CSRFPreventionToken: "{{ coreos_pve_csrf_token }}"
         body:
           content: "iso"
-          filename: "{{ coreos_qcow2_img_filename }}"
+          filename: "{{ coreos_qcow2_iso_filename }}"
           url: "http://{{ coreos_local_ip }}:{{ coreos_http_file_server_port }}/{{ coreos_qcow2_img_filename }}"
         body_format: json
         validate_certs: false
@@ -180,84 +194,35 @@
 
     - name: Wait for local download to complete
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/local/content"
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/storage/{{ coreos_image_storage }}/content"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
         validate_certs: false
       register: coreos_local_download_check
-      until: coreos_local_download_check.json.data | selectattr('volid', 'search', coreos_qcow2_img_filename) | list | length > 0
+      until: coreos_local_download_check.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0
       retries: 30
       delay: 10
 
 # -----------------------------------------------------------------------------
 # Ignition Configuration
 # -----------------------------------------------------------------------------
-- name: Create DHCP network config
+# Step 1: Create ignition config as a dictionary
+- name: Create ignition config dict
   ansible.builtin.set_fact:
-    coreos_network_config: |
-      [connection]
-      id=Wired connection 1
-      type=ethernet
-      match-device=type:ethernet
+    coreos_ignition_dict:
+      ignition:
+        version: "3.4.0"
 
-      [ipv4]
-      method=auto
-  when: coreos_network_mode == "dhcp"
-
-- name: Create static network config
+# Step 2: Convert to JSON and build the args string
+# The working format is: -fw_cfg name=opt/com.coreos/config,string='<JSON>'
+- name: Build args string
   ansible.builtin.set_fact:
-    coreos_network_config: |
-      [connection]
-      id=Wired connection 1
-      type=ethernet
-      match-device=type:ethernet
+    coreos_vm_args: "-fw_cfg name=opt/com.coreos/config,string='{{ coreos_ignition_dict | to_json }}'"
 
-      [ipv4]
-      address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
-      method=manual
-  when: coreos_network_mode == "static"
-
-- name: Create ignition JSON
-  ansible.builtin.set_fact:
-    coreos_ignition_config: >-
-      {
-        "ignition": {
-          "version": "3.0.0"
-        },
-        "passwd": {
-          "users": [
-            {
-              "name": "{{ coreos_username }}",
-              "passwordHash": "{{ coreos_password_hash }}",
-              "sshAuthorizedKeys": ["{{ coreos_ssh_key['content'] | b64decode | trim }}"],
-              "groups": [
-                "sudo",
-                "docker"
-              ]
-            }
-          ]
-        },
-        "storage": {
-          "files": [
-            {
-              "path": "/etc/NetworkManager/system-connections/static.nmconnection",
-              "mode": 384,
-              "contents": {
-                "source": "data:text/plain;charset=utf-8;base64,{{ coreos_network_config | b64encode }}"
-              }
-            }
-          ]
-        }
-      }
-
-- name: Escape commas for Proxmox
-  ansible.builtin.set_fact:
-    coreos_ignition_config: "{{ coreos_ignition_config | to_json | quote | regex_replace(',', ',,') }}"
-
-- name: Debug escaped ignition config
+- name: Debug args
   ansible.builtin.debug:
-    msg: "Escaped ignition config: {{ coreos_ignition_config }}"
+    msg: "Args: {{ coreos_vm_args }}"
 
 # -----------------------------------------------------------------------------
 # VM Creation
@@ -281,7 +246,7 @@
   when: coreos_existing_vm is not none
 
 - name: Create CoreOS VM on Proxmox
-  community.general.proxmox_kvm:
+  community.proxmox.proxmox_kvm:
     api_host: "{{ coreos_proxmox_api_host }}"
     api_port: "{{ coreos_proxmox_api_port }}"
     api_user: "{{ coreos_proxmox_api_user }}"
@@ -298,11 +263,23 @@
     state: present
     timeout: 600
     virtio:
-      virtio0: "{{ coreos_proxmox_storage }}:0,import-from=/tmp/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
+      virtio0: "{{ coreos_proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
     boot: "order=virtio0"
-    args: "-fw_cfg name=opt/com.coreos/config,string={{ coreos_ignition_config }}"
+    args: "{{ coreos_vm_args }}"
   register: coreos_vm_create
   when: coreos_existing_vm is none
+
+- name: Debug VM creation result
+  ansible.builtin.debug:
+    var: coreos_vm_create
+    verbosity: 0
+
+- name: Debug - show exact args that were passed
+  ansible.builtin.debug:
+    msg: |
+      HARDCODED args value: -fw_cfg name=opt/com.coreos/config,string={"ignition":{"version":"3.0.0"}}
+      VM created: {{ coreos_vm_create.changed | default(false) }}
+      VMID: {{ coreos_vm_create.vmid | default('unknown') }}
 
 - name: Use existing VM ID if VM already exists
   ansible.builtin.set_fact:
@@ -311,7 +288,7 @@
   when: coreos_existing_vm is not none
 
 - name: Start CoreOS VM
-  community.general.proxmox_kvm:
+  community.proxmox.proxmox_kvm:
     api_host: "{{ coreos_proxmox_api_host }}"
     api_port: "{{ coreos_proxmox_api_port }}"
     api_user: "{{ coreos_proxmox_api_user }}"
@@ -319,6 +296,29 @@
     node: "{{ coreos_proxmox_node_name }}"
     vmid: "{{ coreos_vm_create.vmid }}"
     state: started
+
+# -----------------------------------------------------------------------------
+# Debug: Query VM config to see actual args stored
+# -----------------------------------------------------------------------------
+- name: Query VM config from Proxmox
+  ansible.builtin.uri:
+    url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/config"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
+    validate_certs: false
+  register: coreos_vm_config
+
+- name: Debug - Show VM args as stored in Proxmox
+  ansible.builtin.debug:
+    msg: |
+      VM Config args field: {{ coreos_vm_config.json.data.args | default('NOT SET') }}
+      
+      Full args (repr): {{ coreos_vm_config.json.data.args | default('') | string }}
+
+- name: Pause to check console
+  ansible.builtin.pause:
+    prompt: "Check VM console for boot errors. Press Enter to continue or Ctrl+C to abort"
 
 # -----------------------------------------------------------------------------
 # Post-Creation: Get VM IP and wait for SSH
