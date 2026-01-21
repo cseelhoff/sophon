@@ -464,6 +464,7 @@
     ansible_ssh_private_key_file: "{{ coreos_ssh_private_key_path }}"
     ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     ansible_python_interpreter: /usr/bin/python3
+    http_file_server_ip: "{{ ansible_default_ipv4.address }}"
   when: coreos_ip is defined
 
 - name: Save coreos_ip for subsequent plays

@@ -15,45 +15,42 @@
 # Deploy specific services:
 #   ansible-playbook -i inventories/development/inventory.yml site.yml --tags "traefik,homepage"
 
-- name: Prompt for Required Variables
+- name: Gather Required Variables
   hosts: localhost
   connection: local
   gather_facts: false
   tags: [always]
   tasks:
-    - name: Prompt for Proxmox API host
-      ansible.builtin.pause:
-        prompt: "Enter Proxmox API host (e.g., 192.168.1.100 or pve.example.com)"
-      register: prompted_proxmox_host
-      when: coreos_proxmox_api_host is not defined or coreos_proxmox_api_host == ""
-
-    - name: Set Proxmox API host from prompt
+    - name: Load from environment or CLI
       ansible.builtin.set_fact:
-        coreos_proxmox_api_host: "{{ prompted_proxmox_host.user_input }}"
-      when: prompted_proxmox_host.user_input is defined
+        coreos_proxmox_api_host: "{{ coreos_proxmox_api_host | default(lookup('env', 'PROXMOX_HOST')) | default('', true) }}"
+        domain_name: "{{ domain_name | default(lookup('env', 'DOMAIN_NAME')) | default('', true) }}"
+        coreos_proxmox_api_password: "{{ coreos_proxmox_api_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
 
-    - name: Prompt for domain name
+    - name: Prompt for missing Proxmox host
       ansible.builtin.pause:
-        prompt: "Enter domain name suffix (e.g., homelab.local)"
-      register: prompted_domain_name
-      when: domain_name is not defined or domain_name == ""
+        prompt: "Proxmox API host"
+      register: _ph
+      when: coreos_proxmox_api_host == ""
 
-    - name: Set domain name from prompt
-      ansible.builtin.set_fact:
-        domain_name: "{{ prompted_domain_name.user_input }}"
-      when: prompted_domain_name.user_input is defined
-
-    - name: Prompt for Proxmox API password
+    - name: Prompt for missing domain
       ansible.builtin.pause:
-        prompt: "Enter Proxmox API password"
+        prompt: "Domain name"
+      register: _dn
+      when: domain_name == ""
+
+    - name: Prompt for missing password
+      ansible.builtin.pause:
+        prompt: "Proxmox password"
         echo: false
-      register: prompted_proxmox_password
-      when: coreos_proxmox_api_password is not defined or coreos_proxmox_api_password == ""
+      register: _pp
+      when: coreos_proxmox_api_password == ""
 
-    - name: Set Proxmox API password from prompt
+    - name: Set prompted values
       ansible.builtin.set_fact:
-        coreos_proxmox_api_password: "{{ prompted_proxmox_password.user_input }}"
-      when: prompted_proxmox_password.user_input is defined
+        coreos_proxmox_api_host: "{{ _ph.user_input | default(coreos_proxmox_api_host, true) }}"
+        domain_name: "{{ _dn.user_input | default(domain_name, true) }}"
+        coreos_proxmox_api_password: "{{ _pp.user_input | default(coreos_proxmox_api_password, true) }}"
 
     - name: Validate required variables
       ansible.builtin.assert:
