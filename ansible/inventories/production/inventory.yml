@@ -1,3 +1,4 @@
+---
 ##   _____             _
 ##  / ____|           | |
 ## | (___   ___  _ __ | |__   ___  _ __
@@ -9,12 +10,13 @@
 ##
 ## https://github.com/your-org/sophon
 
-[all]
-# Run from remote workstation
-sophon-prod ansible_host=10.0.0.100
+all:
+  hosts:
+    sophon-prod:
+      ansible_host: 10.0.0.100
+      # ansible_connection: local  # Uncomment if running directly on server
 
-# Or run directly on the server
-# sophon-prod ansible_connection=local ansible_host=localhost
-
-[coreos]
-sophon-prod
+  children:
+    coreos:
+      hosts:
+        sophon-prod:

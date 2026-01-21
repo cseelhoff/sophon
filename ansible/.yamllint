@@ -8,6 +8,7 @@ rules:
     allowed-values: ['true', 'false', 'yes', 'no']
   comments:
     min-spaces-from-content: 1
+  comments-indentation: false
   braces:
     min-spaces-inside: 0
     max-spaces-inside: 1
@@ -15,6 +16,9 @@ rules:
     spaces: 2
     indent-sequences: true
   document-start: enable
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
 
 ignore: |
   .cache
