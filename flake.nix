@@ -27,6 +27,7 @@
             python3Packages.requests  # Required by proxmoxer
             apacheHttpd
             podman
+            arp-scan  # For VM IP discovery via MAC address
           ];
 
           shellHook = ''

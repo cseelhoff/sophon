@@ -250,6 +250,10 @@
               - docker
       storage:
         files:
+          - path: "/etc/hostname"
+            mode: 420
+            contents:
+              inline: "{{ coreos_vm_name }}"
           - path: "/etc/NetworkManager/system-connections/wired.nmconnection"
             mode: 384
             contents:
@@ -398,14 +402,23 @@
   block:
     - name: Wait for VM to appear in ARP table
       ansible.builtin.shell: |
-        # Ping broadcast to populate ARP table
-        ping -c 1 -b 255.255.255.255 2>/dev/null || true
-        # Also try pinging common gateway
-        ping -c 1 {{ ansible_default_ipv4.gateway | default('192.168.1.1') }} 2>/dev/null || true
-        # Check ARP table for our MAC
-        arp -an | grep -i "{{ coreos_vm_mac }}" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+        set -o pipefail
+        MAC="{{ coreos_vm_mac }}"
+
+        # First check if already in ARP cache
+        IP=$(arp -an | grep -i "$MAC" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+        if [ -n "$IP" ]; then echo "$IP"; exit 0; fi
+
+        # Try arp-scan if available (most reliable)
+        if command -v arp-scan >/dev/null 2>&1; then
+          IP=$(sudo arp-scan --localnet 2>/dev/null | grep -i "$MAC" | awk '{print $1}' | head -1)
+          if [ -n "$IP" ]; then echo "$IP"; exit 0; fi
+        fi
+
+        # Check ARP table again
+        arp -an | grep -i "$MAC" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
       register: coreos_arp_result
-      until: coreos_arp_result.stdout | length > 0
+      until: coreos_arp_result.stdout | trim | length > 0
       retries: 30
       delay: 10
       changed_when: false
@@ -414,14 +427,14 @@
       ansible.builtin.fail:
         msg: |
           CoreOS VM IP address not found via ARP lookup.
-          
+
           MAC address: {{ coreos_vm_mac }}
-          
+
           Possible causes:
           1. VM is not on the same network segment as the Ansible controller
           2. VM failed to boot (check Proxmox console)
           3. VM hasn't obtained a DHCP lease yet
-          
+
           Try manually: arp -an | grep -i "{{ coreos_vm_mac }}"
       when: coreos_arp_result.stdout | length == 0
 
