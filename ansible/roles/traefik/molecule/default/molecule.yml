@@ -1,5 +1,10 @@
 ---
 # Molecule test configuration for traefik role
+# Note: These roles require Portainer/CoreOS and cannot be fully tested in isolation
+# This config validates syntax only
+
+platforms: []
+
 provisioner:
   inventory:
     group_vars:
@@ -7,3 +12,7 @@ provisioner:
         traefik_enabled: true
         traefik_config_dir: /tmp/sophon/traefik
         traefik_data_dir: /tmp/sophon/traefik/data
+
+scenario:
+  test_sequence:
+    - syntax

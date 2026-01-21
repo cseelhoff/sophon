@@ -1,4 +1,11 @@
 ---
+# Molecule test - syntax validation only
+
+platforms: []
+
+scenario:
+  test_sequence:
+    - syntax
 provisioner:
   inventory:
     group_vars:

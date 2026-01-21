@@ -3,6 +3,8 @@
 # Note: This role requires Proxmox API access and cannot be fully tested in isolation
 # This config validates the role syntax and variable handling only
 
+platforms: []
+
 provisioner:
   inventory:
     group_vars:
@@ -35,7 +37,6 @@ provisioner:
         coreos_qcow2_final_filename: "fedora-coreos-qemu.x86_64.qcow2"
         coreos_proxmox_storage: "local"
 
-# Skip actual provisioning - this role requires real Proxmox
 scenario:
   test_sequence:
     - syntax

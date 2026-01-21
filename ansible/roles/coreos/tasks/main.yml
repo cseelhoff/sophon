@@ -137,11 +137,16 @@
 
           Option 1 - SSH (if SSH access is available):
           ----------------------------------------------------------------------------
-          ssh {{ coreos_proxmox_api_user }}@{{ coreos_proxmox_api_host }} 'cd /tmp && curl -LO {{ coreos_qcow2_url }} && xz -d {{ coreos_qcow2_xz_filename }} && mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}'
+          ssh {{ coreos_proxmox_api_user }}@{{ coreos_proxmox_api_host }} \
+            'cd /tmp && curl -LO {{ coreos_qcow2_url }} && \
+            xz -d {{ coreos_qcow2_xz_filename }} && \
+            mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}'
 
           Option 2 - Console (run directly on Proxmox shell):
           ----------------------------------------------------------------------------
-          cd /tmp && curl -LO {{ coreos_qcow2_url }} && xz -d {{ coreos_qcow2_xz_filename }} && mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}
+          cd /tmp && curl -LO {{ coreos_qcow2_url }} && \
+            xz -d {{ coreos_qcow2_xz_filename }} && \
+            mv {{ coreos_qcow2_final_filename }} {{ coreos_qcow2_img_filename }}
 
           After the download completes, re-run this playbook.
           ============================================================================
@@ -307,7 +312,9 @@
   block:
     - name: Wait for QEMU guest agent to report IP
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/agent/network-get-interfaces"
+        url: >-
+          https://{{ coreos_proxmox_api_host }}:8006/api2/json/nodes/{{-
+          coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/agent/network-get-interfaces
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
@@ -324,7 +331,13 @@
 
     - name: Extract VM IP address
       ansible.builtin.set_fact:
-        coreos_ip: "{{ (coreos_vm_network.json.data.result | selectattr('name', 'ne', 'lo') | map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | first)['ip-address'] }}"
+        coreos_ip: >-
+          {{ (coreos_vm_network.json.data.result |
+              selectattr('name', 'ne', 'lo') |
+              map(attribute='ip-addresses') |
+              flatten |
+              selectattr('ip-address-type', 'eq', 'ipv4') |
+              first)['ip-address'] }}
       when: coreos_vm_network.status == 200
 
     - name: Display VM IP

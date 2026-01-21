@@ -38,7 +38,9 @@
 
 - name: Rename extracted file
   ansible.builtin.command:
-    cmd: "mv {{ http_file_server_local_download_dir }}/{{ http_file_server_extracted_filename }} {{ http_file_server_local_download_dir }}/{{ http_file_server_renamed_filename }}"
+    cmd: >-
+      mv {{ http_file_server_local_download_dir }}/{{ http_file_server_extracted_filename }}
+      {{ http_file_server_local_download_dir }}/{{ http_file_server_renamed_filename }}
   when:
     - not http_file_server_local_file_stat.stat.exists
     - http_file_server_extracted_filename is defined
