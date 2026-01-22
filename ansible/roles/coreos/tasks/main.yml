@@ -211,19 +211,7 @@
 # -----------------------------------------------------------------------------
 # Ignition Configuration
 # -----------------------------------------------------------------------------
-# Step 1: Create network config for NetworkManager
-- name: Create DHCP network config
-  ansible.builtin.set_fact:
-    coreos_network_config: |
-      [connection]
-      id=Wired connection 1
-      type=ethernet
-      match-device=type:ethernet
-
-      [ipv4]
-      method=auto
-  when: coreos_network_mode == "dhcp"
-
+# Create network config for NetworkManager (static IP)
 - name: Create static network config
   ansible.builtin.set_fact:
     coreos_network_config: |
@@ -235,7 +223,6 @@
       [ipv4]
       address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
       method=manual
-  when: coreos_network_mode == "static"
 
 # Step 2: Create ignition config as a dictionary
 - name: Create ignition config dict
@@ -407,54 +394,9 @@
   ansible.builtin.debug:
     msg: "CoreOS VM MAC address: {{ coreos_vm_mac }}"
 
-- name: Wait for VM to get IP address (DHCP mode)
-  when: coreos_network_mode == "dhcp"
-  block:
-    - name: Wait for VM to appear in ARP table
-      ansible.builtin.shell: |
-        set -o pipefail
-        MAC="{{ coreos_vm_mac }}"
-
-        # First check if already in ARP cache
-        IP=$(arp -an | grep -i "$MAC" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
-        if [ -n "$IP" ]; then echo "$IP"; exit 0; fi
-
-        # Try arp-scan if available (most reliable)
-        if command -v arp-scan >/dev/null 2>&1; then
-          IP=$(arp-scan --localnet 2>/dev/null | grep -i "$MAC" | awk '{print $1}' | head -1)
-          if [ -n "$IP" ]; then echo "$IP"; exit 0; fi
-        fi
-
-        # Check ARP table again
-        arp -an | grep -i "$MAC" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
-      register: coreos_arp_result
-      until: coreos_arp_result.stdout | trim | length > 0
-      retries: 30
-      delay: 10
-      changed_when: false
-
-    - name: Fail if VM IP not found via ARP
-      ansible.builtin.fail:
-        msg: |
-          CoreOS VM IP address not found via ARP lookup.
-
-          MAC address: {{ coreos_vm_mac }}
-
-          Possible causes:
-          1. VM is not on the same network segment as the Ansible controller
-          2. VM failed to boot (check Proxmox console)
-          3. VM hasn't obtained a DHCP lease yet
-
-          Try manually: arp -an | grep -i "{{ coreos_vm_mac }}"
-      when: coreos_arp_result.stdout | length == 0
-
-    - name: Set VM IP from ARP result
-      ansible.builtin.set_fact:
-        coreos_ip: "{{ coreos_arp_result.stdout | trim }}"
-
-    - name: Display VM IP
-      ansible.builtin.debug:
-        msg: "CoreOS VM IP address: {{ coreos_ip }} (discovered via ARP)"
+- name: Display VM IP address
+  ansible.builtin.debug:
+    msg: "CoreOS VM IP address: {{ coreos_ip }}"
 
 - name: Wait for SSH to be available
   ansible.builtin.wait_for:
@@ -463,7 +405,6 @@
     delay: 5
     timeout: 300
     state: started
-  when: coreos_ip is defined
 
 - name: Add CoreOS VM to inventory
   ansible.builtin.add_host:
@@ -474,11 +415,9 @@
     ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     ansible_python_interpreter: /usr/bin/python3
     http_file_server_ip: "{{ coreos_controller_ip }}"
-  when: coreos_ip is defined
 
 - name: Save coreos_ip for subsequent plays
   ansible.builtin.set_fact:
     coreos_ip: "{{ coreos_ip }}"
   delegate_to: localhost
   delegate_facts: true
-  when: coreos_ip is defined

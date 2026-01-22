@@ -26,6 +26,9 @@
         coreos_proxmox_api_host: "{{ coreos_proxmox_api_host | default(lookup('env', 'PROXMOX_HOST')) | default('', true) }}"
         domain_name: "{{ domain_name | default(lookup('env', 'DOMAIN_NAME')) | default('', true) }}"
         coreos_proxmox_api_password: "{{ coreos_proxmox_api_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
+        coreos_ip: "{{ coreos_ip | default(lookup('env', 'COREOS_IP')) | default('', true) }}"
+        coreos_cidr: "{{ coreos_cidr | default(lookup('env', 'COREOS_CIDR')) | default('24', true) }}"
+        coreos_gateway: "{{ coreos_gateway | default(lookup('env', 'COREOS_GATEWAY')) | default('', true) }}"
 
     - name: Prompt for missing Proxmox host
       ansible.builtin.pause:
@@ -46,11 +49,25 @@
       register: _pp
       when: coreos_proxmox_api_password == ""
 
+    - name: Prompt for missing CoreOS IP
+      ansible.builtin.pause:
+        prompt: "CoreOS VM static IP"
+      register: _ip
+      when: coreos_ip == ""
+
+    - name: Prompt for missing CoreOS gateway
+      ansible.builtin.pause:
+        prompt: "CoreOS gateway"
+      register: _gw
+      when: coreos_gateway == ""
+
     - name: Set prompted values
       ansible.builtin.set_fact:
         coreos_proxmox_api_host: "{{ _ph.user_input | default(coreos_proxmox_api_host, true) }}"
         domain_name: "{{ _dn.user_input | default(domain_name, true) }}"
         coreos_proxmox_api_password: "{{ _pp.user_input | default(coreos_proxmox_api_password, true) }}"
+        coreos_ip: "{{ _ip.user_input | default(coreos_ip, true) }}"
+        coreos_gateway: "{{ _gw.user_input | default(coreos_gateway, true) }}"
 
     - name: Validate required variables
       ansible.builtin.assert:
@@ -58,10 +75,12 @@
           - coreos_proxmox_api_host is defined and coreos_proxmox_api_host | length > 0
           - domain_name is defined and domain_name | length > 0
           - coreos_proxmox_api_password is defined and coreos_proxmox_api_password | length > 0
+          - coreos_ip is defined and coreos_ip | length > 0
+          - coreos_gateway is defined and coreos_gateway | length > 0
         fail_msg: |
           Missing required variables. Provide via:
           - Interactive prompt (run playbook without -e flags)
-          - Command line: -e coreos_proxmox_api_host=... -e domain_name=... -e coreos_proxmox_api_password=...
+          - Command line: -e coreos_proxmox_api_host=... -e coreos_ip=... -e coreos_gateway=...
           - Inventory group_vars/all.yml or vault.yml
 
 - name: Deploy CoreOS VM

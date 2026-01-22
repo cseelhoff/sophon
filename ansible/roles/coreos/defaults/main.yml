@@ -24,13 +24,9 @@ coreos_username: "admin"
 # Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
 coreos_password_hash: "$y$j9T$icTH9ilSsldG.Sew1Ipk./$P4/ewJbHmjiKy99l7Z9bcen5dVYRf0SetM3C2l8VKn2"
 
-# Network mode: "dhcp" or "static"
-# DHCP is recommended for quick start - VM gets IP from your network's DHCP server
-coreos_network_mode: "dhcp"
-
-# Static IP settings (only used when coreos_network_mode: "static")
+# Network (static IP required - prompted if not set):
 # coreos_ip: "10.0.1.10"
-# coreos_cidr: "24"
+coreos_cidr: "24"
 # coreos_gateway: "10.0.1.1"
 
 # =============================================================================
