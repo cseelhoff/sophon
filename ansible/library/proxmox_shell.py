@@ -11,13 +11,14 @@ DOCUMENTATION = r'''
 ---
 module: proxmox_shell
 
-short_description: Execute commands on Proxmox VE node shell via termproxy WebSocket
+short_description: Execute commands on Proxmox VE node, VM, or container via termproxy WebSocket
 
 version_added: "1.0.0"
 
 description:
-    - Execute shell commands on a Proxmox VE node using the termproxy/vncwebsocket API.
+    - Execute shell commands on a Proxmox VE node, QEMU VM, or LXC container using the termproxy/vncwebsocket API.
     - Requires pre-authenticated PVE ticket and CSRF token (obtain via /api2/json/access/ticket).
+    - For VMs/containers, specify vmid and optionally vmtype.
 
 options:
     api_host:
@@ -36,6 +37,24 @@ options:
         description: Target Proxmox node name
         required: true
         type: str
+    vmid:
+        description: VM or container ID. If not specified, connects to node shell.
+        type: int
+        required: false
+    vmtype:
+        description: Type of VM (qemu or lxc). Only used when vmid is specified.
+        type: str
+        choices: ['qemu', 'lxc']
+        default: qemu
+    vm_user:
+        description: Username for VM/container login. Required for VMs that present a login prompt.
+        type: str
+        required: false
+    vm_password:
+        description: Password for VM/container login. Required for VMs that present a login prompt.
+        type: str
+        required: false
+        no_log: true
     command:
         description: Shell command to execute
         required: true
@@ -79,12 +98,42 @@ EXAMPLES = r'''
     validate_certs: false
   register: pve_ticket
 
-# Then use this module:
+# Run command on Proxmox node shell:
 - name: Run uptime on Proxmox node
   proxmox_shell:
-    command: uptime
+    api_host: "{{ api_host }}"
+    node: "pve"
     pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
     pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+    command: uptime
+  register: result
+
+# Run command on a QEMU VM console:
+- name: Run command on VM 100
+  proxmox_shell:
+    api_host: "{{ api_host }}"
+    node: "pve"
+    vmid: 100
+    vmtype: qemu
+    vm_user: root
+    vm_password: "{{ vm_root_password }}"
+    pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
+    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+    command: hostname
+  register: result
+
+# Run command on an LXC container:
+- name: Run command on container 101
+  proxmox_shell:
+    api_host: "{{ api_host }}"
+    node: "pve"
+    vmid: 101
+    vmtype: lxc
+    vm_user: root
+    vm_password: "{{ container_root_password }}"
+    pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
+    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+    command: cat /etc/os-release
   register: result
 
 - debug:
@@ -134,22 +183,25 @@ def strip_ansi(text):
     """Remove ANSI escape codes from text."""
     # Match various ANSI escape sequences:
     # - CSI sequences: \x1b[...X (where X is a letter)
-    # - OSC sequences: \x1b]...\x07
+    # - OSC sequences: \x1b]...\x1b\\ or \x1b]...\x07
     # - Character set: \x1b(X or \x1b)X
     # - Private modes: \x1b[?...h or \x1b[?...l
     ansi_pattern = re.compile(
-        r'\x1b\[\?[0-9;]*[hl]'   # Private mode set/reset (e.g., \x1b[?2004h)
+        r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)'  # OSC sequences (e.g., \x1b]3008;...\x1b\\)
+        r'|\x1b\[\?[0-9;]*[hl]'   # Private mode set/reset (e.g., \x1b[?2004h)
         r'|\x1b\[[0-9;]*[a-zA-Z]'  # Standard CSI sequences
-        r'|\x1b\][^\x07]*\x07'     # OSC sequences
         r'|\x1b[()][AB012]'        # Character set selection
         r'|\x1b[=>]'               # Keypad modes
     )
     return ansi_pattern.sub('', text)
 
 
-def create_term_session(api_host, api_port, node, pve_auth_cookie, pve_csrf_token, validate_certs):
+def create_term_session(api_host, api_port, node, pve_auth_cookie, pve_csrf_token, validate_certs, vmid=None, vmtype='qemu'):
     """
-    Create a terminal proxy session via POST /api2/json/nodes/{node}/termproxy
+    Create a terminal proxy session.
+    - Node shell: POST /api2/json/nodes/{node}/termproxy
+    - QEMU VM: POST /api2/json/nodes/{node}/qemu/{vmid}/termproxy
+    - LXC container: POST /api2/json/nodes/{node}/lxc/{vmid}/termproxy
     Returns dict with 'port' and 'ticket' (vncticket)
     """
     context = None
@@ -166,7 +218,11 @@ def create_term_session(api_host, api_port, node, pve_auth_cookie, pve_csrf_toke
         'CSRFPreventionToken': pve_csrf_token
     }
     
-    path = f'/api2/json/nodes/{node}/termproxy'
+    # Build path based on target type
+    if vmid is not None:
+        path = f'/api2/json/nodes/{node}/{vmtype}/{vmid}/termproxy'
+    else:
+        path = f'/api2/json/nodes/{node}/termproxy'
     
     conn.request('POST', path, body='', headers=headers)
     response = conn.getresponse()
@@ -181,17 +237,25 @@ def create_term_session(api_host, api_port, node, pve_auth_cookie, pve_csrf_toke
 
 
 def execute_command(api_host, api_port, api_user, node, command, 
-                    pve_auth_cookie, term_session, timeout, validate_certs):
+                    pve_auth_cookie, term_session, timeout, validate_certs,
+                    vmid=None, vmtype='qemu', vm_user=None, vm_password=None):
     """
     Connect to Proxmox WebSocket and execute command.
+    If vm_user/vm_password provided, handles login prompt first.
     Returns the command output.
     """
     # Build WebSocket URL
     vncticket = term_session['ticket']
     port = term_session['port']
     
+    # Build path based on target type
+    if vmid is not None:
+        ws_path = f'/api2/json/nodes/{node}/{vmtype}/{vmid}/vncwebsocket'
+    else:
+        ws_path = f'/api2/json/nodes/{node}/vncwebsocket'
+    
     ws_url = (
-        f'wss://{api_host}:{api_port}/api2/json/nodes/{node}/vncwebsocket'
+        f'wss://{api_host}:{api_port}{ws_path}'
         f'?port={port}&vncticket={urlencode({"t": vncticket})[2:]}'
     )
     
@@ -214,10 +278,20 @@ def execute_command(api_host, api_port, api_user, node, command,
     
     output_buffer = []
     command_sent = False
+    logged_in = vm_user is None  # If no vm_user, assume already logged in (node shell)
+    login_stage = 'waiting'  # waiting -> username_sent -> password_sent -> done
     
     def has_prompt(text):
         """Check if text contains a shell prompt."""
         return bool(re.search(r'[$#]\s*$', text, re.MULTILINE))
+    
+    def has_login_prompt(text):
+        """Check if text contains a login prompt."""
+        return bool(re.search(r'login:\s*$', text, re.IGNORECASE))
+    
+    def has_password_prompt(text):
+        """Check if text contains a password prompt."""
+        return bool(re.search(r'password:\s*$', text, re.IGNORECASE))
     
     try:
         # Send authentication: USER:VNCTICKET\n
@@ -246,8 +320,36 @@ def execute_command(api_host, api_port, api_user, node, command,
                 
                 output_buffer.append(msg)
                 
-                # Send command after first prompt appears
-                if not command_sent and has_prompt(msg):
+                # Handle VM login if credentials provided
+                if not logged_in:
+                    if login_stage == 'waiting':
+                        if has_login_prompt(msg):
+                            # Send username
+                            user_data = vm_user + '\r'
+                            byte_len = len(user_data.encode('utf-8'))
+                            ws.send(f'0:{byte_len}:{user_data}')
+                            login_stage = 'username_sent'
+                            continue
+                        elif has_prompt(msg):
+                            # Already logged in, skip login flow
+                            logged_in = True
+                            login_stage = 'done'
+                            # Fall through to send command
+                    elif login_stage == 'username_sent' and has_password_prompt(msg):
+                        # Send password
+                        pass_data = vm_password + '\r'
+                        byte_len = len(pass_data.encode('utf-8'))
+                        ws.send(f'0:{byte_len}:{pass_data}')
+                        login_stage = 'password_sent'
+                        continue
+                    elif login_stage == 'password_sent' and has_prompt(msg):
+                        # Login successful, now logged in
+                        logged_in = True
+                        login_stage = 'done'
+                        # Fall through to send command
+                
+                # Send command after prompt appears (and logged in)
+                if logged_in and not command_sent and has_prompt(msg):
                     cmd_data = command + '\r'
                     byte_len = len(cmd_data.encode('utf-8'))
                     ws.send(f'0:{byte_len}:{cmd_data}')
@@ -273,7 +375,10 @@ def execute_command(api_host, api_port, api_user, node, command,
                     break
                     
             except websocket.WebSocketTimeoutException:
-                if command_sent:
+                # On timeout, send Enter to wake up the terminal if waiting for login
+                if not logged_in and login_stage == 'waiting':
+                    ws.send('0:1:\r')
+                elif command_sent:
                     break
                 continue
             except Exception:
@@ -331,6 +436,10 @@ def run_module():
         api_port=dict(type='int', default=8006),
         api_user=dict(type='str', default='root@pam'),
         node=dict(type='str', default='pve'),
+        vmid=dict(type='int', required=False, default=None),
+        vmtype=dict(type='str', default='qemu', choices=['qemu', 'lxc']),
+        vm_user=dict(type='str', required=False, default=None),
+        vm_password=dict(type='str', required=False, default=None, no_log=True),
         command=dict(type='str', required=True),
         pve_auth_cookie=dict(type='str', required=True, no_log=True),
         pve_csrf_token=dict(type='str', required=True, no_log=True),
@@ -362,7 +471,9 @@ def run_module():
             node=module.params['node'],
             pve_auth_cookie=module.params['pve_auth_cookie'],
             pve_csrf_token=module.params['pve_csrf_token'],
-            validate_certs=module.params['validate_certs']
+            validate_certs=module.params['validate_certs'],
+            vmid=module.params['vmid'],
+            vmtype=module.params['vmtype']
         )
         
         # Execute command via WebSocket
@@ -375,7 +486,11 @@ def run_module():
             pve_auth_cookie=module.params['pve_auth_cookie'],
             term_session=term_session,
             timeout=module.params['timeout'],
-            validate_certs=module.params['validate_certs']
+            validate_certs=module.params['validate_certs'],
+            vmid=module.params['vmid'],
+            vmtype=module.params['vmtype'],
+            vm_user=module.params['vm_user'],
+            vm_password=module.params['vm_password']
         )
         
         # Parse output
