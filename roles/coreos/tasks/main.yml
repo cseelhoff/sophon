@@ -208,12 +208,30 @@
             dest: "{{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}"
             mode: "0644"
 
-        - name: Create ISO containing the RPMs
+        - name: Pull and save container images for ISO
+          ansible.builtin.shell:
+            cmd: |
+              if [ ! -f "{{ coreos_local_cache_dir }}/{{ item.tar_filename }}" ]; then
+                podman pull docker.io/{{ item.name }}:{{ item.tag }} && \
+                podman save -o "{{ coreos_local_cache_dir }}/{{ item.tar_filename }}" docker.io/{{ item.name }}:{{ item.tag }}
+              fi
+          loop: "{{ coreos_container_images | default([]) }}"
+          when: coreos_container_images is defined and coreos_container_images | length > 0
+
+        - name: Build list of files for ISO
+          ansible.builtin.set_fact:
+            iso_files: >-
+              {{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}
+              {{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}
+              {% for img in coreos_container_images | default([]) %}
+              {{ coreos_local_cache_dir }}/{{ img.tar_filename }}
+              {% endfor %}
+
+        - name: Create ISO containing RPMs and container images
           ansible.builtin.command:
             cmd: >-
               genisoimage -o {{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}
-              -V QGA_RPM -R -J {{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}
-              {{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}
+              -V QGA_RPM -R -J {{ iso_files }}
             creates: "{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}"
 
         - name: Verify QGA ISO exists
@@ -360,7 +378,3 @@
   retries: 60
   delay: 10
   failed_when: false
-
-- name: Display VM status
-  ansible.builtin.debug:
-    msg: "{{ 'QEMU Guest Agent responding on VM ' + coreos_vmid | string if agent_ping.status == 200 else 'QEMU Guest Agent not yet available (VM may still be installing it)' }}"
