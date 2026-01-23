@@ -1,0 +1,23 @@
+---
+# =============================================================================
+# Proxmox Role - Authentication and API Helpers
+# =============================================================================
+# Provides: proxmox_ticket, proxmox_csrf (set as facts for other roles to use)
+
+- name: Authenticate to Proxmox API
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/access/ticket"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ proxmox_user }}"
+      password: "{{ proxmox_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: proxmox_auth
+  when: proxmox_ticket is not defined
+
+- name: Set Proxmox auth facts
+  ansible.builtin.set_fact:
+    proxmox_ticket: "{{ proxmox_auth.json.data.ticket }}"
+    proxmox_csrf: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
+  when: proxmox_ticket is not defined

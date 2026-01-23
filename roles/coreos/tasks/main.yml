@@ -2,25 +2,7 @@
 # =============================================================================
 # CoreOS VM Deployment on Proxmox
 # =============================================================================
-
-# -----------------------------------------------------------------------------
-# Proxmox Authentication
-# -----------------------------------------------------------------------------
-- name: Obtain Proxmox API ticket
-  ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/access/ticket"
-    method: POST
-    body:
-      username: "{{ proxmox_user }}"
-      password: "{{ proxmox_password }}"
-    body_format: form-urlencoded
-    validate_certs: false
-  register: pve_ticket
-
-- name: Set authentication facts
-  ansible.builtin.set_fact:
-    pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
-    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+# Depends on: proxmox role (via meta/main.yml)
 
 # -----------------------------------------------------------------------------
 # VM Existence Check (skip image/ignition prep if VM already exists)
@@ -30,8 +12,8 @@
     url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/cluster/resources?type=vm"
     method: GET
     headers:
-      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-    validate_certs: false
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
   register: existing_vms
 
 - name: Set existing VM fact
@@ -57,8 +39,8 @@
         url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
         method: GET
         headers:
-          Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-        validate_certs: false
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
       register: storage_content
 
     - name: Set image exists fact
@@ -77,8 +59,8 @@
             api_port: "{{ proxmox_port }}"
             api_user: "{{ proxmox_user }}"
             node: "{{ proxmox_node }}"
-            pve_auth_cookie: "{{ pve_auth_cookie }}"
-            pve_csrf_token: "{{ pve_csrf_token }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
             timeout: 600
             command: >-
               cd {{ coreos_image_storage_path }} &&
@@ -143,8 +125,8 @@
               ansible.builtin.command:
                 cmd: >-
                   curl -k -s
-                  -H "Cookie: PVEAuthCookie={{ pve_auth_cookie }}"
-                  -H "CSRFPreventionToken: {{ pve_csrf_token }}"
+                  -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
+                  -H "CSRFPreventionToken: {{ proxmox_csrf }}"
                   -F "content=iso"
                   -F "filename=@{{ coreos_local_download_dir }}/{{ coreos_qcow2_iso_filename }};type=application/octet-stream;filename={{ coreos_qcow2_iso_filename }}"
                   "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/upload"
@@ -157,8 +139,8 @@
                 url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
                 method: GET
                 headers:
-                  Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-                validate_certs: false
+                  Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+                validate_certs: "{{ proxmox_validate_certs }}"
               register: upload_check
               until: upload_check.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0
               retries: 60
@@ -170,8 +152,8 @@
                 api_port: "{{ proxmox_port }}"
                 api_user: "{{ proxmox_user }}"
                 node: "{{ proxmox_node }}"
-                pve_auth_cookie: "{{ pve_auth_cookie }}"
-                pve_csrf_token: "{{ pve_csrf_token }}"
+                pve_auth_cookie: "{{ proxmox_ticket }}"
+                proxmox_csrf_token: "{{ proxmox_csrf }}"
                 timeout: 30
                 command: >-
                   cd {{ coreos_image_storage_path }} &&
@@ -243,8 +225,8 @@
           ansible.builtin.command:
             cmd: >-
               curl -k -s
-              -H "Cookie: PVEAuthCookie={{ pve_auth_cookie }}"
-              -H "CSRFPreventionToken: {{ pve_csrf_token }}"
+              -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
+              -H "CSRFPreventionToken: {{ proxmox_csrf }}"
               -F "content=iso"
               -F "filename=@{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }};type=application/octet-stream;filename={{ coreos_qga_iso_filename }}"
               "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/upload"
@@ -257,8 +239,8 @@
             url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
             method: GET
             headers:
-              Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-            validate_certs: false
+              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+            validate_certs: "{{ proxmox_validate_certs }}"
           register: qga_upload_check
           until: qga_upload_check.json.data | selectattr('volid', 'search', coreos_qga_iso_filename) | list | length > 0
           retries: 30
@@ -369,9 +351,9 @@
     url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ coreos_vmid }}/agent/ping"
     method: POST
     headers:
-      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
-      CSRFPreventionToken: "{{ pve_csrf_token }}"
-    validate_certs: false
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
     status_code: [200, 500]
   register: agent_ping
   until: agent_ping.status == 200

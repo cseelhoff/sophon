@@ -1,0 +1,65 @@
+---
+# =============================================================================
+# QGA Exec - Execute command via QEMU Guest Agent
+# =============================================================================
+# Usage:
+#   - include_role:
+#       name: proxmox
+#       tasks_from: qga_exec
+#     vars:
+#       qga_vmid: "{{ coreos_vmid }}"
+#       qga_command: "echo hello"
+#
+# Returns:
+#   qga_result.stdout  - command stdout
+#   qga_result.stderr  - command stderr  
+#   qga_result.exitcode - command exit code
+#   qga_result.success - true if exitcode == 0
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - qga_vmid is defined
+      - qga_command is defined
+      - proxmox_ticket is defined
+    fail_msg: "qga_exec requires qga_vmid, qga_command, and proxmox_ticket (run proxmox role first)"
+
+- name: Execute command via QGA
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ qga_vmid }}/agent/exec"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+      Content-Type: "application/x-www-form-urlencoded"
+    body: "command=/bin/bash&command=-c&command={{ qga_command | urlencode }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: qga_exec_result
+
+- name: Debug QGA exec result
+  ansible.builtin.debug:
+    msg: "QGA exec PID: {{ qga_exec_result.json.data.pid | default('FAILED') }}"
+
+- name: Wait for QGA command to complete
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ qga_vmid }}/agent/exec-status?pid={{ qga_exec_result.json.data.pid }}"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: qga_status_result
+  retries: 10
+  delay: 3
+  until: (qga_status_result.json.data.exited | default(0) | int) == 1
+
+- name: Debug QGA status
+  ansible.builtin.debug:
+    msg: "QGA status: exited={{ qga_status_result.json.data.exited | default('undefined') }}, exitcode={{ qga_status_result.json.data.exitcode | default('undefined') }}"
+
+- name: Set QGA result facts
+  ansible.builtin.set_fact:
+    qga_result:
+      stdout: "{{ qga_status_result.json.data['out-data'] | default('') }}"
+      stderr: "{{ qga_status_result.json.data['err-data'] | default('') }}"
+      exitcode: "{{ qga_status_result.json.data.exitcode | default(-1) }}"
+      success: "{{ (qga_status_result.json.data.exitcode | default(-1)) == 0 }}"

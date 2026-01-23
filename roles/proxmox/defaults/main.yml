@@ -1,0 +1,16 @@
+---
+# =============================================================================
+# Proxmox Connection Settings
+# =============================================================================
+# These are fallback defaults - override via inventory group_vars or -e flags
+
+proxmox_host: "pve.example.com"
+proxmox_port: 8006
+proxmox_username: "root"
+proxmox_user: "{{ proxmox_username }}@pam"
+# proxmox_password: ""  # Required: Set via environment, vault, or command line
+proxmox_node: "proxmox"
+proxmox_storage: "local-lvm"
+
+# Certificate validation (set to true in production with valid certs)
+proxmox_validate_certs: false

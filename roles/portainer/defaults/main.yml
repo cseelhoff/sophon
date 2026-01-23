@@ -9,3 +9,6 @@ portainer_port: 9443
 portainer_image: "docker.io/portainer/portainer-ce"
 portainer_image_tar: "portainer-ce-{{ portainer_image_tag }}.tar"
 portainer_local_cache_dir: "/tmp/sophon_cache"
+
+# VM ID - set by coreos role, or override here
+# coreos_vmid: 107

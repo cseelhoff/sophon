@@ -1,29 +1,44 @@
 ---
 # Portainer Role Tasks
 # Portainer is deployed at boot via systemd (defined in CoreOS Butane config)
-# This role just verifies it's running and displays access info
+# This role waits for Portainer and initializes admin password via direct API calls
+# (QGA network calls are blocked by permissions)
 
-- name: Wait for Portainer to be accessible
+- name: Generate Portainer admin password
+  ansible.builtin.set_fact:
+    portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+  when: portainer_admin_password is not defined
+
+- name: Wait for Portainer API to be ready
   ansible.builtin.uri:
     url: "https://{{ coreos_ip }}:{{ portainer_port }}/api/status"
     method: GET
     validate_certs: false
-    status_code: [200, 401, 404]
+    status_code: 200
   register: portainer_status
-  retries: 30
-  delay: 10
-  until: portainer_status.status in [200, 401, 404]
-  failed_when: false
+  until: portainer_status.status == 200
+  retries: 60
+  delay: 3
 
-- name: Check Portainer status
+- name: Show Portainer version
   ansible.builtin.debug:
-    msg: "Portainer is running and accessible at https://{{ coreos_ip }}:{{ portainer_port }}"
-  when: portainer_status.status in [200, 401]
+    msg: "Portainer version: {{ portainer_status.json.Version }}"
 
-- name: Warn if Portainer not accessible
+- name: Initialize Portainer admin user
+  ansible.builtin.uri:
+    url: "https://{{ coreos_ip }}:{{ portainer_port }}/api/users/admin/init"
+    method: POST
+    validate_certs: false
+    body_format: json
+    body:
+      Username: admin
+      Password: "{{ portainer_admin_password }}"
+    status_code: [200, 409]
+  register: portainer_init
+
+- name: Display admin init result
   ansible.builtin.debug:
-    msg: "Warning: Portainer may not be running yet. Check VM status."
-  when: portainer_status.status not in [200, 401]
+    msg: "{{ portainer_init.json | default('Admin already initialized') }}"
 
 - name: Display Portainer access info
   ansible.builtin.debug:
@@ -31,8 +46,8 @@
       ============================================
       Portainer is available at:
       https://{{ coreos_ip }}:{{ portainer_port }}
-      
-      First-time setup:
-      Create your admin account on first access.
+
+      Admin credentials:
+      Username: admin
+      Password: {{ portainer_admin_password }}
       ============================================
-  when: portainer_status.status in [200, 401]

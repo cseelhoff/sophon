@@ -12,8 +12,7 @@ ExecStart=/usr/bin/podman run --name portainer \
   --privileged \
   -v /run/podman/podman.sock:/var/run/docker.sock \
   -v portainer_data:/data \
-  docker.io/portainer/portainer-ce:{{ portainer_image_tag }} \
-  --admin-password '{{ portainer_admin_password_bcrypt.stdout }}'
+  docker.io/portainer/portainer-ce:{{ portainer_image_tag }}'
 ExecStop=/usr/bin/podman stop portainer
 
 [Install]

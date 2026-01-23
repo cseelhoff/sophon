@@ -3,18 +3,6 @@
 coreos_enabled: true
 
 # =============================================================================
-# Proxmox Connection
-# =============================================================================
-# These are fallback defaults - override via inventory group_vars or -e flags
-proxmox_host: "pve.example.com"
-proxmox_port: 8006
-proxmox_username: "root"
-proxmox_user: "{{ proxmox_username }}@pam"
-# proxmox_password: ""  # Required: Set via environment, vault, or command line
-proxmox_node: "proxmox"
-proxmox_storage: "local-lvm"
-
-# =============================================================================
 # CoreOS VM Configuration
 # =============================================================================
 coreos_vm_name: "sophon-coreos"
