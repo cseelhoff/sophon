@@ -1,0 +1,58 @@
+variant: fcos
+version: 1.5.0
+
+passwd:
+  users:
+    - name: {{ coreos_username }}
+      password_hash: {{ coreos_password_hash }}
+      groups:
+        - sudo
+        - wheel
+
+storage:
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: {{ coreos_vm_name }}
+
+    - path: /etc/NetworkManager/system-connections/wired.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id=Wired connection 1
+          type=ethernet
+          match-device=type:ethernet
+
+          [ipv4]
+          address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
+          method=manual
+
+{% if coreos_qemu_guest_agent_rpm_b64 is defined %}
+    - path: /var/tmp/qemu-guest-agent.rpm
+      mode: 0644
+      contents:
+        source: data:application/octet-stream;base64,{{ coreos_qemu_guest_agent_rpm_b64 }}
+
+systemd:
+  units:
+    - name: install-qemu-guest-agent.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install qemu-guest-agent from embedded RPM
+        After=local-fs.target
+        Before=qemu-guest-agent.service
+        ConditionPathExists=!/var/lib/.qga-installed
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/rpm-ostree install --apply-live --allow-inactive --assumeyes /var/tmp/qemu-guest-agent.rpm
+        ExecStartPost=/usr/bin/touch /var/lib/.qga-installed
+        ExecStartPost=/usr/bin/systemctl enable --now qemu-guest-agent.service
+
+        [Install]
+        WantedBy=multi-user.target
+{% endif %}

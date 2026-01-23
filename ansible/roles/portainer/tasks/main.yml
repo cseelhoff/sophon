@@ -1,72 +1,115 @@
 ---
 # Portainer Role Tasks
+# Deploys Portainer CE container on CoreOS using qemu-guest-agent for file transfer
 
-- name: Check if portainer is installed
-  ansible.builtin.raw: podman images -q docker.io/portainer/portainer-ce:latest
+- name: Check if portainer image exists on VM
+  ansible.builtin.raw: podman images -q {{ portainer_image }}:{{ portainer_image_tag }}
   register: portainer_image_check
-  # changed_when: false
-
-- name: Download and load portainer image from HTTP file server
-  ansible.builtin.raw: |
-    cd /tmp &&
-    curl -o portainer-ce.tar http://{{ http_file_server_ip }}:{{ http_file_server_port }}/portainer-ce.tar &&
-    podman load -i portainer-ce.tar &&
-    rm -f portainer-ce.tar
-  when: portainer_image_check.stdout | trim == ""
-
-- name: Check if portainer service exists
-  ansible.builtin.raw: test -f /etc/systemd/system/portainer.service && echo "exists" || echo "not found"
-  register: portainer_service_check
-  # changed_when: false
-
-- name: Set initial admin password from environment if available
-  ansible.builtin.set_fact:
-    portainer_admin_password: "{{ lookup('env', 'PORTAINER_ADMIN_PASSWORD') }}"
-  when: lookup('env', 'PORTAINER_ADMIN_PASSWORD') | default('') != ""
-
-- name: Prompt for admin password if not set from environment
-  ansible.builtin.pause:
-    prompt: "Please enter the Portainer admin password"
-    echo: false
-  register: portainer_password_prompt
-  when: portainer_admin_password is not defined or portainer_admin_password == ""
-
-- name: Set final admin password
-  ansible.builtin.set_fact:
-    portainer_admin_password: "{{ portainer_password_prompt.user_input | default(portainer_admin_password) }}"
-  when: portainer_password_prompt is defined and portainer_password_prompt.user_input is defined
-
-- name: Create bcrypt password for portainer admin
-  ansible.builtin.shell:
-    cmd: "set -o pipefail && htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2 | sed -e 's/\\$/\\$\\$/g'"
-    executable: /bin/bash
-  register: portainer_admin_password_bcrypt
   changed_when: false
+
+- name: Transfer and load portainer image if not present
+  when: portainer_image_check.stdout | trim == ""
+  block:
+    - name: Ensure local cache directory exists
+      ansible.builtin.file:
+        path: "{{ portainer_local_cache_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Check if image tar exists locally
+      ansible.builtin.stat:
+        path: "{{ portainer_local_cache_dir }}/{{ portainer_image_tar }}"
+      register: portainer_tar_stat
+      delegate_to: localhost
+
+    - name: Pull and save portainer image locally
+      ansible.builtin.shell:
+        cmd: "podman pull {{ portainer_image }}:{{ portainer_image_tag }} && podman save -o {{ portainer_local_cache_dir }}/{{ portainer_image_tar }} {{ portainer_image }}:{{ portainer_image_tag }}"
+      delegate_to: localhost
+      when: not portainer_tar_stat.stat.exists
+
+    - name: Transfer image to VM via qemu-guest-agent
+      ansible.builtin.uri:
+        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ hostvars['localhost']['coreos_vm_create']['vmid'] }}/agent/file-write"
+        method: POST
+        headers:
+          Cookie: "PVEAuthCookie={{ hostvars['localhost']['coreos_pve_auth_cookie'] }}"
+          CSRFPreventionToken: "{{ hostvars['localhost']['coreos_pve_csrf_token'] }}"
+        body:
+          file: "/tmp/{{ portainer_image_tar }}"
+          content: "{{ lookup('file', portainer_local_cache_dir + '/' + portainer_image_tar) | b64encode }}"
+        body_format: json
+        validate_certs: false
+      delegate_to: localhost
+
+    - name: Load image into podman on VM
+      ansible.builtin.raw: podman load -i /tmp/{{ portainer_image_tar }} && rm -f /tmp/{{ portainer_image_tar }}
+      become: true
+
+- name: Check if portainer container exists
+  ansible.builtin.raw: podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^portainer$' && echo "exists" || echo "not found"
+  register: portainer_container_check
+  changed_when: false
+
+- name: Setup portainer
+  when: portainer_container_check.stdout | trim == "not found"
+  block:
+    - name: Set initial admin password from environment if available
+      ansible.builtin.set_fact:
+        portainer_admin_password: "{{ lookup('env', 'PORTAINER_ADMIN_PASSWORD') }}"
+      when: lookup('env', 'PORTAINER_ADMIN_PASSWORD') | default('') != ""
+      delegate_to: localhost
+
+    - name: Prompt for admin password if not set
+      ansible.builtin.pause:
+        prompt: "Enter Portainer admin password"
+        echo: false
+      register: portainer_password_prompt
+      when: portainer_admin_password is not defined or portainer_admin_password == ""
+      delegate_to: localhost
+
+    - name: Set final admin password
+      ansible.builtin.set_fact:
+        portainer_admin_password: "{{ portainer_password_prompt.user_input | default(portainer_admin_password) }}"
+      when: portainer_password_prompt.user_input is defined
+      delegate_to: localhost
+
+    - name: Create bcrypt password hash
+      ansible.builtin.shell:
+        cmd: "set -o pipefail && htpasswd -bnB admin {{ portainer_admin_password }} | cut -d ':' -f 2"
+        executable: /bin/bash
+      register: portainer_password_hash
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Create portainer data volume
+      ansible.builtin.raw: podman volume create portainer_data
+      become: true
+
+    - name: Enable podman socket
+      ansible.builtin.raw: systemctl enable --now podman.socket
+      become: true
+
+    - name: Create and start portainer container
+      ansible.builtin.raw: |
+        podman run -d \
+          --name portainer \
+          --restart always \
+          -p {{ portainer_port }}:9443 \
+          -v /run/podman/podman.sock:/var/run/docker.sock:z \
+          -v portainer_data:/data:z \
+          {{ portainer_image }}:{{ portainer_image_tag }} \
+          --admin-password '{{ portainer_password_hash.stdout }}'
+      become: true
+
+- name: Verify portainer is running
+  ansible.builtin.raw: podman ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^portainer$'
+  register: portainer_running
+  changed_when: false
+  failed_when: portainer_running.rc != 0
+
+- name: Display portainer access info
+  ansible.builtin.debug:
+    msg: "Portainer is available at https://{{ coreos_ip }}:{{ portainer_port }}"
   delegate_to: localhost
-  when: portainer_service_check.stdout | trim == "not found"
-
-- name: Enable and start podman.socket
-  ansible.builtin.raw: systemctl enable --now podman.socket
-  become: true
-  when: portainer_service_check.stdout | trim == "not found"
-
-- name: Create portainer systemd service file
-  ansible.builtin.raw: |
-    cat > /etc/systemd/system/portainer.service << 'EOF'
-    EOF
-    chmod 644 /etc/systemd/system/portainer.service
-  when: portainer_service_check.stdout | trim == "not found"
-  become: true
-  delegate_to: "{{ coreos_ip }}"
-
-- name: Reload systemd daemon
-  ansible.builtin.raw: systemctl daemon-reload
-  when: portainer_service_check.stdout | trim == "not found"
-  become: true
-  delegate_to: "{{ coreos_ip }}"
-
-- name: Start portainer and set to autostart
-  ansible.builtin.raw: systemctl enable --now portainer
-  register: portainer_start
-  become: true
-  delegate_to: "{{ coreos_ip }}"

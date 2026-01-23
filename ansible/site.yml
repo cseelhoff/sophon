@@ -92,98 +92,112 @@
     - coreos
 
 - name: Deploy Portainer
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [portainer, infrastructure]
   roles:
     - portainer
 
 - name: Deploy CoreDNS
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [coredns, dns, infrastructure]
   roles:
     - coredns
 
 - name: Deploy Traefik
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [traefik, proxy, infrastructure]
   roles:
     - traefik
 
 - name: Deploy DNS Sync
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [dns_sync, dns, infrastructure]
   roles:
     - dns_sync
 
 - name: Deploy Homepage
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [homepage, dashboard]
   roles:
     - homepage
 
 - name: Deploy Gitea
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [gitea, git, development]
   roles:
     - gitea
 
 - name: Deploy Nexus
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [nexus, artifacts, development]
   roles:
     - nexus
 
 - name: Deploy OpenLDAP
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [openldap, ldap, identity]
   roles:
     - openldap
 
 - name: Deploy Keycloak
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [keycloak, sso, identity]
   roles:
     - keycloak
 
 - name: Deploy Nextcloud
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [nextcloud, files, collaboration]
   roles:
     - nextcloud
 
 - name: Deploy n8n
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [n8n, automation, workflow]
   roles:
     - n8n
 
 - name: Deploy Guacamole
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [guacamole, remote, access]
   roles:
     - guacamole
 
 - name: Deploy Backup
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [backup, infrastructure]
   roles:
     - backup
 
 - name: Deploy Kopia
-  hosts: coreos
+  hosts: localhost
+  connection: local
   gather_facts: false
   tags: [kopia, backup, infrastructure]
   roles:

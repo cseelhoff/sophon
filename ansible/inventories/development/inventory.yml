@@ -1,7 +1,7 @@
 ---
+# Simplified inventory - all execution happens on localhost
+# Commands are sent to the CoreOS VM via Proxmox qemu-guest-agent
 all:
   hosts:
-    coreos_ip:
-      ansible_host: "{{ coreos_ip }}"
-      ansible_user: "{{ coreos_username }}"
-      ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+    localhost:
+      ansible_connection: local

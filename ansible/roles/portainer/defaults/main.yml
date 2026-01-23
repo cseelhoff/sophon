@@ -4,3 +4,8 @@ portainer_enabled: true
 
 portainer_image_tag: "2.27.1"
 portainer_port: 9443
+
+# Container image settings
+portainer_image: "docker.io/portainer/portainer-ce"
+portainer_image_tar: "portainer-ce-{{ portainer_image_tag }}.tar"
+portainer_local_cache_dir: "/tmp/sophon_cache"

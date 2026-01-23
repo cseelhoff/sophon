@@ -4,56 +4,8 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Pre-flight: Validate required variables
-# -----------------------------------------------------------------------------
-- name: Capture controller IP for HTTP file server
-  ansible.builtin.set_fact:
-    coreos_controller_ip: "{{ ansible_default_ipv4.address | default(ansible_all_ipv4_addresses[0] | default('127.0.0.1')) }}"
-
-- name: Validate coreos_proxmox_api_host is defined
-  ansible.builtin.fail:
-    msg: |
-      ERROR: coreos_proxmox_api_host is required but not defined.
-
-      Quick Start Usage:
-        ansible-playbook -i localhost, ansible/site.yml \
-          -e coreos_proxmox_api_host=YOUR_PROXMOX_IP \
-          -e domain_name=homelab.local
-  when: coreos_proxmox_api_host is not defined or coreos_proxmox_api_host == ""
-
-# -----------------------------------------------------------------------------
-# SSH Key Setup
-# -----------------------------------------------------------------------------
-- name: Check if SSH key exists
-  ansible.builtin.stat:
-    path: "{{ coreos_ssh_private_key_path }}"
-  register: coreos_ssh_key_stat
-
-- name: Generate SSH key if missing
-  ansible.builtin.command:
-    cmd: "ssh-keygen -t rsa -b 4096 -f {{ coreos_ssh_private_key_path }} -N ''"
-  when: not coreos_ssh_key_stat.stat.exists
-
-- name: Read SSH public key
-  ansible.builtin.slurp:
-    src: "{{ coreos_ssh_public_key_path }}"
-  register: coreos_ssh_key
-
-# -----------------------------------------------------------------------------
 # Proxmox Authentication
 # -----------------------------------------------------------------------------
-- name: Check for Proxmox API password in environment
-  ansible.builtin.set_fact:
-    coreos_proxmox_api_password: "{{ lookup('env', 'PROXMOX_API_PASSWORD') }}"
-  when:
-    - coreos_proxmox_api_password is not defined or coreos_proxmox_api_password == ""
-    - lookup('env', 'PROXMOX_API_PASSWORD') != ""
-
-- name: Validate Proxmox API password is set
-  ansible.builtin.fail:
-    msg: "Proxmox API password not set. Run site.yml which prompts for it, or set PROXMOX_API_PASSWORD env var."
-  when: coreos_proxmox_api_password is not defined or coreos_proxmox_api_password == ""
-
 - name: Obtain Proxmox API ticket
   ansible.builtin.uri:
     url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/access/ticket"
@@ -209,57 +161,51 @@
       delay: 10
 
 # -----------------------------------------------------------------------------
-# Ignition Configuration
+# Ignition Configuration (via Butane)
 # -----------------------------------------------------------------------------
-# Create network config for NetworkManager (static IP)
-- name: Create static network config
+# Download qemu-guest-agent RPM and base64 encode it
+- name: Ensure local cache directory exists
+  ansible.builtin.file:
+    path: "{{ coreos_local_cache_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Download qemu-guest-agent RPM
+  ansible.builtin.get_url:
+    url: "{{ coreos_qemu_guest_agent_rpm_url }}"
+    dest: "{{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}"
+    mode: "0644"
+  register: coreos_qga_download
+
+- name: Base64 encode qemu-guest-agent RPM
+  ansible.builtin.shell:
+    cmd: "base64 -w0 {{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}"
+  register: coreos_qga_b64_result
+  changed_when: false
+
+- name: Set qemu-guest-agent base64 fact
   ansible.builtin.set_fact:
-    coreos_network_config: |
-      [connection]
-      id=Wired connection 1
-      type=ethernet
-      match-device=type:ethernet
+    coreos_qemu_guest_agent_rpm_b64: "{{ coreos_qga_b64_result.stdout }}"
 
-      [ipv4]
-      address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
-      method=manual
+# Generate Butane config from template
+- name: Generate Butane config
+  ansible.builtin.template:
+    src: coreos.bu.j2
+    dest: "{{ coreos_local_cache_dir }}/coreos.bu"
+    mode: "0644"
 
-# Step 2: Create ignition config as a dictionary
-- name: Create ignition config dict
+# Convert Butane to Ignition JSON
+- name: Convert Butane to Ignition
+  ansible.builtin.command:
+    cmd: "butane --strict {{ coreos_local_cache_dir }}/coreos.bu"
+  register: coreos_ignition_result
+  changed_when: false
+
+- name: Set ignition JSON fact
   ansible.builtin.set_fact:
-    coreos_ignition_dict:
-      ignition:
-        version: "3.4.0"
-      kernel_arguments:
-        should_exist:
-          - "console=tty0"
-          - "console=ttyS0,115200n8"
-      passwd:
-        users:
-          - name: "{{ coreos_username }}"
-            passwordHash: "{{ coreos_password_hash }}"
-            sshAuthorizedKeys:
-              - "{{ coreos_ssh_key['content'] | b64decode | trim }}"
-            groups:
-              - sudo
-              - docker
-      storage:
-        files:
-          - path: "/etc/hostname"
-            mode: 420
-            contents:
-              source: "data:,{{ coreos_vm_name }}"
-          - path: "/etc/NetworkManager/system-connections/wired.nmconnection"
-            mode: 384
-            contents:
-              source: "data:text/plain;charset=utf-8;base64,{{ coreos_network_config | b64encode }}"
+    coreos_ignition_json: "{{ coreos_ignition_result.stdout }}"
 
-# Step 3: Base64 encode the ignition config to avoid all escaping issues
-# Then wrap it in a minimal config that references it via data URI
-- name: Convert ignition to JSON and base64 encode
-  ansible.builtin.set_fact:
-    coreos_ignition_json: "{{ coreos_ignition_dict | to_json }}"
-
+# Base64 encode and wrap for fw_cfg escaping
 - name: Base64 encode the ignition config
   ansible.builtin.set_fact:
     coreos_ignition_b64: "{{ coreos_ignition_json | b64encode }}"
@@ -312,8 +258,6 @@
     onboot: true
     autostart: true
     agent: "enabled=1"
-    serial:
-      serial0: "socket"
     net:
       net0: "virtio,bridge=vmbr0"
     state: present
@@ -367,57 +311,19 @@
     state: started
 
 # -----------------------------------------------------------------------------
-# Post-Creation: Get VM IP and wait for SSH
+# Post-Creation: Get VM IP and wait for Serial
 # -----------------------------------------------------------------------------
-# Get the VM's MAC address from creation result or existing VM config
-- name: Get VM MAC address from creation result
-  ansible.builtin.set_fact:
-    coreos_vm_mac: "{{ coreos_vm_create.mac.net0 | lower }}"
-  when: coreos_vm_create.mac is defined
 
-- name: Get VM config if MAC not in creation result
-  ansible.builtin.uri:
-    url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ coreos_vm_create.vmid }}/config"
-    method: GET
-    headers:
-      Cookie: "PVEAuthCookie={{ coreos_pve_auth_cookie }}"
-    validate_certs: false
-  register: coreos_vm_config
-  when: coreos_vm_mac is not defined
-
-- name: Extract MAC from VM config
-  ansible.builtin.set_fact:
-    coreos_vm_mac: "{{ coreos_vm_config.json.data.net0 | regex_search('([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})') | lower }}"
-  when: coreos_vm_mac is not defined
-
-- name: Display VM MAC address
-  ansible.builtin.debug:
-    msg: "CoreOS VM MAC address: {{ coreos_vm_mac }}"
-
-- name: Display VM IP address
-  ansible.builtin.debug:
-    msg: "CoreOS VM IP address: {{ coreos_ip }}"
-
-- name: Wait for SSH to be available
-  ansible.builtin.wait_for:
-    host: "{{ coreos_ip }}"
-    port: 22
-    delay: 5
-    timeout: 300
-    state: started
-
-- name: Add CoreOS VM to inventory
-  ansible.builtin.add_host:
-    name: "{{ coreos_ip }}"
-    groups: coreos
-    ansible_user: "{{ coreos_username }}"
-    ansible_ssh_private_key_file: "{{ coreos_ssh_private_key_path }}"
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    ansible_python_interpreter: /usr/bin/python3
-    http_file_server_ip: "{{ coreos_controller_ip }}"
-
-- name: Save coreos_ip for subsequent plays
-  ansible.builtin.set_fact:
-    coreos_ip: "{{ coreos_ip }}"
-  delegate_to: localhost
-  delegate_facts: true
+- name: Run uptime on VM/container
+  proxmox_shell:
+    api_host: "{{ coreos_proxmox_api_host }}"
+    api_port: "{{ coreos_proxmox_api_port }}"
+    node: "{{ coreos_proxmox_node_name }}"
+    vmid: "{{ coreos_vm_create.vmid }}"
+    vmtype: "{{ coreos_vm_type }}"
+    vm_user: "{{ coreos_vm_user | default('root') }}"
+    vm_password: "{{ coreos_vm_password | default(omit) }}"
+    pve_auth_cookie: "{{ coreos_pve_auth_cookie }}"
+    pve_csrf_token: "{{ coreos_pve_csrf_token }}"
+    command: uptime
+  register: vm_result
