@@ -1,213 +1,327 @@
-# Sophon
+# Sophon Ansible Playbooks
 
-**Automated homelab infrastructure deployment using Ansible and IaC principles.**
-
-<img src="./sophon.drawio.svg">
-
-## Overview
-
-Sophon automates deploying a complete homelab infrastructure on Proxmox, including:
-- Fedora CoreOS VMs with Podman/Portainer
-- DNS (CoreDNS), reverse proxy (Traefik), SSL via Cloudflare
-- Identity management (OpenLDAP, Keycloak SSO)
-- Collaboration tools (Nextcloud, Gitea)
-- Remote access (Guacamole)
-- Artifact hosting (Sonatype Nexus)
-- Automation and dashboards (n8n, Homepage)
-- Backup solutions (docker-volume-backup, Kopia)
-
-This project follows an **air-gapped deployment** pattern: container images are pre-downloaded on an internet-connected bootstrap machine, then transferred to isolated infrastructure via HTTP file server.
-
-## Architecture
-
-| Layer | Components |
-|-------|------------|
-| **Network** | OPNSense firewall, VLANs (Users 10.0.3.x, Infra 10.0.1.x) |
-| **Compute** | Proxmox hypervisor, Fedora CoreOS VMs |
-| **Containers** | Podman + Portainer for container management |
-| **Services** | CoreDNS, Traefik, Nexus, OpenLDAP, Keycloak, Gitea, Nextcloud, n8n, Homepage, Guacamole |
-| **Backup** | docker-volume-backup (volumes), Kopia (filesystem) |
-| **External** | Cloudflare tunnels for remote access, OneDrive for backups |
-
-## Service Status
-
-| Service | Status | Port(s) | Description |
-|---------|--------|---------|-------------|
-| CoreOS VM | ✅ Ready | - | Fedora CoreOS on Proxmox |
-| Portainer | ✅ Ready | 9443 | Container management |
-| CoreDNS | ✅ Ready | 53 | DNS server |
-| Traefik | ✅ Ready | 80, 443, 8080 | Reverse proxy + SSL |
-| Homepage | ✅ Ready | 3000 | Admin dashboard |
-| Gitea | ✅ Ready | 3001, 222 | Git + CI/CD |
-| Nexus | ✅ Ready | 8081, 5000 | Artifact repository |
-| OpenLDAP | ✅ Ready | 389, 636, 8089 | Directory service |
-| Keycloak | ✅ Ready | 8180 | SSO/Identity |
-| Nextcloud | ✅ Ready | 8083 | File sync & share |
-| n8n | ✅ Ready | 5678 | Workflow automation |
-| Guacamole | ✅ Ready | 8090 | Remote desktop gateway |
-| Backup | ✅ Ready | - | Volume backups |
-| Kopia | ✅ Ready | 51515 | Filesystem backups |
-
-## Backup Strategy
-
-### Configuration Backups (text-based, git-versioned)
-Low-churn, auditable configs that benefit from line-by-line change tracking:
-- Ansible playbooks, docker-compose files
-- OPNSense/switch configs (XML/JSON export)
-- Traefik, Keycloak, n8n configs (YAML/JSON)
-- OpenLDAP schemas/groups (LDIF export)
-- Gitea repository mirrors
-
-### Operational Backups (binary, volume/dump)
-High-churn data where text conversion adds no value:
-- Nextcloud (DB dump + file rsync)
-- PostgreSQL databases (pg_dump)
-- Nexus artifacts (volume backup)
-- OpenLDAP user data (slapcat)
-- Gitea metadata DB
-
-### Backup Tools
-- **docker-volume-backup** (`backup` role): Scheduled volume backups with compression
-- **Kopia** (`kopia` role): Deduplicating filesystem backups with encryption
-- **rclone**: Sync to OneDrive with versioning
-- **Ansible/Gitea Actions**: Orchestration
-
-### Storage Targets
-1. Local NAS (primary, fast restore)
-2. OneDrive (offsite, versioned)
-
-## CI/CD Approach
-
-**Gitea Actions** for git-triggered IaC deployments:
-- Merge to main → Ansible playbook executes automatically
-- `--check --diff` dry-run on pull requests
-- Secrets stored in Gitea (encrypted)
-- Container images built and exported for air-gapped deployment
-
-See `.gitea/workflows/` for CI configuration.
-
-## Prerequisites
-
-- **Bootstrap machine** (Linux with internet access)
-  - Ansible 2.15+ installed
-  - Podman for downloading container images
-- **Proxmox hypervisor**
-  - API access configured
-  - Storage for VMs
+Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podman.
 
 ## Quick Start
 
+Deploy a complete homelab in one command:
+
 ```bash
-# Enter development shell (if using Nix)
-nix develop
+cd ansible && ansible-playbook -i localhost site.yml
+```
 
-# Install Ansible dependencies
-cd ansible/
-ansible-galaxy install -r requirements.yml
+That's it! You'll be prompted for:
+1. **Proxmox API host** (e.g., `192.168.1.100` or `pve.example.com`)
+2. **Domain name** (e.g., `homelab.local`)
+3. **Proxmox password** (hidden input)
 
-# Deploy everything (prompts for Proxmox host, domain, and password)
-ansible-playbook -i inventories/development/inventory.yml site.yml
+The playbook will then:
+1. Prompt for your Proxmox password (API authentication)
+2. Use your existing `~/.ssh/id_rsa` key (or generate one)
+3. Download Fedora CoreOS to Proxmox storage
+4. Create and boot a CoreOS VM with DHCP networking
+5. Deploy Portainer, Traefik, CoreDNS, and all enabled services
 
-# Or provide parameters explicitly (for scripting/CI)
+### Air-Gapped Proxmox
+
+If your Proxmox server can't reach the internet, the playbook will fail gracefully with SSH/console commands you can run manually to transfer the CoreOS image.
+
+### Scripting / CI (Skip Prompts)
+
+For non-interactive use, provide values via `-e` flags:
+
+```bash
 ansible-playbook -i inventories/development/inventory.yml site.yml \
-  -e coreos_proxmox_api_host=192.168.1.100 \
+  -e coreos_proxmox_api_host=pve.example.com \
   -e domain_name=homelab.local \
-  -e vault_proxmox_api_password=secret
-
-# Deploy specific services
-ansible-playbook -i inventories/development/inventory.yml site.yml --tags "traefik,homepage"
-
-# Production deployment with vault
-ansible-playbook -i inventories/production/inventory.yml site.yml --ask-vault-pass
+  -e coreos_proxmox_api_password=secret
 ```
 
-**Note:** Service passwords (Portainer, Keycloak, etc.) are auto-generated and displayed at playbook completion. Save them securely!
+### Common Options
+
+## Prerequisites
+
+- Python 3.10+
+- Ansible 2.15+
+- Access to Proxmox API
+
+## Directory Structure
+
+```
+ansible/
+├── ansible.cfg           # Ansible configuration
+├── requirements.yml      # Galaxy dependencies
+├── site.yml             # Master playbook
+├── inventories/
+│   ├── development/     # Dev environment
+│   │   ├── inventory.yml
+│   │   └── group_vars/
+│   │       └── all.yml
+│   └── production/      # Prod environment
+│       ├── inventory
+│       └── group_vars/
+│           ├── all.yml
+│           └── vault.yml.example
+├── roles/               # Service roles
+│   ├── coreos/          # Base VM provisioning
+│   ├── portainer/       # Container management
+│   ├── portainer_stack/ # Stack deployment API
+│   ├── traefik/         # Reverse proxy
+│   ├── coredns/         # DNS server
+│   ├── homepage/        # Dashboard
+│   ├── gitea/           # Git server
+│   ├── nexus/           # Artifact repository
+│   ├── openldap/        # Directory service
+│   ├── keycloak/        # Identity/SSO
+│   ├── nextcloud/       # File sync
+│   ├── n8n/             # Workflow automation
+│   ├── guacamole/       # Remote desktop gateway
+│   ├── backup/          # Volume backups
+│   └── kopia/           # Filesystem backups
+└── tests/
+    ├── molecule/        # Test configurations
+    ├── inventories/     # Test inventories
+    ├── test.yml         # Test variables
+    ├── test.sh          # Molecule test runner
+    └── test-vagrant.sh  # Vagrant integration test
+```
+
+## Secrets Management with Ansible Vault
+
+### Initial Setup
+
+```bash
+# Create vault password file (do NOT commit this)
+echo "your-vault-password" > ~/.vault_pass
+chmod 600 ~/.vault_pass
+
+# Copy vault template
+cp inventories/production/group_vars/vault.yml.example inventories/production/group_vars/vault.yml
+
+# Encrypt the vault
+ansible-vault encrypt inventories/production/group_vars/vault.yml
+```
+
+### Editing Secrets
+
+```bash
+# Edit encrypted vault
+ansible-vault edit inventories/production/group_vars/vault.yml
+
+# View encrypted vault
+ansible-vault view inventories/production/group_vars/vault.yml
+
+# Re-encrypt with new password
+ansible-vault rekey inventories/production/group_vars/vault.yml
+```
+
+### Running Playbooks with Vault
+
+```bash
+# Interactive password prompt
 ansible-playbook -i inventories/production/inventory site.yml --ask-vault-pass
+
+# Using password file
+ansible-playbook -i inventories/production/inventory site.yml --vault-password-file ~/.vault_pass
+
+# Environment variable
+export ANSIBLE_VAULT_PASSWORD_FILE=~/.vault_pass
+ansible-playbook -i inventories/production/inventory site.yml
 ```
 
-## Project Structure
+## SSO Integration (Keycloak)
 
-```
-sophon/
-├── flake.nix                    # Nix development environment
-├── .gitea/workflows/            # Gitea Actions CI/CD
-│   ├── ansible-lint.yml         # Linting workflow
-│   └── build-images.yml         # Container image builds
-├── ansible/
-│   ├── site.yml                 # Master playbook
-│   ├── ansible.cfg              # Ansible configuration
-│   ├── requirements.yml         # Galaxy dependencies
-│   ├── .ansible-lint            # Linting rules
-│   ├── .yamllint                # YAML linting
-│   ├── inventories/
-│   │   ├── development/         # Dev environment
-│   │   │   └── group_vars/all.yml
-│   │   └── production/          # Prod environment
-│   │       └── group_vars/
-│   │           ├── all.yml
-│   │           └── vault.yml.example
-│   ├── roles/
-│   │   ├── coreos/              # Provision VM on Proxmox
-│   │   ├── portainer/           # Container management
-│   │   ├── portainer_stack/     # Stack deployment API
-│   │   ├── coredns/             # DNS server
-│   │   ├── traefik/             # Reverse proxy + SSL
-│   │   ├── homepage/            # Dashboard
-│   │   ├── gitea/               # Git server + Actions
-│   │   ├── nexus/               # Artifact repository
-│   │   ├── openldap/            # Directory service
-│   │   ├── keycloak/            # SSO/Identity
-│   │   ├── nextcloud/           # File sync
-│   │   ├── n8n/                 # Workflow automation
-│   │   ├── guacamole/           # Remote desktop
-│   │   ├── backup/              # Volume backups
-│   │   └── kopia/               # Filesystem backups
-│   └── tests/
-│       ├── molecule/            # Test configurations
-│       └── test.sh              # Molecule test runner
-├── old_bash_version/            # Legacy bash implementation (reference)
-└── ansible-nas/                 # Reference project for patterns
-```
+Keycloak provides single sign-on for all services. To enable:
 
-## SSO Integration
+1. Set `keycloak_enabled: true` in inventory
+2. Configure OIDC for each service:
 
-Keycloak provides centralized authentication for all services:
-- Gitea (OIDC)
-- Nextcloud (OIDC)
-- Guacamole (OIDC)
-- n8n (OIDC)
-- Portainer (OIDC)
-
-Enable SSO in `group_vars/all.yml`:
 ```yaml
+# group_vars/all.yml or vault.yml
 gitea_oauth_enabled: true
+gitea_oauth_client_secret: "{{ vault_keycloak_gitea_client_secret }}"
+
 nextcloud_oidc_enabled: true
+nextcloud_oidc_client_secret: "{{ vault_keycloak_nextcloud_client_secret }}"
+
 guacamole_oidc_enabled: true
 n8n_oidc_enabled: true
 ```
 
-## Testing
-
+3. Generate client secrets:
 ```bash
-# Molecule tests (per-role)
-cd ansible && ./tests/test.sh
-
-# Integration test on dev CoreOS
-ansible-playbook -i inventories/development/inventory.yml site.yml
-ssh admin@<coreos-ip> "podman ps"
+openssl rand -hex 32
 ```
 
-## Documentation
+4. The realm is auto-provisioned via `realm-export.json.j2`
 
-- [Ansible README](ansible/README.md) - Detailed Ansible documentation
-- [Vault Guide](ansible/README.md#secrets-management-with-ansible-vault) - Secrets management
-- [SSO Setup](ansible/README.md#sso-integration-keycloak) - Keycloak configuration
+## Role Enable/Disable
 
-## Reference Projects
-- [ansible-nas](https://github.com/davestephens/ansible-nas): Role organization patterns
-- [notthebee/infra](https://github.com/notthebee/infra): Homelab automation
-- [TechnoTim/k3s-ansible](https://github.com/techno-tim/k3s-ansible): Kubernetes deployment
+Each role can be enabled/disabled via inventory variables:
 
-## Inspiration
-- [Jim's Garage](https://www.youtube.com/@yourlounge) (YouTube)
-- [TechnoTim](https://www.youtube.com/@TechnoTim) (YouTube)
+```yaml
+# group_vars/all.yml
+traefik_enabled: true
+nextcloud_enabled: false
+n8n_enabled: true
+guacamole_enabled: true
+backup_enabled: true
+kopia_enabled: true
+```
+
+## Deployment Order
+
+The `site.yml` playbook deploys services in dependency order:
+
+1. **coreos** - Provision base VM
+2. **portainer** - Container management
+3. **coredns** - DNS server
+4. **traefik** - Reverse proxy
+5. **homepage** - Dashboard
+6. **gitea** - Git server
+7. **nexus** - Artifacts
+8. **openldap** - Directory
+9. **keycloak** - SSO (depends on openldap if LDAP enabled)
+10. **nextcloud** - Files
+11. **n8n** - Automation
+12. **guacamole** - Remote desktop
+13. **backup** - Volume backups
+14. **kopia** - Filesystem backups
+
+## Podman Compatibility
+
+All roles are designed for Fedora CoreOS with Podman:
+
+- Uses `podman` commands instead of Docker
+- Compose files deployed via Portainer API
+- Container images pulled directly from registries
+- Optional air-gapped mode for offline deployments
+- Systemd socket activation for rootless containers
+
+## Air-Gapped Deployment
+
+By default, the playbook pulls container images directly from registries. For fully air-gapped environments:
+
+```bash
+ansible-playbook -i localhost, ansible/site.yml \
+  -e proxmox_api_host=pve.example.com \
+  -e domain_name=homelab.local \
+  -e airgapped_mode=true
+```
+
+This starts a local HTTP file server and pre-loads images from tarball files. To prepare images:
+
+1. Build images on a connected machine (or use Gitea Actions CI):
+   ```bash
+   docker pull traefik:v3.2
+   docker save -o traefik.tar traefik:v3.2
+   ```
+
+2. Place tarball files in the HTTP file server directory
+
+3. Ansible serves and loads images via:
+   ```bash
+   curl -o image.tar http://fileserver:8000/image.tar
+   podman load -i image.tar
+   ```
+
+## Testing
+
+### Molecule (Role Testing)
+
+```bash
+# Install test dependencies
+pip install molecule molecule-docker ansible-lint yamllint
+
+# Run all molecule tests
+./tests/test.sh
+
+# Test a specific role
+cd roles/traefik
+molecule -c ../../tests/molecule/base.yml test
+```
+
+### Integration Testing (Dev CoreOS VM)
+
+For full integration testing, deploy to a development CoreOS VM:
+
+```bash
+# Deploy to dev environment
+ansible-playbook -i inventories/development/inventory.yml site.yml
+
+# Verify services
+ssh admin@<coreos-ip> "podman ps"
+curl -k https://<coreos-ip>:9443/api/status  # Portainer
+curl http://<coreos-ip>:3000                  # Homepage
+```
+
+## Linting
+
+```bash
+# YAML lint
+yamllint -c .yamllint .
+
+# Ansible lint
+ansible-lint -c .ansible-lint
+
+# Pre-commit (if configured)
+pre-commit run --all-files
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**SSH Connection Refused**
+```bash
+# Check SSH key permissions
+chmod 600 ~/.ssh/sophon_prod
+ssh -i ~/.ssh/sophon_prod admin@10.0.0.100
+```
+
+**Portainer API Errors**
+```bash
+# Verify Portainer is running
+curl -k https://10.0.0.100:9443/api/status
+```
+
+**Image Load Failures**
+```bash
+# Verify HTTP file server
+curl http://localhost:8000/traefik.tar -o /dev/null -w "%{http_code}"
+```
+
+**Stack Deployment Failures**
+```bash
+# Check Portainer logs on CoreOS
+ssh admin@10.0.0.100 "podman logs portainer"
+```
+
+### Logs
+
+```bash
+# View container logs on CoreOS
+ssh admin@coreos-ip "podman logs <container-name>"
+
+# View systemd journal
+ssh admin@coreos-ip "journalctl -u podman"
+```
+
+## Configuration Reference
+
+See [inventories/development/group_vars/all.yml](inventories/development/group_vars/all.yml) for all available variables.
+
+Key settings:
+- `domain_name` - Base domain for all services
+- `coreos_ip` - Target CoreOS VM IP
+- `portainer_port` - Portainer API port (default: 9443)
+- `http_file_server_port` - Image distribution server port (default: 8000)
+- `validate_certs` - TLS certificate validation (default: false for dev)
+
+## Contributing
+
+1. Create a feature branch
+2. Add/modify roles following ansible-nas patterns
+3. Include molecule tests for new roles
+4. Run linting before submitting PR
+5. Update documentation as needed

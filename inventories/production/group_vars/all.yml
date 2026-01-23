@@ -18,10 +18,10 @@
 # -----------------------------------------------------------------------------
 # Proxmox Configuration
 # -----------------------------------------------------------------------------
-proxmox_api_host: "10.0.0.10"
-proxmox_api_user: "root@pam"
-# proxmox_api_password: "{{ vault_proxmox_api_password }}"
-proxmox_node_name: "proxmox"
+proxmox_host: "10.0.0.10"
+proxmox_user: "root@pam"
+# proxmox_password: "{{ vault_proxmox_password }}"
+proxmox_node: "proxmox"
 
 # -----------------------------------------------------------------------------
 # CoreOS VM Configuration

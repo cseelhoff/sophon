@@ -31,7 +31,7 @@
 
     - name: Transfer image to VM via qemu-guest-agent
       ansible.builtin.uri:
-        url: "https://{{ coreos_proxmox_api_host }}:{{ coreos_proxmox_api_port }}/api2/json/nodes/{{ coreos_proxmox_node_name }}/qemu/{{ hostvars['localhost']['coreos_vm_create']['vmid'] }}/agent/file-write"
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ hostvars['localhost']['coreos_vm_create']['vmid'] }}/agent/file-write"
         method: POST
         headers:
           Cookie: "PVEAuthCookie={{ hostvars['localhost']['coreos_pve_auth_cookie'] }}"

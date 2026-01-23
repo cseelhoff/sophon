@@ -8,9 +8,9 @@
 #
 # With explicit parameters (for scripting/CI):
 #   ansible-playbook -i inventories/development/inventory.yml site.yml \
-#     -e coreos_proxmox_api_host=pve.example.com \
+#     -e proxmox_host=pve.example.com \
 #     -e domain_name=homelab.local \
-#     -e coreos_proxmox_api_password=secret
+#     -e proxmox_password=secret
 #
 # Deploy specific services:
 #   ansible-playbook -i inventories/development/inventory.yml site.yml --tags "traefik,homepage"
@@ -23,9 +23,9 @@
   tasks:
     - name: Load from environment or CLI
       ansible.builtin.set_fact:
-        coreos_proxmox_api_host: "{{ coreos_proxmox_api_host | default(lookup('env', 'PROXMOX_HOST')) | default('', true) }}"
+        proxmox_host: "{{ proxmox_host | default(lookup('env', 'PROXMOX_HOST')) | default('', true) }}"
         domain_name: "{{ domain_name | default(lookup('env', 'DOMAIN_NAME')) | default('', true) }}"
-        coreos_proxmox_api_password: "{{ coreos_proxmox_api_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
+        proxmox_password: "{{ proxmox_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
         coreos_ip: "{{ coreos_ip | default(lookup('env', 'COREOS_IP')) | default('', true) }}"
         coreos_cidr: "{{ coreos_cidr | default(lookup('env', 'COREOS_CIDR')) | default('24', true) }}"
         coreos_gateway: "{{ coreos_gateway | default(lookup('env', 'COREOS_GATEWAY')) | default('', true) }}"
@@ -34,7 +34,7 @@
       ansible.builtin.pause:
         prompt: "Proxmox API host"
       register: _ph
-      when: coreos_proxmox_api_host == ""
+      when: proxmox_host == ""
 
     - name: Prompt for missing domain
       ansible.builtin.pause:
@@ -47,7 +47,7 @@
         prompt: "Proxmox password"
         echo: false
       register: _pp
-      when: coreos_proxmox_api_password == ""
+      when: proxmox_password == ""
 
     - name: Prompt for missing CoreOS IP
       ansible.builtin.pause:
@@ -63,25 +63,11 @@
 
     - name: Set prompted values
       ansible.builtin.set_fact:
-        coreos_proxmox_api_host: "{{ _ph.user_input | default(coreos_proxmox_api_host, true) }}"
+        proxmox_host: "{{ _ph.user_input | default(proxmox_host, true) }}"
         domain_name: "{{ _dn.user_input | default(domain_name, true) }}"
-        coreos_proxmox_api_password: "{{ _pp.user_input | default(coreos_proxmox_api_password, true) }}"
+        proxmox_password: "{{ _pp.user_input | default(proxmox_password, true) }}"
         coreos_ip: "{{ _ip.user_input | default(coreos_ip, true) }}"
         coreos_gateway: "{{ _gw.user_input | default(coreos_gateway, true) }}"
-
-    - name: Validate required variables
-      ansible.builtin.assert:
-        that:
-          - coreos_proxmox_api_host is defined and coreos_proxmox_api_host | length > 0
-          - domain_name is defined and domain_name | length > 0
-          - coreos_proxmox_api_password is defined and coreos_proxmox_api_password | length > 0
-          - coreos_ip is defined and coreos_ip | length > 0
-          - coreos_gateway is defined and coreos_gateway | length > 0
-        fail_msg: |
-          Missing required variables. Provide via:
-          - Interactive prompt (run playbook without -e flags)
-          - Command line: -e coreos_proxmox_api_host=... -e coreos_ip=... -e coreos_gateway=...
-          - Inventory group_vars/all.yml or vault.yml
 
 - name: Deploy CoreOS VM
   hosts: localhost

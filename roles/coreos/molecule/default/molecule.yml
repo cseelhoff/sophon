@@ -10,9 +10,9 @@ provisioner:
     group_vars:
       all:
         # Proxmox connection (mocked for testing)
-        coreos_proxmox_api_host: "192.168.1.100"
-        coreos_proxmox_api_user: "root@pam"
-        coreos_proxmox_node_name: "pve"
+        proxmox_host: "192.168.1.100"
+        proxmox_user: "root@pam"
+        proxmox_node: "pve"
 
         # VM configuration
         coreos_vm_name: "test-coreos"
@@ -35,7 +35,7 @@ provisioner:
         coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/latest/x86_64/"
         coreos_qcow2_xz_filename: "fedora-coreos-qemu.x86_64.qcow2.xz"
         coreos_qcow2_img_filename: "fedora-coreos-qemu.x86_64.qcow2"
-        coreos_proxmox_storage: "local"
+        proxmox_storage: "local"
 
 scenario:
   test_sequence:

@@ -29,30 +29,34 @@ storage:
           address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
           method=manual
 
-{% if coreos_qemu_guest_agent_rpm_b64 is defined %}
-    - path: /var/tmp/qemu-guest-agent.rpm
-      mode: 0644
+    - path: /usr/local/bin/install-qga.sh
+      mode: 0755
       contents:
-        source: data:application/octet-stream;base64,{{ coreos_qemu_guest_agent_rpm_b64 }}
+        inline: |
+          #!/bin/bash
+          set -e
+          mkdir -p /mnt/rpms
+          # Try common CDROM devices
+          mount /dev/sr1 /mnt/rpms 2>/dev/null || mount /dev/sr0 /mnt/rpms
+          rpm-ostree install --apply-live --allow-inactive --assumeyes --cache-only /mnt/rpms/*.rpm
+          umount /mnt/rpms
+          touch /var/lib/qga-installed.stamp
+          systemctl enable --now qemu-guest-agent.service
 
 systemd:
   units:
-    - name: install-qemu-guest-agent.service
+    - name: install-qga-from-iso.service
       enabled: true
       contents: |
         [Unit]
-        Description=Install qemu-guest-agent from embedded RPM
-        After=local-fs.target
-        Before=qemu-guest-agent.service
-        ConditionPathExists=!/var/lib/.qga-installed
+        Description=Install qemu-guest-agent from attached ISO
+        After=dev-sr1.device dev-sr0.device local-fs.target
+        ConditionPathExists=!/var/lib/qga-installed.stamp
 
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart=/usr/bin/rpm-ostree install --apply-live --allow-inactive --assumeyes /var/tmp/qemu-guest-agent.rpm
-        ExecStartPost=/usr/bin/touch /var/lib/.qga-installed
-        ExecStartPost=/usr/bin/systemctl enable --now qemu-guest-agent.service
+        ExecStart=/usr/local/bin/install-qga.sh
 
         [Install]
         WantedBy=multi-user.target
-{% endif %}

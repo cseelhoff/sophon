@@ -28,6 +28,7 @@
             apacheHttpd
             podman
             butane    # Convert Butane YAML to Ignition JSON
+            cdrkit    # genisoimage for creating ISOs
           ];
 
           shellHook = ''

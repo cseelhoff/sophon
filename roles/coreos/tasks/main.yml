@@ -1,0 +1,366 @@
+---
+# =============================================================================
+# CoreOS VM Deployment on Proxmox
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Proxmox Authentication
+# -----------------------------------------------------------------------------
+- name: Obtain Proxmox API ticket
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/access/ticket"
+    method: POST
+    body:
+      username: "{{ proxmox_user }}"
+      password: "{{ proxmox_password }}"
+    body_format: form-urlencoded
+    validate_certs: false
+  register: pve_ticket
+
+- name: Set authentication facts
+  ansible.builtin.set_fact:
+    pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
+    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+
+# -----------------------------------------------------------------------------
+# VM Existence Check (skip image/ignition prep if VM already exists)
+# -----------------------------------------------------------------------------
+- name: Check if VM with same name already exists
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+    validate_certs: false
+  register: existing_vms
+
+- name: Set existing VM fact
+  ansible.builtin.set_fact:
+    existing_vm: "{{ existing_vms.json.data | selectattr('name', 'eq', coreos_vm_name) | list | first | default(none) }}"
+
+- name: Display existing VM info and skip preparation
+  ansible.builtin.debug:
+    msg: "Found existing VM '{{ coreos_vm_name }}' with VMID {{ existing_vm.vmid }} - skipping image download and ignition prep"
+  when: existing_vm is not none
+
+# -----------------------------------------------------------------------------
+# CoreOS Image and Ignition Preparation (only if VM doesn't exist)
+# -----------------------------------------------------------------------------
+- name: Prepare CoreOS image and ignition config
+  when: existing_vm is none
+  block:
+    # -------------------------------------------------------------------------
+    # CoreOS Image: Check if exists on Proxmox via API
+    # -------------------------------------------------------------------------
+    - name: Check if CoreOS image already exists in Proxmox storage
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+        validate_certs: false
+      register: storage_content
+
+    - name: Set image exists fact
+      ansible.builtin.set_fact:
+        coreos_image_exists: "{{ storage_content.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0 }}"
+
+    # -------------------------------------------------------------------------
+    # CoreOS Image: Download and Prepare
+    # -------------------------------------------------------------------------
+    - name: Download and prepare CoreOS image
+      when: not coreos_image_exists
+      block:
+        - name: Attempt to download CoreOS image directly on Proxmox
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ pve_auth_cookie }}"
+            pve_csrf_token: "{{ pve_csrf_token }}"
+            timeout: 600
+            command: >-
+              cd {{ coreos_image_storage_path }} &&
+              curl -fLO {{ coreos_qcow2_url }} &&
+              xz -d {{ coreos_qcow2_xz_filename }} &&
+              ln -f {{ coreos_qcow2_img_filename }} {{ coreos_qcow2_iso_filename }} &&
+              echo "SUCCESS"
+          register: proxmox_download
+          failed_when: false
+
+        - name: Set Proxmox download success fact
+          ansible.builtin.set_fact:
+            proxmox_download_success: "{{ 'SUCCESS' in (proxmox_download.stdout | default('')) }}"
+
+        - name: Fallback to local download and upload
+          when: not proxmox_download_success
+          block:
+            - name: Ensure local download directory exists
+              ansible.builtin.file:
+                path: "{{ coreos_local_download_dir }}"
+                state: directory
+                mode: "0755"
+
+            - name: Check if local CoreOS ISO image exists
+              ansible.builtin.stat:
+                path: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_iso_filename }}"
+              register: local_iso_stat
+
+            - name: Download and prepare CoreOS image locally
+              when: not local_iso_stat.stat.exists
+              block:
+                - name: Check if compressed image already exists locally
+                  ansible.builtin.stat:
+                    path: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_xz_filename }}"
+                  register: local_xz_stat
+
+                - name: Download CoreOS compressed image
+                  ansible.builtin.get_url:
+                    url: "{{ coreos_qcow2_url }}"
+                    dest: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_xz_filename }}"
+                    mode: "0644"
+                  when: not local_xz_stat.stat.exists
+
+                - name: Check if uncompressed qcow2 already exists
+                  ansible.builtin.stat:
+                    path: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_img_filename }}"
+                  register: local_qcow2_stat
+
+                - name: Extract CoreOS image
+                  ansible.builtin.command:
+                    cmd: "xz -dk {{ coreos_local_download_dir }}/{{ coreos_qcow2_xz_filename }}"
+                  when: not local_qcow2_stat.stat.exists
+
+                - name: Rename qcow2 to iso extension for Proxmox visibility
+                  ansible.builtin.copy:
+                    src: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_img_filename }}"
+                    dest: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_iso_filename }}"
+                    remote_src: true
+                    mode: "0644"
+
+            - name: Upload CoreOS image to Proxmox via curl
+              ansible.builtin.command:
+                cmd: >-
+                  curl -k -s
+                  -H "Cookie: PVEAuthCookie={{ pve_auth_cookie }}"
+                  -H "CSRFPreventionToken: {{ pve_csrf_token }}"
+                  -F "content=iso"
+                  -F "filename=@{{ coreos_local_download_dir }}/{{ coreos_qcow2_iso_filename }};type=application/octet-stream;filename={{ coreos_qcow2_iso_filename }}"
+                  "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/upload"
+              register: upload_result
+              changed_when: "'UPID' in upload_result.stdout"
+              failed_when: "'UPID' not in upload_result.stdout"
+
+            - name: Wait for upload to complete
+              ansible.builtin.uri:
+                url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
+                method: GET
+                headers:
+                  Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+                validate_certs: false
+              register: upload_check
+              until: upload_check.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0
+              retries: 60
+              delay: 10
+
+            - name: Create hardlink from qcow2.iso to qcow2 on Proxmox
+              proxmox_shell:
+                api_host: "{{ proxmox_host }}"
+                api_port: "{{ proxmox_port }}"
+                api_user: "{{ proxmox_user }}"
+                node: "{{ proxmox_node }}"
+                pve_auth_cookie: "{{ pve_auth_cookie }}"
+                pve_csrf_token: "{{ pve_csrf_token }}"
+                timeout: 30
+                command: >-
+                  cd {{ coreos_image_storage_path }} &&
+                  ln -f {{ coreos_qcow2_iso_filename }} {{ coreos_qcow2_img_filename }} &&
+                  echo "SUCCESS"
+              register: hardlink_result
+              failed_when: "'SUCCESS' not in (hardlink_result.stdout | default(''))"
+
+    # -------------------------------------------------------------------------
+    # QEMU Guest Agent ISO: Create and upload
+    # -------------------------------------------------------------------------
+    - name: Check if QGA ISO already exists in Proxmox storage
+      ansible.builtin.set_fact:
+        qga_iso_exists: "{{ storage_content.json.data | selectattr('volid', 'search', coreos_qga_iso_filename) | list | length > 0 }}"
+
+    - name: Create and upload QGA ISO
+      when: not qga_iso_exists
+      block:
+        - name: Ensure local cache directory exists
+          ansible.builtin.file:
+            path: "{{ coreos_local_cache_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Download qemu-guest-agent RPM
+          ansible.builtin.get_url:
+            url: "{{ coreos_qemu_guest_agent_rpm_url }}"
+            dest: "{{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}"
+            mode: "0644"
+
+        - name: Download liburing dependency RPM
+          ansible.builtin.get_url:
+            url: "{{ coreos_liburing_rpm_url }}"
+            dest: "{{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}"
+            mode: "0644"
+
+        - name: Create ISO containing the RPMs
+          ansible.builtin.command:
+            cmd: >-
+              genisoimage -o {{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}
+              -V QGA_RPM -R -J {{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}
+              {{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}
+            creates: "{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}"
+
+        - name: Verify QGA ISO exists
+          ansible.builtin.stat:
+            path: "{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}"
+          register: qga_iso_stat
+
+        - name: Upload QGA ISO to Proxmox via curl
+          ansible.builtin.command:
+            cmd: >-
+              curl -k -s
+              -H "Cookie: PVEAuthCookie={{ pve_auth_cookie }}"
+              -H "CSRFPreventionToken: {{ pve_csrf_token }}"
+              -F "content=iso"
+              -F "filename=@{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }};type=application/octet-stream;filename={{ coreos_qga_iso_filename }}"
+              "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/upload"
+          register: qga_upload_result
+          changed_when: "'UPID' in qga_upload_result.stdout"
+          failed_when: "'UPID' not in qga_upload_result.stdout"
+
+        - name: Wait for QGA ISO upload to complete
+          ansible.builtin.uri:
+            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
+            method: GET
+            headers:
+              Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+            validate_certs: false
+          register: qga_upload_check
+          until: qga_upload_check.json.data | selectattr('volid', 'search', coreos_qga_iso_filename) | list | length > 0
+          retries: 30
+          delay: 5
+
+    # -------------------------------------------------------------------------
+    # Ignition Configuration (via Butane) - lightweight, no embedded RPM
+    # -------------------------------------------------------------------------
+    - name: Ensure local cache directory exists
+      ansible.builtin.file:
+        path: "{{ coreos_local_cache_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate Butane config
+      ansible.builtin.template:
+        src: coreos.bu.j2
+        dest: "{{ coreos_local_cache_dir }}/coreos.bu"
+        mode: "0644"
+
+    - name: Convert Butane to Ignition
+      ansible.builtin.command:
+        cmd: "butane --strict {{ coreos_local_cache_dir }}/coreos.bu"
+      register: ignition_result
+      changed_when: false
+
+    - name: Set ignition JSON fact
+      ansible.builtin.set_fact:
+        ignition_json: "{{ ignition_result.stdout }}"
+
+    - name: Base64 encode the ignition config
+      ansible.builtin.set_fact:
+        ignition_b64: "{{ ignition_json | b64encode }}"
+
+    - name: Create wrapper ignition config that merges the base64 config
+      ansible.builtin.set_fact:
+        wrapper_config:
+          ignition:
+            version: "3.4.0"
+            config:
+              merge:
+                - source: "data:;base64,{{ ignition_b64 }}"
+
+    - name: Convert wrapper to compact JSON (no spaces)
+      ansible.builtin.set_fact:
+        wrapper_json: "{{ wrapper_config | to_json | regex_replace(': ', ':') | regex_replace(', ', ',') }}"
+
+    - name: Escape quotes in wrapper JSON
+      ansible.builtin.set_fact:
+        wrapper_quoted: "{{ wrapper_json | regex_replace('\"', '\\\\\"') }}"
+
+    - name: Double commas inside the JSON value only
+      ansible.builtin.set_fact:
+        json_escaped: "{{ wrapper_quoted | regex_replace(',', ',,') }}"
+
+    - name: Build args string (single comma for fw_cfg separator, doubled commas in JSON)
+      ansible.builtin.set_fact:
+        args_escaped: "-fw_cfg name=opt/com.coreos/config,string={{ json_escaped }}"
+
+    # -------------------------------------------------------------------------
+    # VM Creation with QGA ISO attached as CD-ROM
+    # -------------------------------------------------------------------------
+    - name: Create CoreOS VM on Proxmox
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        node: "{{ proxmox_node }}"
+        name: "{{ coreos_vm_name }}"
+        cores: "{{ coreos_cores }}"
+        memory: "{{ coreos_memory }}"
+        ostype: "l26"
+        onboot: true
+        autostart: true
+        agent: "enabled=1"
+        net:
+          net0: "virtio,bridge=vmbr0"
+        state: present
+        timeout: 600
+        virtio:
+          virtio0: "{{ proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
+        ide:
+          ide2: "{{ coreos_image_storage }}:iso/{{ coreos_qga_iso_filename }},media=cdrom"
+        boot: "order=virtio0"
+        args: "{{ args_escaped }}"
+      register: vm_create
+
+# -----------------------------------------------------------------------------
+# Post-Creation: Start and Verify VM
+# -----------------------------------------------------------------------------
+- name: Set VM ID fact
+  ansible.builtin.set_fact:
+    coreos_vmid: "{{ existing_vm.vmid if existing_vm is not none else vm_create.vmid }}"
+
+- name: Start CoreOS VM
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_host }}"
+    api_port: "{{ proxmox_port }}"
+    api_user: "{{ proxmox_user }}"
+    api_password: "{{ proxmox_password }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ coreos_vmid }}"
+    state: started
+
+- name: Wait for VM to boot and qemu-guest-agent to respond
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ coreos_vmid }}/agent/ping"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ pve_auth_cookie }}"
+      CSRFPreventionToken: "{{ pve_csrf_token }}"
+    validate_certs: false
+    status_code: [200, 500]
+  register: agent_ping
+  until: agent_ping.status == 200
+  retries: 60
+  delay: 10
+  failed_when: false
+
+- name: Display VM status
+  ansible.builtin.debug:
+    msg: "{{ 'QEMU Guest Agent responding on VM ' + coreos_vmid | string if agent_ping.status == 200 else 'QEMU Guest Agent not yet available (VM may still be installing it)' }}"

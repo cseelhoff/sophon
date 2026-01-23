@@ -15,7 +15,7 @@ Provisions a Fedora CoreOS VM on Proxmox with Ignition configuration.
 | `coreos_enabled` | `true` | Enable/disable this role |
 | `coreos_proxmox_api_host` | - | Proxmox API hostname/IP |
 | `coreos_proxmox_api_user` | `root@pam` | Proxmox API user |
-| `coreos_proxmox_node_name` | `proxmox` | Proxmox node name |
+| `coreos_proxmox_node_name` | `pve` | Proxmox node name |
 | `coreos_proxmox_storage` | `local-lvm` | Proxmox storage pool |
 | `coreos_vm_name` | `coreos` | VM name in Proxmox |
 | `coreos_ip` | - | Static IP for the VM |

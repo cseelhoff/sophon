@@ -4,11 +4,17 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Ansible Configuration
+# -----------------------------------------------------------------------------
+# Explicitly set Python interpreter to avoid discovery warnings (Nix flake provides consistent Python)
+ansible_python_interpreter: python3
+
+# -----------------------------------------------------------------------------
 # Proxmox Configuration
 # -----------------------------------------------------------------------------
-proxmox_api_host: "10.20.177.99"
-proxmox_api_user: "root@pam"
-# proxmox_api_password: "" # Set via environment or vault
+proxmox_host: "10.20.177.99"
+proxmox_user: "root@pam"
+# proxmox_password: "" # Set via environment or vault
 
 # -----------------------------------------------------------------------------
 # CoreOS VM Configuration
