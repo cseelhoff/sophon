@@ -6,7 +6,7 @@ Prepares NFS shares with RPM packages and container images for CoreOS first-boot
 
 - SSH access to the NFS server
 - Tools on the Ansible controller: `skopeo`, `dnf`, `rsync`
-- The NFS server should be in your inventory
+- The NFS server IP should be set via `nfs_server_ip` variable
 
 ## Role Variables
 
@@ -75,7 +75,7 @@ Create `nfs-content.yml`:
 
 Run with:
 ```bash
-ansible-playbook nfs-content.yml -i inventories/production/inventory.yml
+ansible-playbook nfs-content.yml
 ```
 
 ## Integration with CoreOS Role

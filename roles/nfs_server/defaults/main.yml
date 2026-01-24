@@ -1,0 +1,74 @@
+---
+# =============================================================================
+# NFS Server Role - Lightweight Alpine-based NFS Server
+# =============================================================================
+# Deploys an Alpine Linux VM on Proxmox configured as an NFS server.
+# Automatically formats attached disk and creates export structure.
+
+# Enable/disable this role
+nfs_server_enabled: true
+
+# =============================================================================
+# VM Configuration
+# =============================================================================
+nfs_server_vm_name: "sophon-nfs"
+nfs_server_cores: 1
+nfs_server_memory: 512
+nfs_server_disk_size: "4G"        # OS disk
+nfs_server_data_disk_size: "100G" # NFS storage disk (thin provisioned)
+
+# =============================================================================
+# Network Configuration (Static IP Required)
+# =============================================================================
+# NFS server must have a static IP since other VMs depend on it.
+# Gateway and netmask are derived from Proxmox vnet configuration.
+# nfs_server_ip: "10.0.1.35"  # Required - set via -e or prompted
+
+# Optional: Override default Proxmox vnet (bridge)
+# proxmox_vnet: "vmbr0"
+
+# DNS server for NFS VM
+nfs_server_dns: "1.1.1.1"
+
+# =============================================================================
+# Alpine Linux Cloud Image
+# =============================================================================
+# Reuses the same Alpine image as bastion role
+nfs_server_alpine_version: "3.21"
+nfs_server_alpine_image_url: "https://dl-cdn.alpinelinux.org/alpine/v{{ nfs_server_alpine_version }}/releases/cloud/nocloud_alpine-{{ nfs_server_alpine_version }}.0-x86_64-bios-cloudinit-r0.qcow2"
+nfs_server_alpine_image_filename: "{{ nfs_server_alpine_image_url | basename }}"
+nfs_server_alpine_iso_filename: "{{ nfs_server_alpine_image_filename }}.iso"
+
+# Proxmox storage for the Alpine image
+nfs_server_image_storage: "local"
+nfs_server_image_storage_path: "/var/lib/vz/template/iso"
+
+# =============================================================================
+# NFS Export Configuration
+# =============================================================================
+# Root export directory (mounted on /dev/vdb1)
+nfs_server_export_root: "/export"
+
+# Pre-created export directories for Nexus proxy blob stores
+nfs_server_export_paths:
+  - "{{ nfs_server_export_root }}/nexus/docker-proxy"
+  - "{{ nfs_server_export_root }}/nexus/yum-proxy"
+  - "{{ nfs_server_export_root }}/sophon/images"
+  - "{{ nfs_server_export_root }}/sophon/bin"
+
+# NFS export options
+nfs_server_export_options: "rw,sync,no_subtree_check,no_root_squash"
+
+# =============================================================================
+# Proxmox Storage Integration
+# =============================================================================
+# Name for the NFS storage in Proxmox
+nfs_server_proxmox_storage_name: "sophon-nfs"
+
+# Content types to enable on the Proxmox NFS storage
+nfs_server_proxmox_content_types: "images,iso,backup,snippets"
+
+# =============================================================================
+# Local Cache Directory
+# =============================================================================
+nfs_server_local_cache_dir: "/tmp/sophon_nfs_server"

@@ -25,11 +25,16 @@ bastion_password_hash: "$6$rounds=4096$randomsalt$5nZ8GZ4.QZy8YMqZ9qK7qz8GZ4.QZy
 # SSH public key for passwordless access (required for Ansible)
 # bastion_ssh_public_key: "ssh-ed25519 AAAA..."
 
-# Network (static IP required - prompted if not set):
+# Network Configuration:
+# If bastion_ip is not defined, DHCP will be used automatically.
+# For static IP, set both bastion_ip and bastion_gateway:
 # bastion_ip: "10.0.1.5"
 bastion_cidr: "24"
 # bastion_gateway: "10.0.1.1"
 bastion_dns: "1.1.1.1"
+
+# Derived: true if using DHCP (when bastion_ip not defined)
+# bastion_use_dhcp: "{{ bastion_ip is not defined or bastion_ip == '' }}"
 
 # =============================================================================
 # Alpine Linux Cloud Image

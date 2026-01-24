@@ -1,2 +1,17 @@
 instance-id: {{ bastion_vm_name }}
 local-hostname: {{ bastion_vm_name }}
+
+# Network configuration (NoCloud datasource)
+{% if bastion_ip is defined and bastion_ip != '' %}
+network-interfaces: |
+  auto eth0
+  iface eth0 inet static
+    address {{ bastion_ip }}
+    netmask {{ (bastion_cidr | int) | ansible.builtin.ipaddr('netmask') | default('255.255.255.0') }}
+    gateway {{ bastion_gateway }}
+    dns-nameservers {{ bastion_dns }}
+{% else %}
+network-interfaces: |
+  auto eth0
+  iface eth0 inet dhcp
+{% endif %}

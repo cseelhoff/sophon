@@ -1,7 +1,0 @@
----
-# Simplified inventory - all execution happens on localhost
-# Commands are sent to the CoreOS VM via Proxmox qemu-guest-agent
-all:
-  hosts:
-    localhost:
-      ansible_connection: local

@@ -219,7 +219,7 @@
         boot: "order=virtio0"
         cicustom: "user=local:snippets/bastion-userdata.yaml,meta=local:snippets/bastion-metadata.yaml"
         ipconfig:
-          ipconfig0: "ip={{ bastion_ip }}/{{ bastion_cidr }},gw={{ bastion_gateway }}"
+          ipconfig0: "{{ 'ip=' ~ bastion_ip ~ '/' ~ bastion_cidr ~ ',gw=' ~ bastion_gateway if (bastion_ip is defined and bastion_ip != '') else 'ip=dhcp' }}"
         nameserver: "{{ bastion_dns }}"
       register: vm_create
 
@@ -255,6 +255,25 @@
   delay: 10
   failed_when: false
 
+- name: Get bastion IP from DHCP if needed
+  when: bastion_ip is not defined or bastion_ip == ''
+  block:
+    - name: Query guest agent for network info
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ bastion_vmid }}/agent/network-get-interfaces"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: network_info
+      retries: 12
+      delay: 5
+      until: network_info.status == 200
+
+    - name: Extract DHCP IP address
+      ansible.builtin.set_fact:
+        bastion_dhcp_ip: "{{ network_info.json.data | selectattr('name', 'ne', 'lo') | map(attribute='ip-addresses') | flatten | selectattr('ip-address-type', 'eq', 'ipv4') | map(attribute='ip-address') | first | default('unknown') }}"
+
 - name: Display connection info
   ansible.builtin.debug:
     msg: |
@@ -264,11 +283,12 @@
       
       VM Name: {{ bastion_vm_name }}
       VMID: {{ bastion_vmid }}
-      IP Address: {{ bastion_ip }}
+      IP Address: {{ bastion_ip | default(bastion_dhcp_ip | default('DHCP - check Proxmox console')) }}
+      Network Mode: {{ 'Static' if (bastion_ip is defined and bastion_ip != '') else 'DHCP' }}
       Username: {{ bastion_username }}
       
       SSH Access:
-        ssh {{ bastion_username }}@{{ bastion_ip }}
+        ssh {{ bastion_username }}@{{ bastion_ip | default(bastion_dhcp_ip | default('<IP>')) }}
       
       {% if bastion_cloudflared_token %}
       Cloudflared tunnel is being configured automatically.
@@ -283,5 +303,5 @@
       
       To run Sophon playbooks from the bastion:
         cd {{ bastion_sophon_clone_path }}
-        ansible-playbook -i inventories/production/inventory.yml site.yml
+        ansible-playbook site.yml
       ═══════════════════════════════════════════════════════════════════

@@ -7,34 +7,44 @@
 # DEPLOYMENT MODES:
 # ─────────────────────────────────────────────────────────────────────────────
 # Online Mode (default):
-#   ansible-playbook -i inventories/production/inventory.yml site.yml
+#   ansible-playbook site.yml
 #
 # Air-Gapped Mode (after running prestage.yml and nfs-upload.yml):
-#   ansible-playbook -i inventories/production/inventory.yml site.yml -e airgapped_mode=true
+#   ansible-playbook site.yml -e airgapped_mode=true
 #
 # With Cloudflared tunnel (for remote bastion access):
-#   CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook -i inventories/production/inventory.yml site.yml
+#   CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook site.yml
+#
+# Skip prompts (CI/scripting):
+#   ansible-playbook site.yml \
+#     -e proxmox_host=10.0.0.10 \
+#     -e coreos_ip=10.0.0.100 \
+#     -e coreos_gateway=10.0.0.1 \
+#     -e nfs_server_ip=10.0.0.35 \
+#     -e domain_name=sophon.local
 #
 # WORKFLOW:
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Deploy CoreOS VM on Proxmox
-# 2. Check connectivity to CoreOS
-# 3. If unreachable → Deploy bastion VM → Route via:
+# 1. Check/deploy NFS server (if not already in Proxmox)
+# 2. Populate NFS with container images and RPMs
+# 3. Deploy CoreOS VM on Proxmox
+# 4. Check connectivity to CoreOS
+# 5. If unreachable → Deploy bastion VM → Route via:
 #    a. Cloudflared ProxyJump (if CLOUDFLARED_TUNNEL_TOKEN set)
 #    b. Direct SSH ProxyJump (if bastion reachable)
 #    c. QGA Remote Execution (last resort)
-# 4. Continue with Portainer, CoreDNS, Traefik, and other services
+# 6. Continue with Portainer, CoreDNS, Traefik, and other services
 #
 # AIR-GAPPED WORKFLOW:
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 (on internet):   ansible-playbook prestage.yml
 # --- SWITCH NETWORKS ---
-# Phase 2 (on air-gapped): ansible-playbook nfs-upload.yml -i inventories/production/inventory.yml
-# Phase 3 (on air-gapped): ansible-playbook site.yml -i inventories/production/inventory.yml -e airgapped_mode=true
+# Phase 2 (on air-gapped): ansible-playbook nfs-upload.yml
+# Phase 3 (on air-gapped): ansible-playbook site.yml -e airgapped_mode=true
 #
 # TAGS:
 # ─────────────────────────────────────────────────────────────────────────────
-#   ansible-playbook -i inventories/production/inventory.yml site.yml --tags "traefik,homepage"
+#   ansible-playbook site.yml --tags "traefik,homepage"
 
 - name: Gather Required Variables
   hosts: localhost
@@ -48,8 +58,8 @@
         domain_name: "{{ domain_name | default(lookup('env', 'DOMAIN_NAME')) | default('', true) }}"
         proxmox_password: "{{ proxmox_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
         coreos_ip: "{{ coreos_ip | default(lookup('env', 'COREOS_IP')) | default('', true) }}"
-        coreos_cidr: "{{ coreos_cidr | default(lookup('env', 'COREOS_CIDR')) | default('24', true) }}"
-        coreos_gateway: "{{ coreos_gateway | default(lookup('env', 'COREOS_GATEWAY')) | default('', true) }}"
+        nfs_server_ip: "{{ nfs_server_ip | default(lookup('env', 'NFS_SERVER_IP')) | default('', true) }}"
+        proxmox_vnet: "{{ proxmox_vnet | default(lookup('env', 'PROXMOX_VNET')) | default('vmbr0', true) }}"
 
     - name: Prompt for missing Proxmox host
       ansible.builtin.pause:
@@ -70,30 +80,305 @@
       register: _pp
       when: proxmox_password == ""
 
-    - name: Prompt for missing CoreOS IP
-      ansible.builtin.pause:
-        prompt: "CoreOS VM static IP"
-      register: _ip
-      when: coreos_ip == ""
-
-    - name: Prompt for missing CoreOS gateway
-      ansible.builtin.pause:
-        prompt: "CoreOS gateway"
-      register: _gw
-      when: coreos_gateway == ""
-
     - name: Set prompted values
       ansible.builtin.set_fact:
         proxmox_host: "{{ _ph.user_input | default(proxmox_host, true) }}"
         domain_name: "{{ _dn.user_input | default(domain_name, true) }}"
         proxmox_password: "{{ _pp.user_input | default(proxmox_password, true) }}"
-        coreos_ip: "{{ _ip.user_input | default(coreos_ip, true) }}"
-        coreos_gateway: "{{ _gw.user_input | default(coreos_gateway, true) }}"
+
+# =============================================================================
+# IP Address Auto-Discovery
+# =============================================================================
+# Discovers NFS and CoreOS IPs automatically by:
+# 1. Checking existing Proxmox storage/VMs
+# 2. Ping scanning the vnet for available IPs if needed
+- name: Auto-Discover IP Addresses
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: Authenticate with Proxmox
+      ansible.builtin.include_role:
+        name: proxmox
+
+    # -------------------------------------------------------------------------
+    # NFS Server IP Discovery
+    # -------------------------------------------------------------------------
+    - name: Check for existing sophon-nfs storage
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/storage"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+      register: _storage_list
+      when: nfs_server_ip == ""
+
+    - name: Extract NFS server IP from existing storage
+      ansible.builtin.set_fact:
+        nfs_server_ip: "{{ (_storage_list.json.data | selectattr('storage', 'eq', 'sophon-nfs') | first).server }}"
+      when:
+        - nfs_server_ip == ""
+        - _storage_list is defined
+        - _storage_list.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0
+
+    - name: Display discovered NFS IP
+      ansible.builtin.debug:
+        msg: "Discovered NFS server IP from existing storage: {{ nfs_server_ip }}"
+      when: nfs_server_ip != ""
+
+    # -------------------------------------------------------------------------
+    # CoreOS VM IP Discovery
+    # -------------------------------------------------------------------------
+    - name: Check for existing sophon-coreos VM
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/cluster/resources?type=vm"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+      register: _vm_list
+      when: coreos_ip == ""
+
+    - name: Find sophon-coreos VM
+      ansible.builtin.set_fact:
+        _coreos_vm: "{{ _vm_list.json.data | selectattr('name', 'eq', coreos_vm_name | default('sophon-coreos')) | first | default({}) }}"
+      when:
+        - coreos_ip == ""
+        - _vm_list is defined
+
+    - name: Get CoreOS VM config for IP
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ _coreos_vm.node }}/qemu/{{ _coreos_vm.vmid }}/config"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+      register: _coreos_config
+      when:
+        - coreos_ip == ""
+        - _coreos_vm is defined
+        - _coreos_vm.vmid is defined
+
+    - name: Extract CoreOS IP from VM config (ipconfig0)
+      ansible.builtin.set_fact:
+        coreos_ip: "{{ _coreos_config.json.data.ipconfig0 | regex_search('ip=([0-9.]+)', '\\1') | first }}"
+      when:
+        - coreos_ip == ""
+        - _coreos_config is defined
+        - _coreos_config.json.data.ipconfig0 is defined
+        - "'ip=' in _coreos_config.json.data.ipconfig0"
+      ignore_errors: true
+
+    - name: Display discovered CoreOS IP
+      ansible.builtin.debug:
+        msg: "Discovered CoreOS IP from existing VM: {{ coreos_ip }}"
+      when: coreos_ip != ""
+
+    # -------------------------------------------------------------------------
+    # Vnet Configuration for IP Scanning
+    # -------------------------------------------------------------------------
+    - name: Get Proxmox network configuration
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/network"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+      register: _proxmox_network
+      when: (nfs_server_ip == "") or (coreos_ip == "")
+
+    - name: Find vnet configuration
+      ansible.builtin.set_fact:
+        _vnet_config: "{{ _proxmox_network.json.data | selectattr('iface', 'eq', proxmox_vnet) | first | default({}) }}"
+      when: _proxmox_network is defined
+
+    - name: Extract network base from vnet
+      ansible.builtin.set_fact:
+        _network_base: "{{ _vnet_config.address | default(_vnet_config.gateway | default('')) | regex_replace('\\.[0-9]+$', '') }}"
+        _gateway: "{{ _vnet_config.gateway | default(_vnet_config.address | default('') | regex_replace('\\.[0-9]+$', '.1')) }}"
+      when:
+        - _vnet_config is defined
+        - _vnet_config | length > 0
+
+    # -------------------------------------------------------------------------
+    # ARP Scan for Network Discovery (runs on Proxmox node)
+    # -------------------------------------------------------------------------
+    - name: Scan network for used IPs
+      when:
+        - (nfs_server_ip == "") or (coreos_ip == "")
+        - _network_base is defined
+        - _network_base != ""
+      block:
+        - name: Install arp-scan and discover used IPs on Proxmox
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port | default(8006) }}"
+            api_user: "{{ proxmox_user | default('root@pam') }}"
+            node: "{{ proxmox_node | default('pve') }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            pve_csrf_token: "{{ proxmox_csrf }}"
+            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+            timeout: 60
+            command: "apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1; arp-scan -I {{ proxmox_vnet }} -l 2>/dev/null | awk '/^[0-9]+\\./ {print $1}' | sort -V"
+          register: _arp_scan_result
+
+        - name: Parse used IPs from arp-scan
+          ansible.builtin.set_fact:
+            _used_ips: "{{ _arp_scan_result.stdout | default('') | split('\n') | select('match', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$') | list }}"
+
+        - name: Debug used IPs
+          ansible.builtin.debug:
+            msg: "IPs currently in use on {{ proxmox_vnet }}: {{ _used_ips }}"
+
+        - name: Find available IPs for NFS and CoreOS
+          ansible.builtin.set_fact:
+            _available_ips: >-
+              {{
+                range(2, 255) | map('regex_replace', '(.*)', _network_base ~ '.\1')
+                | reject('in', _used_ips)
+                | reject('eq', _gateway)
+                | list
+              }}
+
+        - name: Set discovered NFS IP
+          ansible.builtin.set_fact:
+            nfs_server_ip: "{{ _available_ips[0] }}"
+          when:
+            - nfs_server_ip == ""
+            - _available_ips | length > 0
+
+        - name: Set discovered CoreOS IP
+          ansible.builtin.set_fact:
+            coreos_ip: "{{ _available_ips[1] }}"
+          when:
+            - coreos_ip == ""
+            - _available_ips | length > 1
+
+        - name: Display auto-discovered IPs
+          ansible.builtin.debug:
+            msg: "Auto-discovered IPs via arp-scan - NFS: {{ nfs_server_ip }}, CoreOS: {{ coreos_ip }}"
+          when: nfs_server_ip != "" or coreos_ip != ""
+
+    # -------------------------------------------------------------------------
+    # Final Prompts (if auto-discovery failed)
+    # -------------------------------------------------------------------------
+    - name: Prompt for NFS IP if not discovered
+      ansible.builtin.pause:
+        prompt: "NFS server IP (auto-discovery failed)"
+      register: _nfs_prompt
+      when: nfs_server_ip == ""
+
+    - name: Set prompted NFS IP
+      ansible.builtin.set_fact:
+        nfs_server_ip: "{{ _nfs_prompt.user_input }}"
+      when:
+        - nfs_server_ip == ""
+        - _nfs_prompt.user_input is defined
+
+    - name: Prompt for CoreOS IP if not discovered
+      ansible.builtin.pause:
+        prompt: "CoreOS VM static IP (auto-discovery failed)"
+      register: _coreos_prompt
+      when: coreos_ip == ""
+
+    - name: Set prompted CoreOS IP
+      ansible.builtin.set_fact:
+        coreos_ip: "{{ _coreos_prompt.user_input }}"
+      when:
+        - coreos_ip == ""
+        - _coreos_prompt.user_input is defined
+
+    # -------------------------------------------------------------------------
+    # Derive Gateway from Vnet
+    # -------------------------------------------------------------------------
+    - name: Set gateway and CIDR from vnet
+      ansible.builtin.set_fact:
+        coreos_gateway: "{{ _gateway | default(coreos_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
+        coreos_cidr: "{{ _vnet_config.netmask | default('24') | ansible.utils.ipaddr('prefix') | default('24') }}"
+      when: coreos_gateway is not defined or coreos_gateway == ""
 
     - name: Set deployment mode variables
       ansible.builtin.set_fact:
         airgapped_mode: "{{ airgapped_mode | default(false) }}"
         cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+
+    - name: Display final IP configuration
+      ansible.builtin.debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════════
+          IP ADDRESS CONFIGURATION
+          ═══════════════════════════════════════════════════════════════════
+          NFS Server IP:    {{ nfs_server_ip }}
+          CoreOS VM IP:     {{ coreos_ip }}
+          Gateway:          {{ coreos_gateway }}
+          CIDR:             {{ coreos_cidr | default('24') }}
+          Vnet:             {{ proxmox_vnet }}
+          ═══════════════════════════════════════════════════════════════════
+
+# =============================================================================
+# NFS Server Detection and Deployment
+# =============================================================================
+- name: Check and Deploy NFS Server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [nfs, infrastructure]
+  tasks:
+    - name: Authenticate with Proxmox
+      ansible.builtin.include_role:
+        name: proxmox
+
+    - name: Check if NFS storage exists in Proxmox
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/storage"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+      register: proxmox_storage
+
+    - name: Set NFS detection facts
+      ansible.builtin.set_fact:
+        nfs_storage_exists: "{{ proxmox_storage.json.data | selectattr('type', 'eq', 'nfs') | selectattr('server', 'eq', nfs_server_ip) | list | length > 0 }}"
+        sophon_nfs_exists: "{{ proxmox_storage.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0 }}"
+
+    - name: Deploy NFS server if needed
+      when:
+        - not sophon_nfs_exists
+        - nfs_server_ip | default('') | length > 0
+      block:
+        - name: Display NFS deployment notice
+          ansible.builtin.debug:
+            msg: |
+              ═══════════════════════════════════════════════════════════════════
+              DEPLOYING NFS SERVER
+              ═══════════════════════════════════════════════════════════════════
+              No 'sophon-nfs' storage found in Proxmox.
+              Deploying Alpine-based NFS server at {{ nfs_server_ip }}...
+              ═══════════════════════════════════════════════════════════════════
+
+        - name: Deploy NFS Server
+          ansible.builtin.include_role:
+            name: nfs_server
+
+    - name: Display NFS server status
+      ansible.builtin.debug:
+        msg: "NFS storage '{{ 'sophon-nfs' if sophon_nfs_exists else 'to be created' }}' at {{ nfs_server_ip }}"
+
+# =============================================================================
+# NFS Content Population
+# =============================================================================
+- name: Populate NFS with Content
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [nfs_content, infrastructure]
+  roles:
+    - role: nfs_content
+      vars:
+        nfs_content_mode: "{{ 'skip' if airgapped_mode | default(false) else 'download_and_upload' }}"
 
 - name: Deploy CoreOS VM
   hosts: localhost

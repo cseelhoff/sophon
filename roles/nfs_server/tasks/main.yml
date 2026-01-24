@@ -1,0 +1,342 @@
+---
+# =============================================================================
+# NFS Server Deployment on Proxmox
+# =============================================================================
+# Deploys an Alpine Linux NFS server with automatic disk provisioning.
+# Depends on: proxmox role (via meta/main.yml)
+
+# -----------------------------------------------------------------------------
+# Validate Required Variables
+# -----------------------------------------------------------------------------
+- name: Validate NFS server IP is provided
+  ansible.builtin.fail:
+    msg: "nfs_server_ip is required for NFS server deployment. Use -e nfs_server_ip=x.x.x.x"
+  when: nfs_server_ip is not defined or nfs_server_ip == ''
+
+# -----------------------------------------------------------------------------
+# Query Proxmox Network for Gateway/Subnet
+# -----------------------------------------------------------------------------
+- name: Get Proxmox network configuration
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/network"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: proxmox_network
+
+- name: Find vnet configuration
+  ansible.builtin.set_fact:
+    proxmox_vnet_config: "{{ proxmox_network.json.data | selectattr('iface', 'eq', proxmox_vnet | default('vmbr0')) | first | default({}) }}"
+
+- name: Set network facts from vnet
+  ansible.builtin.set_fact:
+    proxmox_gateway: "{{ proxmox_vnet_config.gateway | default(proxmox_vnet_config.address | default(nfs_server_ip | regex_replace('\\.[0-9]+$', '.1'))) }}"
+    proxmox_netmask: "{{ proxmox_vnet_config.netmask | default('255.255.255.0') }}"
+    proxmox_cidr: "{{ proxmox_vnet_config.cidr | default('24') }}"
+
+- name: Display network configuration
+  ansible.builtin.debug:
+    msg: |
+      NFS Server Network Configuration:
+        IP: {{ nfs_server_ip }}
+        Gateway: {{ proxmox_gateway }}
+        Netmask: {{ proxmox_netmask }}
+        Vnet: {{ proxmox_vnet | default('vmbr0') }}
+
+# -----------------------------------------------------------------------------
+# VM Existence Check
+# -----------------------------------------------------------------------------
+- name: Check if NFS server VM already exists
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: existing_vms
+
+- name: Set existing VM fact
+  ansible.builtin.set_fact:
+    existing_nfs_server: "{{ existing_vms.json.data | selectattr('name', 'eq', nfs_server_vm_name) | list | first | default(none) }}"
+
+- name: Display existing VM info
+  ansible.builtin.debug:
+    msg: "Found existing NFS server VM '{{ nfs_server_vm_name }}' with VMID {{ existing_nfs_server.vmid }}"
+  when: existing_nfs_server is not none
+
+# -----------------------------------------------------------------------------
+# Alpine Image and VM Creation (only if VM doesn't exist)
+# -----------------------------------------------------------------------------
+- name: Deploy NFS server VM
+  when: existing_nfs_server is none
+  block:
+    # -------------------------------------------------------------------------
+    # Alpine Image: Check if exists on Proxmox
+    # -------------------------------------------------------------------------
+    - name: Check if Alpine image already exists in Proxmox storage
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/content"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: storage_content
+
+    - name: Set image exists fact
+      ansible.builtin.set_fact:
+        alpine_image_exists: "{{ storage_content.json.data | selectattr('volid', 'search', nfs_server_alpine_iso_filename) | list | length > 0 }}"
+
+    # -------------------------------------------------------------------------
+    # Alpine Image: Download (Online Mode)
+    # -------------------------------------------------------------------------
+    - name: Download Alpine image on Proxmox (online mode)
+      when:
+        - not alpine_image_exists
+        - not (airgapped_mode | default(false))
+      block:
+        - name: Download Alpine image directly on Proxmox
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
+            timeout: 300
+            command: >-
+              cd {{ nfs_server_image_storage_path }} &&
+              curl -fLO {{ nfs_server_alpine_image_url }} &&
+              ln -f {{ nfs_server_alpine_image_filename }} {{ nfs_server_alpine_iso_filename }} &&
+              echo "SUCCESS"
+          register: proxmox_download
+          failed_when: "'SUCCESS' not in (proxmox_download.stdout | default(''))"
+
+    # -------------------------------------------------------------------------
+    # Alpine Image: Upload (Air-gapped Mode)
+    # -------------------------------------------------------------------------
+    - name: Upload Alpine image from prestage (air-gapped mode)
+      when:
+        - not alpine_image_exists
+        - airgapped_mode | default(false)
+      block:
+        - name: Check prestaged Alpine image exists
+          ansible.builtin.stat:
+            path: "{{ nfs_content_local_staging_dir | default('/tmp/sophon_prestage') }}/{{ nfs_server_alpine_iso_filename }}"
+          register: prestaged_alpine
+
+        - name: Fail if prestaged image not found
+          ansible.builtin.fail:
+            msg: "Alpine image not found at {{ nfs_content_local_staging_dir | default('/tmp/sophon_prestage') }}/{{ nfs_server_alpine_iso_filename }}. Run prestage.yml first."
+          when: not prestaged_alpine.stat.exists
+
+        - name: Upload Alpine image to Proxmox
+          ansible.builtin.command:
+            cmd: >-
+              curl -k -s
+              -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
+              -H "CSRFPreventionToken: {{ proxmox_csrf }}"
+              -F "content=iso"
+              -F "filename=@{{ prestaged_alpine.stat.path }};type=application/octet-stream;filename={{ nfs_server_alpine_iso_filename }}"
+              "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/upload"
+          register: upload_result
+          changed_when: "'UPID' in upload_result.stdout"
+          failed_when: "'UPID' not in upload_result.stdout"
+
+        - name: Wait for upload to complete
+          ansible.builtin.uri:
+            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/content"
+            method: GET
+            headers:
+              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+            validate_certs: "{{ proxmox_validate_certs }}"
+          register: upload_check
+          until: upload_check.json.data | selectattr('volid', 'search', nfs_server_alpine_iso_filename) | list | length > 0
+          retries: 30
+          delay: 5
+
+        - name: Create hardlink for qcow2 format
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
+            timeout: 30
+            command: >-
+              cd {{ nfs_server_image_storage_path }} &&
+              ln -f {{ nfs_server_alpine_iso_filename }} {{ nfs_server_alpine_image_filename }} &&
+              echo "SUCCESS"
+          register: hardlink_result
+          failed_when: "'SUCCESS' not in (hardlink_result.stdout | default(''))"
+
+    # -------------------------------------------------------------------------
+    # Cloud-Init Configuration
+    # -------------------------------------------------------------------------
+    - name: Ensure local cache directory exists
+      ansible.builtin.file:
+        path: "{{ nfs_server_local_cache_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate cloud-init user-data
+      ansible.builtin.template:
+        src: user-data.yaml.j2
+        dest: "{{ nfs_server_local_cache_dir }}/nfs-userdata.yaml"
+        mode: "0644"
+
+    - name: Generate cloud-init meta-data
+      ansible.builtin.template:
+        src: meta-data.yaml.j2
+        dest: "{{ nfs_server_local_cache_dir }}/nfs-metadata.yaml"
+        mode: "0644"
+
+    - name: Upload cloud-init configs to Proxmox snippets
+      proxmox_shell:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        node: "{{ proxmox_node }}"
+        pve_auth_cookie: "{{ proxmox_ticket }}"
+        proxmox_csrf_token: "{{ proxmox_csrf }}"
+        timeout: 30
+        command: "mkdir -p /var/lib/vz/snippets && cat > /var/lib/vz/snippets/{{ item.name }}"
+        stdin: "{{ lookup('file', nfs_server_local_cache_dir + '/' + item.src) }}"
+      loop:
+        - { name: "nfs-userdata.yaml", src: "nfs-userdata.yaml" }
+        - { name: "nfs-metadata.yaml", src: "nfs-metadata.yaml" }
+
+    # -------------------------------------------------------------------------
+    # VM Creation with Two Disks
+    # -------------------------------------------------------------------------
+    - name: Create NFS Server VM on Proxmox
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        node: "{{ proxmox_node }}"
+        name: "{{ nfs_server_vm_name }}"
+        cores: "{{ nfs_server_cores }}"
+        memory: "{{ nfs_server_memory }}"
+        ostype: "l26"
+        onboot: true
+        autostart: true
+        agent: "enabled=1"
+        net:
+          net0: "virtio,bridge={{ proxmox_vnet | default('vmbr0') }}"
+        state: present
+        timeout: 300
+        virtio:
+          virtio0: "{{ proxmox_storage }}:0,import-from={{ nfs_server_image_storage_path }}/{{ nfs_server_alpine_image_filename }},size={{ nfs_server_disk_size }}"
+          virtio1: "{{ proxmox_storage }}:{{ nfs_server_data_disk_size }}"
+        boot: "order=virtio0"
+        cicustom: "user=local:snippets/nfs-userdata.yaml,meta=local:snippets/nfs-metadata.yaml"
+        ipconfig:
+          ipconfig0: "ip={{ nfs_server_ip }}/{{ proxmox_cidr }},gw={{ proxmox_gateway }}"
+        nameserver: "{{ nfs_server_dns }}"
+      register: vm_create
+
+# -----------------------------------------------------------------------------
+# Post-Creation: Start and Wait for VM
+# -----------------------------------------------------------------------------
+- name: Set VM ID fact
+  ansible.builtin.set_fact:
+    nfs_server_vmid: "{{ existing_nfs_server.vmid if existing_nfs_server is not none else vm_create.vmid }}"
+
+- name: Start NFS Server VM
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_host }}"
+    api_port: "{{ proxmox_port }}"
+    api_user: "{{ proxmox_user }}"
+    api_password: "{{ proxmox_password }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ nfs_server_vmid }}"
+    state: started
+
+- name: Wait for VM to boot and qemu-guest-agent to respond
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ nfs_server_vmid }}/agent/ping"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200, 500]
+  register: agent_ping
+  until: agent_ping.status == 200
+  retries: 60
+  delay: 10
+  failed_when: false
+
+- name: Wait for NFS service to be ready
+  ansible.builtin.pause:
+    seconds: 30
+    prompt: "Waiting for NFS service to initialize..."
+
+# -----------------------------------------------------------------------------
+# Add NFS Storage to Proxmox
+# -----------------------------------------------------------------------------
+- name: Check if NFS storage already exists in Proxmox
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/storage"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: existing_storage
+
+- name: Set storage exists fact
+  ansible.builtin.set_fact:
+    nfs_storage_exists: "{{ existing_storage.json.data | selectattr('storage', 'eq', nfs_server_proxmox_storage_name) | list | length > 0 }}"
+
+- name: Add NFS storage to Proxmox
+  when: not nfs_storage_exists
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/storage"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    body_format: form-urlencoded
+    body:
+      storage: "{{ nfs_server_proxmox_storage_name }}"
+      type: "nfs"
+      server: "{{ nfs_server_ip }}"
+      export: "{{ nfs_server_export_root }}"
+      content: "{{ nfs_server_proxmox_content_types }}"
+    status_code: [200, 201]
+  register: add_storage_result
+
+- name: Display NFS storage creation result
+  ansible.builtin.debug:
+    msg: "NFS storage '{{ nfs_server_proxmox_storage_name }}' added to Proxmox"
+  when: not nfs_storage_exists
+
+# -----------------------------------------------------------------------------
+# Display Summary
+# -----------------------------------------------------------------------------
+- name: Display NFS server info
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      NFS Server deployed successfully!
+      ═══════════════════════════════════════════════════════════════════
+      
+      VM Name: {{ nfs_server_vm_name }}
+      VMID: {{ nfs_server_vmid }}
+      IP Address: {{ nfs_server_ip }}
+      
+      NFS Exports:
+{% for path in nfs_server_export_paths %}
+        {{ nfs_server_ip }}:{{ path }}
+{% endfor %}
+      
+      Proxmox Storage: {{ nfs_server_proxmox_storage_name }}
+      
+      Mount example (from other VMs):
+        mount -t nfs {{ nfs_server_ip }}:{{ nfs_server_export_root }} /mnt/nfs
+      
+      ═══════════════════════════════════════════════════════════════════

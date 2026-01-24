@@ -1,0 +1,11 @@
+instance-id: {{ nfs_server_vm_name }}
+local-hostname: {{ nfs_server_vm_name }}
+
+# Network configuration - Static IP (required for NFS server)
+network-interfaces: |
+  auto eth0
+  iface eth0 inet static
+    address {{ nfs_server_ip }}
+    netmask {{ proxmox_netmask | default('255.255.255.0') }}
+    gateway {{ proxmox_gateway }}
+    dns-nameservers {{ nfs_server_dns }}

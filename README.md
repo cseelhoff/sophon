@@ -5,54 +5,75 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 ## Architecture Overview
 
 ```
-                    ┌────────────────────────────────────────────────────────┐
-                    │                   DEPLOYMENT MODES                      │
-                    ├──────────────────────┬─────────────────────────────────┤
-                    │     ONLINE MODE      │        AIR-GAPPED MODE          │
-                    │  (Internet Access)   │    (Disconnected Network)       │
-                    └──────────┬───────────┴─────────────┬───────────────────┘
-                               │                         │
-                               │                   ┌─────▼─────────┐
-                               │                   │ prestage.yml  │ Phase 1
-                               │                   │ (on internet) │ Download
-                               │                   └─────┬─────────┘
-                               │                         │
-                               │                   ══════╪══════ NETWORK SWITCH
-                               │                         │
-                               │                   ┌─────▼─────────┐
-                               │                   │nfs-upload.yml │ Phase 2
-                               │                   │ (air-gapped)  │ Upload
-                    ┌──────────▼───────────┐       └─────┬─────────┘
-                    │ Proxmox downloads &  │             │
-                    │ uploads to NFS       │             │
-                    └──────────┬───────────┘             │
-                               │                         │
-                               └───────────┬─────────────┘
-                                           ▼
-                               ┌───────────────────────┐
-                               │   Deploy CoreOS VM    │
-                               └───────────┬───────────┘
-                                           ▼
-                               ┌───────────────────────┐  YES   ┌──────────────┐
-                               │  CoreOS Reachable?    ├───────▶│  Continue to │
-                               └───────────┬───────────┘        │  Portainer   │
-                                           │ NO                 └──────────────┘
-                                           ▼                            ▲
-                               ┌───────────────────────┐                │
-                               │  Deploy Bastion VM    │                │
-                               │  (+Cloudflared?)      │                │
-                               └───────────┬───────────┘                │
-                                           ▼                            │
-                               ┌───────────────────────┐  YES           │
-                               │ SSH Reachable?        ├────────────────┤
-                               │ (direct/cloudflared)  │ (ProxyJump)    │
-                               └───────────┬───────────┘                │
-                                           │ NO                         │
-                                           ▼                            │
-                               ┌───────────────────────┐                │
-                               │  QGA Remote Exec      ├────────────────┘
-                               │  (via Proxmox API)    │
-                               └───────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                   DEPLOYMENT MODES                     │
+├──────────────────────┬─────────────────────────────────┤
+│     ONLINE MODE      │        AIR-GAPPED MODE          │
+│  (Internet Access)   │    (Disconnected Network)       │
+└──────────┬───────────┴─────────────┬───────────────────┘
+           │                         │
+           │                   ┌─────▼─────────┐
+           │                   │ prestage.yml  │ Phase 1
+           │                   │ (on internet) │ Download
+           │                   └─────┬─────────┘
+           │                         │
+           │                   ══════╪══════ NETWORK SWITCH
+           │                         │
+           │                   ┌─────▼─────────┐
+           │                   │nfs-upload.yml │ Phase 2
+           │                   │ (air-gapped)  │ Upload to
+           │                   └─────┬─────────┘  Proxmox
+           │                         │
+           └───────────┬─────────────┘
+                       ▼
+           ┌───────────────────────┐  EXISTS  ┌──────────────┐
+           │  NFS Storage in       ├─────────>│  Skip NFS    │
+           │  Proxmox?             │          │  Deployment  │
+           └───────────┬───────────┘          └──────┬───────┘
+                       │ NO                          │
+                       ▼                             │
+           ┌───────────────────────┐                 │
+           │  Deploy NFS Server    │ Alpine VM       │
+           │  on Proxmox           │ 100GB disk      │
+           └───────────┬───────────┘                 │
+                       │                             │
+                       ▼                             │
+           ┌───────────────────────┐                 │
+           │  Add NFS Storage to   │                 │
+           │  Proxmox              │                 │
+           └───────────┬───────────┘                 │
+                       │                             │
+                       └─────────────┬───────────────┘
+                                     ▼
+                       ┌───────────────────────┐
+                       │  Populate NFS with    │ (online mode)
+                       │  images, RPMs, tars   │
+                       └───────────┬───────────┘
+                                   ▼
+                       ┌───────────────────────┐
+                       │   Deploy CoreOS VM    │
+                       └───────────┬───────────┘
+                                   ▼
+                       ┌───────────────────────┐  YES   ┌──────────────┐
+                       │  CoreOS Reachable?    ├───────>│  Continue to │
+                       └───────────┬───────────┘        │  Portainer   │
+                                   │ NO                 └──────────────┘
+                                   ▼                            ▲
+                       ┌───────────────────────┐                │
+                       │  Deploy Bastion VM    │                │
+                       │  (+Cloudflared?)      │                │
+                       └───────────┬───────────┘                │
+                                   ▼                            │
+                       ┌───────────────────────┐  YES           │
+                       │ SSH Reachable?        ├────────────────┤
+                       │ (direct/cloudflared)  │ (ProxyJump)    │
+                       └───────────┬───────────┘                │
+                                   │ NO                         │
+                                   ▼                            │
+                       ┌───────────────────────┐                │
+                       │  QGA Remote Exec      ├────────────────┘
+                       │  (via Proxmox API)    │
+                       └───────────────────────┘
 ```
 
 ## Quick Start
@@ -63,19 +84,39 @@ Deploy a complete homelab in one command:
 
 ```bash
 nix develop  # Enter development shell
-ansible-playbook site.yml -i inventories/production/inventory.yml
+ansible-playbook site.yml
 ```
+
+Alternatively to receive no interactive prompts:
+```bash
+nix develop
+ansible-playbook site.yml \
+  -e proxmox_host=10.1.1.2 \
+  -e domain_name=mydomain.com \
+  -e proxmox_password=my_secret_password
+```
+
+> **Note:** All playbooks run against `localhost` and manage remote infrastructure via APIs
+> (Proxmox, Portainer, SSH). Variables are collected interactively via prompts or passed with `-e`.
+> Gateway and subnet are automatically derived from the Proxmox network configuration.
 
 You'll be prompted for:
 1. **Proxmox API host** (e.g., `192.168.1.100` or `pve.example.com`)
 2. **Domain name** (e.g., `homelab.local`)
 3. **Proxmox password** (hidden input)
 
+**IP addresses are auto-discovered:**
+- **NFS Server IP** - First checks for existing `sophon-nfs` storage in Proxmox. If not found, uses `arp-scan` on the Proxmox node to discover used IPs, then selects the first available.
+- **CoreOS VM IP** - First checks for existing `sophon-coreos` VM. If not found, selects the next available IP from the arp-scan results.
+
+The `proxmox_shell` module executes `arp-scan -I <vnet>` directly on the Proxmox node to accurately discover IPs in use on the target network. If auto-discovery fails, you'll be prompted to enter IPs manually.
+
 The playbook will then:
-1. Download artifacts to NFS (via Proxmox)
-2. Create and boot a CoreOS VM with Ignition config
-3. Verify connectivity (or deploy bastion if unreachable)
-4. Deploy Portainer, Traefik, CoreDNS, and all enabled services
+1. Check/deploy NFS server if needed (Alpine VM on Proxmox)
+2. Download artifacts to NFS (via Proxmox in online mode)
+3. Create and boot a CoreOS VM with Ignition config
+4. Verify connectivity (or deploy bastion if unreachable)
+5. Deploy Portainer, Traefik, CoreDNS, and all enabled services
 
 ### Air-Gapped Mode
 
@@ -97,12 +138,12 @@ ansible-playbook prestage.yml
 # ═══════════════════════════════════════════════════════════════════
 # PHASE 2: Upload to NFS server
 # ═══════════════════════════════════════════════════════════════════
-ansible-playbook nfs-upload.yml -i inventories/production/inventory.yml
+ansible-playbook nfs-upload.yml
 
 # ═══════════════════════════════════════════════════════════════════
 # PHASE 3: Deploy infrastructure
 # ═══════════════════════════════════════════════════════════════════
-ansible-playbook site.yml -i inventories/production/inventory.yml -e airgapped_mode=true
+ansible-playbook site.yml -e airgapped_mode=true
 ```
 
 ### With Cloudflared Tunnel (Remote Access)
@@ -111,7 +152,7 @@ If you can't directly SSH to the deployed VMs but have a Cloudflare account:
 
 ```bash
 export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
-ansible-playbook site.yml -i inventories/production/inventory.yml
+ansible-playbook site.yml
 ```
 
 The bastion VM will automatically configure Cloudflared for remote access.
@@ -119,7 +160,7 @@ The bastion VM will automatically configure Cloudflared for remote access.
 ### Scripting / CI (Skip Prompts)
 
 ```bash
-ansible-playbook site.yml -i inventories/production/inventory.yml \
+ansible-playbook site.yml \
   -e coreos_proxmox_api_host=pve.example.com \
   -e domain_name=homelab.local \
   -e coreos_proxmox_api_password=secret
@@ -158,20 +199,11 @@ sophon/
 ├── deploy.yml            # Deployment playbook
 ├── coreos.yml            # CoreOS VM playbook
 ├── bastion.yml           # Bastion VM playbook
-├── inventories/
-│   ├── development/      # Dev environment
-│   │   ├── inventory.yml
-│   │   └── group_vars/
-│   │       └── all.yml
-│   └── production/       # Prod environment
-│       ├── inventory.yml
-│       └── group_vars/
-│           ├── all.yml
-│           └── vault.yml.example
 ├── roles/
 │   ├── proxmox/          # Proxmox API interactions
 │   ├── coreos/           # CoreOS VM provisioning
 │   ├── bastion/          # Alpine bastion VM with Cloudflared
+│   ├── nfs_server/       # Alpine NFS server (auto-deployed if needed)
 │   ├── nfs_content/      # NFS artifact management
 │   ├── connectivity_check/ # SSH reachability testing
 │   ├── qga_remote_exec/  # QGA-based remote execution
@@ -194,54 +226,48 @@ sophon/
     └── test.sh           # Molecule test runner
 ```
 
-## Secrets Management with Ansible Vault
+## Secrets Management
 
-### Initial Setup
+Secrets (passwords, API tokens) are handled via **environment variables** or **interactive prompts**.
 
-```bash
-# Create vault password file (do NOT commit this)
-echo "your-vault-password" > ~/.vault_pass
-chmod 600 ~/.vault_pass
-
-# Copy vault template
-cp inventories/production/group_vars/vault.yml.example inventories/production/group_vars/vault.yml
-
-# Encrypt the vault
-ansible-vault encrypt inventories/production/group_vars/vault.yml
-```
-
-### Editing Secrets
+### Environment Variables
 
 ```bash
-# Edit encrypted vault
-ansible-vault edit inventories/production/group_vars/vault.yml
+# Set secrets as environment variables
+export PROXMOX_PASSWORD="your-proxmox-password"
+export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"  # Optional
 
-# View encrypted vault
-ansible-vault view inventories/production/group_vars/vault.yml
-
-# Re-encrypt with new password
-ansible-vault rekey inventories/production/group_vars/vault.yml
+# Run playbook (prompts only for unset values)
+ansible-playbook site.yml
 ```
 
-### Running Playbooks with Vault
+### CLI Overrides
 
 ```bash
-# Interactive password prompt
-ansible-playbook -i inventories/production/inventory site.yml --ask-vault-pass
-
-# Using password file
-ansible-playbook -i inventories/production/inventory site.yml --vault-password-file ~/.vault_pass
-
-# Environment variable
-export ANSIBLE_VAULT_PASSWORD_FILE=~/.vault_pass
-ansible-playbook -i inventories/production/inventory site.yml
+# Pass secrets directly (useful for CI/CD)
+ansible-playbook site.yml \
+  -e proxmox_host=10.0.0.10 \
+  -e proxmox_password=secret \
+  -e coreos_ip=10.0.0.100 \
+  -e coreos_gateway=10.0.0.1 \
+  -e domain_name=sophon.local
 ```
+
+### Interactive Prompts
+
+When variables are not set, `site.yml` will prompt for:
+1. Proxmox API host
+2. Domain name  
+3. Proxmox password (hidden)
+4. CoreOS VM static IP
+5. CoreOS gateway
+6. NFS server IP (defaults to gateway subnet .35)
 
 ## SSO Integration (Keycloak)
 
 Keycloak provides single sign-on for all services. To enable:
 
-1. Set `keycloak_enabled: true` in inventory
+1. Set `keycloak_enabled: true` via `-e keycloak_enabled=true`
 2. Configure OIDC for each service:
 
 ```yaml
@@ -265,7 +291,7 @@ openssl rand -hex 32
 
 ## Role Enable/Disable
 
-Each role can be enabled/disabled via inventory variables:
+Each role can be enabled/disabled via `-e` flags or role defaults:
 
 ```yaml
 # group_vars/all.yml
@@ -340,7 +366,7 @@ ansible-playbook prestage.yml
 After switching networks:
 
 ```bash
-ansible-playbook nfs-upload.yml -i inventories/production/inventory.yml
+ansible-playbook nfs-upload.yml
 ```
 
 **NFS destinations** (on `nfs_server_ip`):
@@ -352,7 +378,7 @@ ansible-playbook nfs-upload.yml -i inventories/production/inventory.yml
 ### Phase 3: Deploy
 
 ```bash
-ansible-playbook site.yml -i inventories/production/inventory.yml -e airgapped_mode=true
+ansible-playbook site.yml -e airgapped_mode=true
 ```
 
 ### Key Variables
@@ -388,10 +414,10 @@ automatically deploys an Alpine-based bastion VM on Proxmox.
 
 ```bash
 # Without Cloudflared
-ansible-playbook bastion.yml -i inventories/production/inventory.yml
+ansible-playbook bastion.yml
 
 # With Cloudflared
-CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook bastion.yml -i inventories/production/inventory.yml
+CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook bastion.yml
 ```
 
 ## Testing
@@ -415,8 +441,8 @@ molecule -c ../../tests/molecule/base.yml test
 For full integration testing, deploy to a development CoreOS VM:
 
 ```bash
-# Deploy to dev environment
-ansible-playbook -i inventories/development/inventory.yml site.yml
+# Deploy with prompted values (or pass with -e)
+ansible-playbook site.yml
 
 # Verify services
 ssh admin@<coreos-ip> "podman ps"
@@ -478,7 +504,7 @@ ssh admin@coreos-ip "journalctl -u podman"
 
 ## Configuration Reference
 
-See [inventories/development/group_vars/all.yml](inventories/development/group_vars/all.yml) for all available variables.
+See the role defaults files (`roles/*/defaults/main.yml`) for all available variables.
 
 Key settings:
 - `domain_name` - Base domain for all services

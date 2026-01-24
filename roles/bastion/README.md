@@ -48,7 +48,8 @@ Many users can connect to their Proxmox hypervisor (via VPN, Cloudflare tunnel, 
 | `bastion_username` | `ansible` | User account to create |
 | `bastion_password_hash` | - | Password hash (mkpasswd --method=sha512) |
 | `bastion_ssh_public_key` | - | SSH public key for passwordless access |
-| `bastion_ip` | - | Static IP for the VM (required) |
+| `bastion_ip` | - | Static IP for the VM (uses DHCP if not set) |
+| `bastion_gateway` | - | Gateway (required if bastion_ip is set) |
 | `bastion_cidr` | `24` | Network CIDR |
 | `bastion_gateway` | - | Default gateway (required) |
 | `bastion_dns` | `1.1.1.1` | DNS server |

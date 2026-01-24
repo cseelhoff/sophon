@@ -17,7 +17,7 @@ Provisions a Fedora CoreOS VM on Proxmox with Ignition configuration.
 | `coreos_proxmox_api_user` | `root@pam` | Proxmox API user |
 | `coreos_proxmox_node_name` | `pve` | Proxmox node name |
 | `coreos_proxmox_storage` | `local-lvm` | Proxmox storage pool |
-| `coreos_vm_name` | `coreos` | VM name in Proxmox |
+| `coreos_vm_name` | `sophon-coreos` | VM name in Proxmox |
 | `coreos_ip` | - | Static IP for the VM |
 | `coreos_cidr` | `24` | Network CIDR |
 | `coreos_gateway` | - | Default gateway |
@@ -46,7 +46,7 @@ Before deploying CoreOS, run the nfs_content role to populate the NFS shares:
 nix develop
 
 # Run NFS content preparation
-ansible-playbook nfs-content.yml -i inventories/production/inventory.yml
+ansible-playbook nfs-content.yml
 ```
 
 This downloads RPMs and container images to the NFS server. See `roles/nfs_content/README.md` for details.
