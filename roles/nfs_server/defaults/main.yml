@@ -1,9 +1,12 @@
 ---
 # =============================================================================
-# NFS Server Role - Lightweight Alpine-based NFS Server
+# NFS Server Role - Custom Alpine NFS Server  
 # =============================================================================
-# Deploys an Alpine Linux VM on Proxmox configured as an NFS server.
-# Automatically formats attached disk and creates export structure.
+# Deploys a custom-built Alpine Linux VM on Proxmox configured as an NFS server.
+# The OS image is built on the Ansible controller using alpine-make-vm-image,
+# with NFS services baked in. Data is stored on a separate data disk (/dev/vdb).
+#
+# Depends on: proxmox role (via meta/main.yml)
 
 # Enable/disable this role
 nfs_server_enabled: true
@@ -14,8 +17,8 @@ nfs_server_enabled: true
 nfs_server_vm_name: "sophon-nfs"
 nfs_server_cores: 1
 nfs_server_memory: 512
-nfs_server_disk_size: "4G"        # OS disk
-nfs_server_data_disk_size: "100G" # NFS storage disk (thin provisioned)
+nfs_server_os_disk_size: "2G"     # OS disk (Alpine with NFS services)
+nfs_server_data_disk_size: "100G" # NFS storage disk (/dev/vdb, thin provisioned)
 
 # =============================================================================
 # Network Configuration (Static IP Required)
@@ -31,25 +34,37 @@ nfs_server_data_disk_size: "100G" # NFS storage disk (thin provisioned)
 nfs_server_dns: "1.1.1.1"
 
 # =============================================================================
-# Alpine Linux Cloud Image
+# Alpine Image Build Configuration
 # =============================================================================
-# Reuses the same Alpine image as bastion role
-nfs_server_alpine_version: "3.21"
-nfs_server_alpine_image_url: "https://dl-cdn.alpinelinux.org/alpine/v{{ nfs_server_alpine_version }}/releases/cloud/nocloud_alpine-{{ nfs_server_alpine_version }}.0-x86_64-bios-cloudinit-r0.qcow2"
-nfs_server_alpine_image_filename: "{{ nfs_server_alpine_image_url | basename }}"
-nfs_server_alpine_iso_filename: "{{ nfs_server_alpine_image_filename }}.iso"
+# The image is built on the Ansible controller using alpine-make-vm-image
+# https://github.com/alpinelinux/alpine-make-vm-image
 
-# Proxmox storage for the Alpine image
+# Alpine version for the custom image
+nfs_server_alpine_version: "3.21"
+
+# Local paths for image building and caching
+nfs_server_build_dir: "/tmp/sophon_nfs_build"
+nfs_server_image_filename: "sophon-nfs-alpine.qcow2"
+nfs_server_image_cache_path: "{{ nfs_server_build_dir }}/{{ nfs_server_image_filename }}"
+
+# For air-gapped mode: path to prestaged image
+nfs_server_prestaged_image_path: "{{ nfs_content_local_staging_dir | default('/tmp/sophon_prestage') }}/{{ nfs_server_image_filename }}"
+
+# alpine-make-vm-image script location (vendored in files/ or downloaded)
+nfs_server_alpine_make_vm_image_url: "https://raw.githubusercontent.com/alpinelinux/alpine-make-vm-image/master/alpine-make-vm-image"
+nfs_server_alpine_make_vm_image_path: "{{ nfs_server_build_dir }}/alpine-make-vm-image"
+
+# Proxmox storage paths
 nfs_server_image_storage: "local"
 nfs_server_image_storage_path: "/var/lib/vz/template/iso"
 
 # =============================================================================
-# NFS Export Configuration
+# NFS Export Configuration  
 # =============================================================================
-# Root export directory (mounted on /dev/vdb1)
+# Root export directory (mounted from /dev/vdb - the data disk)
 nfs_server_export_root: "/export"
 
-# Pre-created export directories for Nexus proxy blob stores
+# Pre-created export directories
 nfs_server_export_paths:
   - "{{ nfs_server_export_root }}/nexus/docker-proxy"
   - "{{ nfs_server_export_root }}/nexus/yum-proxy"
@@ -67,8 +82,3 @@ nfs_server_proxmox_storage_name: "sophon-nfs"
 
 # Content types to enable on the Proxmox NFS storage
 nfs_server_proxmox_content_types: "images,iso,backup,snippets"
-
-# =============================================================================
-# Local Cache Directory
-# =============================================================================
-nfs_server_local_cache_dir: "/tmp/sophon_nfs_server"

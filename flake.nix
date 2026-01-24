@@ -24,7 +24,8 @@
             ansibleEnv
             ansible-lint
             python3Packages.proxmoxer
-            python3Packages.requests  # Required by proxmoxer
+            python3Packages.requests        # Required by proxmoxer
+            python3Packages.websocket-client  # Required by proxmox_shell module
             apacheHttpd
             butane    # Convert Butane YAML to Ignition JSON
             skopeo    # Download container images for NFS content prep

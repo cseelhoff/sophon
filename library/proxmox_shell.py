@@ -64,8 +64,8 @@ options:
         required: true
         type: str
         no_log: true
-    pve_csrf_token:
-        description: PVE CSRF prevention token (from /api2/json/access/ticket)
+    proxmox_csrf_token:
+        description: Proxmox CSRF prevention token (from /api2/json/access/ticket)
         required: true
         type: str
         no_log: true
@@ -104,7 +104,7 @@ EXAMPLES = r'''
     api_host: "{{ api_host }}"
     node: "pve"
     pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
-    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+    proxmox_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
     command: uptime
   register: result
 
@@ -118,7 +118,7 @@ EXAMPLES = r'''
     vm_user: root
     vm_password: "{{ vm_root_password }}"
     pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
-    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+    proxmox_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
     command: hostname
   register: result
 
@@ -132,7 +132,7 @@ EXAMPLES = r'''
     vm_user: root
     vm_password: "{{ container_root_password }}"
     pve_auth_cookie: "{{ pve_ticket.json.data.ticket }}"
-    pve_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
+    proxmox_csrf_token: "{{ pve_ticket.json.data.CSRFPreventionToken }}"
     command: cat /etc/os-release
   register: result
 
@@ -442,7 +442,7 @@ def run_module():
         vm_password=dict(type='str', required=False, default=None, no_log=True),
         command=dict(type='str', required=True),
         pve_auth_cookie=dict(type='str', required=True, no_log=True),
-        pve_csrf_token=dict(type='str', required=True, no_log=True),
+        proxmox_csrf_token=dict(type='str', required=True, no_log=True),
         timeout=dict(type='int', default=30),
         validate_certs=dict(type='bool', default=False),
     )
@@ -470,7 +470,7 @@ def run_module():
             api_port=module.params['api_port'],
             node=module.params['node'],
             pve_auth_cookie=module.params['pve_auth_cookie'],
-            pve_csrf_token=module.params['pve_csrf_token'],
+            pve_csrf_token=module.params['proxmox_csrf_token'],
             validate_certs=module.params['validate_certs'],
             vmid=module.params['vmid'],
             vmtype=module.params['vmtype']

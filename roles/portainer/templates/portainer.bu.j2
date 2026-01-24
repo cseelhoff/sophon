@@ -3,8 +3,8 @@ version: 1.5.0
 
 passwd:
   users:
-    - name: {{ coreos_username }}
-      password_hash: {{ coreos_password_hash }}
+    - name: {{ coreos_base_username }}
+      password_hash: {{ coreos_base_password_hash }}
       groups:
         - sudo
         - wheel
@@ -14,7 +14,7 @@ storage:
     - path: /etc/hostname
       mode: 0644
       contents:
-        inline: {{ coreos_vm_name }}
+        inline: {{ coreos_base_vm_name }}
 
     - path: /etc/NetworkManager/system-connections/wired.nmconnection
       mode: 0600
@@ -26,7 +26,7 @@ storage:
           match-device=type:ethernet
 
           [ipv4]
-          address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
+          address1={{ coreos_base_ip }}/{{ coreos_base_cidr }},{{ coreos_base_gateway }}
           method=manual
 
     # Disable systemd-resolved DNS stub listener to free port 53 for CoreDNS
@@ -65,7 +65,7 @@ storage:
           #!/bin/bash
           set -e
           
-          NFS_MOUNT="{{ coreos_nfs_rpm_mount_point }}"
+          NFS_MOUNT="{{ portainer_nfs_rpm_mount_point }}"
           
           # Wait for NFS mount to be available
           for i in {1..30}; do
@@ -83,8 +83,8 @@ storage:
           
           # Install RPMs (qemu-guest-agent and dependencies)
           rpm-ostree install --apply-live --allow-inactive --assumeyes --cache-only \
-            $NFS_MOUNT/{{ coreos_liburing_rpm_filename }} \
-            $NFS_MOUNT/{{ coreos_qemu_guest_agent_rpm_filename }}
+            $NFS_MOUNT/{{ portainer_liburing_rpm_filename }} \
+            $NFS_MOUNT/{{ portainer_qemu_guest_agent_rpm_filename }}
           
           touch /var/lib/qemu-guest-agent-installed.stamp
           
@@ -99,7 +99,7 @@ storage:
           #!/bin/bash
           set -e
           
-          NFS_MOUNT="{{ coreos_nfs_docker_mount_point }}"
+          NFS_MOUNT="{{ portainer_nfs_docker_mount_point }}"
           
           # Wait for NFS mount to be available
           for i in {1..30}; do
@@ -138,9 +138,9 @@ systemd:
 
         [Mount]
         What={{ nfs_server_ip }}:{{ nfs_rpm_packages_path }}
-        Where={{ coreos_nfs_rpm_mount_point }}
+        Where={{ portainer_nfs_rpm_mount_point }}
         Type=nfs4
-        Options={{ coreos_nfs_mount_options }}
+        Options={{ portainer_nfs_mount_options }}
 
         [Install]
         WantedBy=multi-user.target
@@ -156,9 +156,9 @@ systemd:
 
         [Mount]
         What={{ nfs_server_ip }}:{{ nfs_docker_images_path }}
-        Where={{ coreos_nfs_docker_mount_point }}
+        Where={{ portainer_nfs_docker_mount_point }}
         Type=nfs4
-        Options={{ coreos_nfs_mount_options }}
+        Options={{ portainer_nfs_mount_options }}
 
         [Install]
         WantedBy=multi-user.target

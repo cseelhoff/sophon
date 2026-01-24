@@ -218,7 +218,7 @@
             api_user: "{{ proxmox_user | default('root@pam') }}"
             node: "{{ proxmox_node | default('pve') }}"
             pve_auth_cookie: "{{ proxmox_ticket }}"
-            pve_csrf_token: "{{ proxmox_csrf }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
             validate_certs: "{{ proxmox_validate_certs | default(false) }}"
             timeout: 60
             command: "apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1; arp-scan -I {{ proxmox_vnet }} -l 2>/dev/null | awk '/^[0-9]+\\./ {print $1}' | sort -V"
@@ -236,7 +236,7 @@
           ansible.builtin.set_fact:
             _available_ips: >-
               {{
-                range(2, 255) | map('regex_replace', '(.*)', _network_base ~ '.\1')
+                range(2, 255) | map('string') | map('regex_replace', '^(.*)$', _network_base ~ '.\1')
                 | reject('in', _used_ips)
                 | reject('eq', _gateway)
                 | list
@@ -296,7 +296,17 @@
     - name: Set gateway and CIDR from vnet
       ansible.builtin.set_fact:
         coreos_gateway: "{{ _gateway | default(coreos_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
-        coreos_cidr: "{{ _vnet_config.netmask | default('24') | ansible.utils.ipaddr('prefix') | default('24') }}"
+        # Extract CIDR prefix - handle both 'address/prefix' format and plain netmask
+        proxmox_cidr: >-
+          {%- if _vnet_config.cidr is defined and '/' in (_vnet_config.cidr | string) -%}
+            {{ (_vnet_config.cidr | string).split('/')[1] }}
+          {%- elif _vnet_config.cidr is defined -%}
+            {{ _vnet_config.cidr }}
+          {%- elif _vnet_config.netmask is defined -%}
+            {{ (_vnet_config.netmask | ansible.utils.ipaddr('prefix')) | default('24') }}
+          {%- else -%}
+            24
+          {%- endif -%}
       when: coreos_gateway is not defined or coreos_gateway == ""
 
     - name: Set deployment mode variables
@@ -313,7 +323,7 @@
           NFS Server IP:    {{ nfs_server_ip }}
           CoreOS VM IP:     {{ coreos_ip }}
           Gateway:          {{ coreos_gateway }}
-          CIDR:             {{ coreos_cidr | default('24') }}
+          CIDR:             {{ proxmox_cidr | default('24') }}
           Vnet:             {{ proxmox_vnet }}
           ═══════════════════════════════════════════════════════════════════
 
@@ -337,12 +347,14 @@
         headers:
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
         validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-      register: proxmox_storage
+      register: proxmox_storage_query
 
     - name: Set NFS detection facts
       ansible.builtin.set_fact:
-        nfs_storage_exists: "{{ proxmox_storage.json.data | selectattr('type', 'eq', 'nfs') | selectattr('server', 'eq', nfs_server_ip) | list | length > 0 }}"
-        sophon_nfs_exists: "{{ proxmox_storage.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0 }}"
+        nfs_storage_exists: "{{ proxmox_storage_query.json.data | selectattr('type', 'eq', 'nfs') | selectattr('server', 'eq', nfs_server_ip) | list | length > 0 }}"
+        sophon_nfs_exists: "{{ proxmox_storage_query.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0 }}"
+        # Set default storage for VM disks (first available storage that supports images)
+        proxmox_storage: "{{ proxmox_storage | default('local-lvm') }}"
 
     - name: Deploy NFS server if needed
       when:

@@ -17,13 +17,7 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
            │                   │ (on internet) │ Download
            │                   └─────┬─────────┘
            │                         │
-           │                   ══════╪══════ NETWORK SWITCH
-           │                         │
-           │                   ┌─────▼─────────┐
-           │                   │nfs-upload.yml │ Phase 2
-           │                   │ (air-gapped)  │ Upload to
-           │                   └─────┬─────────┘  Proxmox
-           │                         │
+           │                   ══════╪══════ NETWORK SWITCHOVER
            └───────────┬─────────────┘
                        ▼
            ┌───────────────────────┐  EXISTS  ┌──────────────┐
@@ -32,22 +26,29 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
            └───────────┬───────────┘          └──────┬───────┘
                        │ NO                          │
                        ▼                             │
-           ┌───────────────────────┐                 │
-           │  Deploy NFS Server    │ Alpine VM       │
-           │  on Proxmox           │ 100GB disk      │
-           └───────────┬───────────┘                 │
-                       │                             │
-                       ▼                             │
-           ┌───────────────────────┐                 │
-           │  Add NFS Storage to   │                 │
-           │  Proxmox              │                 │
+           ┌──────────────────────────┐              │
+           │  Is NFS server           │              │
+           │  connectable on Proxmox  │─────────┐    │
+           └───────────┬──────────────┘         │    │
+                       │  NO                    │    │
+           ┌───────────────────────┐            │    │
+           │  Deploy NFS Server    │ Alpine VM  │    │
+           │  on Proxmox           │ 100GB disk │    │
+           └───────────┬───────────┘            │    │
+                       │                        │    │
+                       ▼                        │    │
+           ┌───────────────────────┐            │    │
+           │  Add NFS Storage to   │            │    │
+           │  Proxmox              │<───────────┘    │
            └───────────┬───────────┘                 │
                        │                             │
                        └─────────────┬───────────────┘
                                      ▼
                        ┌───────────────────────┐
-                       │  Populate NFS with    │ (online mode)
+                       │  Populate NFS with    │
                        │  images, RPMs, tars   │
+                       │  via proxmox api nfs  │
+                       │  mountpoint           │
                        └───────────┬───────────┘
                                    ▼
                        ┌───────────────────────┐
@@ -174,8 +175,7 @@ ansible-playbook site.yml \
 | `prestage.yml` | Air-gapped Phase 1 - downloads artifacts |
 | `nfs-upload.yml` | Air-gapped Phase 2 - uploads to NFS |
 | `deploy.yml` | Deployment only (skips prestaging) |
-| `coreos.yml` | CoreOS VM only |
-| `bastion.yml` | Bastion VM only |
+| `bastion.yml` | Bastion VM only (CoreOS-based) |
 | `nfs-content.yml` | NFS content population only |
 
 ## Common Options
@@ -201,13 +201,13 @@ sophon/
 ├── bastion.yml           # Bastion VM playbook
 ├── roles/
 │   ├── proxmox/          # Proxmox API interactions
-│   ├── coreos/           # CoreOS VM provisioning
-│   ├── bastion/          # Alpine bastion VM with Cloudflared
-│   ├── nfs_server/       # Alpine NFS server (auto-deployed if needed)
+│   ├── coreos_base/      # Shared CoreOS VM provisioning (fw_cfg ignition)
+│   ├── portainer/        # Portainer VM (depends on coreos_base)
+│   ├── bastion/          # CoreOS bastion VM with Cloudflared (depends on coreos_base)
+│   ├── nfs_server/       # Custom Alpine NFS server (lazy-built qcow2)
 │   ├── nfs_content/      # NFS artifact management
 │   ├── connectivity_check/ # SSH reachability testing
 │   ├── qga_remote_exec/  # QGA-based remote execution
-│   ├── portainer/        # Container management
 │   ├── portainer_stack/  # Stack deployment API
 │   ├── traefik/          # Reverse proxy
 │   ├── coredns/          # DNS server
@@ -307,8 +307,8 @@ kopia_enabled: true
 
 The `site.yml` playbook deploys services in dependency order:
 
-1. **coreos** - Provision base VM
-2. **portainer** - Container management
+1. **nfs_server** - NFS storage VM (if needed)
+2. **portainer** - Portainer VM (CoreOS via coreos_base)
 3. **coredns** - DNS server
 4. **traefik** - Reverse proxy
 5. **homepage** - Dashboard
@@ -393,8 +393,8 @@ nfs_rpm_packages_path: "/exports/nexus/yum-proxy"
 
 ## Bastion VM & Remote Access
 
-When the Ansible controller cannot directly reach the CoreOS VM, the workflow
-automatically deploys an Alpine-based bastion VM on Proxmox.
+When the Ansible controller cannot directly reach the Portainer VM, the workflow
+automatically deploys a CoreOS-based bastion VM on Proxmox (using the shared coreos_base role).
 
 ### Access Methods (in priority order)
 

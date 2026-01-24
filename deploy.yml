@@ -47,13 +47,14 @@
 
   tasks:
     # =========================================================================
-    # Phase 1: Deploy CoreOS VM
+    # Phase 1: Deploy Portainer VM (CoreOS-based)
     # =========================================================================
-    - name: Deploy CoreOS VM
+    - name: Deploy Portainer VM
       ansible.builtin.include_role:
-        name: coreos
+        name: portainer
       vars:
-        coreos_enabled: true
+        coreos_base_ip: "{{ coreos_ip | default(omit) }}"
+        coreos_base_gateway: "{{ coreos_gateway | default(omit) }}"
 
     # =========================================================================
     # Phase 2: Check Connectivity to CoreOS

@@ -1,7 +1,10 @@
 ---
+# =============================================================================
 # Portainer Role Tasks
-# Portainer is deployed at boot via systemd (defined in CoreOS Butane config)
-# This role waits for Portainer and initializes admin password via direct API calls
+# =============================================================================
+# The CoreOS VM is created by the coreos_base dependency (see meta/main.yml).
+# Portainer container is deployed at boot via systemd in the Butane config.
+# This role waits for Portainer and initializes admin password via API.
 
 - name: Generate Portainer admin password
   ansible.builtin.set_fact:
@@ -16,7 +19,7 @@
 
 - name: Wait for Portainer API to be ready
   ansible.builtin.uri:
-    url: "https://{{ coreos_ip }}:{{ portainer_port }}/api/status"
+    url: "https://{{ coreos_base_ip }}:{{ portainer_port }}/api/status"
     method: GET
     validate_certs: false
     status_code: 200
@@ -27,7 +30,7 @@
 
 - name: Initialize Portainer admin user
   ansible.builtin.uri:
-    url: "https://{{ coreos_ip }}:{{ portainer_port }}/api/users/admin/init"
+    url: "https://{{ coreos_base_ip }}:{{ portainer_port }}/api/users/admin/init"
     method: POST
     validate_certs: false
     body_format: json
@@ -44,7 +47,19 @@
 
 - name: Display Portainer access info
   ansible.builtin.debug:
-    msg: >-
-      Portainer {{ portainer_status.json.Version }} ready at https://{{ coreos_ip }}:{{ portainer_port }}
-      | admin / {{ portainer_admin_password }}
-      {{ '(existing admin)' if portainer_init.status == 409 else '' }}
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      Portainer Deployed Successfully
+      ═══════════════════════════════════════════════════════════════════
+      
+      URL: https://{{ coreos_base_ip }}:{{ portainer_port }}
+      Version: {{ portainer_status.json.Version }}
+      
+      Credentials:
+        Username: admin
+        Password: {{ portainer_admin_password }}
+        {{ '(existing admin - password unchanged)' if portainer_init.status == 409 else '' }}
+      
+      VM ID: {{ coreos_base_vmid }}
+      
+      ═══════════════════════════════════════════════════════════════════

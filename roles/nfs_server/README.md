@@ -1,6 +1,6 @@
 # NFS Server Role
 
-Deploys a lightweight Alpine Linux NFS server on Proxmox with automatic disk provisioning and Proxmox storage integration.
+Deploys a diskless Alpine Linux NFS server on Proxmox with automatic disk provisioning and Proxmox storage integration.
 
 ## Purpose
 
@@ -11,11 +11,12 @@ This role is the first step in the Sophon deployment workflow. It creates a shar
 
 ## Features
 
-- **Lightweight**: Alpine Linux (~50MB RAM at idle)
-- **RAM-based**: Runs from memory, minimal disk I/O for OS
+- **Diskless**: OS runs from tiny cloud image (ephemeral), only data disk persists
+- **RAM-based**: Alpine runs from memory, cloud-init reconfigures on every boot
 - **Auto-provisioning**: Unformatted data disk is automatically partitioned and formatted
 - **Nexus-ready**: Pre-creates export paths for Nexus proxy blob stores
 - **Proxmox integration**: Automatically adds NFS storage to Proxmox
+- **Safe formatting**: Only formats data disk if NO partition table exists
 
 ## Requirements
 
@@ -32,24 +33,31 @@ This role is the first step in the Sophon deployment workflow. It creates a shar
 | `nfs_server_vm_name` | `sophon-nfs` | VM name in Proxmox |
 | `nfs_server_cores` | `1` | CPU cores |
 | `nfs_server_memory` | `512` | RAM in MB |
-| `nfs_server_disk_size` | `1G` | OS disk size (Alpine is tiny) |
-| `nfs_server_data_disk_size` | `100G` | Data disk for NFS exports (thin provisioned) |
+| `nfs_server_boot_disk_size` | `1G` | Ephemeral OS disk (stateless) |
+| `nfs_server_data_disk_size` | `100G` | Data disk for NFS exports (thin provisioned, persistent) |
 | `nfs_server_proxmox_storage_name` | `sophon-nfs` | Name in Proxmox storage list |
 | `nfs_server_export_root` | `/export` | Root export path |
 | `nfs_server_export_paths` | See defaults | List of export directories to create |
 
 ## Disk Layout
 
-The NFS server VM has two disks:
+The NFS server uses a diskless architecture:
 
-1. **virtio0** (OS disk, ~1GB): Alpine Linux root filesystem
-2. **virtio1** (Data disk, 100GB thin): NFS exports mounted at `/export`
+1. **ide0** (Boot disk, 1GB): Ephemeral Alpine cloud image (stateless, can be recreated)
+2. **virtio0** (Data disk, 100GB thin): NFS exports mounted at `/export` (persistent)
 
-On first boot, if virtio1 (`/dev/vdb`) is unformatted:
+On every boot, cloud-init:
+1. Installs nfs-utils, xfsprogs, parted
+2. Runs disk provisioning script
+3. Mounts data disk and exports NFS shares
+
+On first boot, if virtio0 (`/dev/vda`) is unformatted:
 1. Creates GPT partition table
 2. Creates single XFS partition
 3. Mounts at `/export`
 4. Creates Nexus directory structure
+
+**Safety**: If disk already has a partition table, it is NEVER reformatted.
 
 ## NFS Exports
 

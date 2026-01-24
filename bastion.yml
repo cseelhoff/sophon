@@ -2,20 +2,19 @@
 # =============================================================================
 # Bastion Deployment Playbook
 # =============================================================================
-# Deploys a privileged access workstation (PAW) on Proxmox for running
-# Sophon playbooks from within the target network.
+# Deploys a CoreOS bastion VM on Proxmox for running Sophon playbooks from
+# within the target network. Uses coreos_base role for VM provisioning.
 #
 # This solves the bootstrapping problem: users who can access Proxmox but
-# don't have a machine inside the network where CoreOS gets deployed.
+# don't have a machine inside the network where the Portainer VM gets deployed.
 #
 # Usage:
-#   # First, deploy the bastion from anywhere with Proxmox access
-#   ansible-playbook bastion.yml -i inventories/production/inventory.yml
+#   ansible-playbook bastion.yml -e proxmox_host=10.1.1.2 -e coreos_base_ip=10.1.1.50
 #
 #   # Then SSH into the bastion and run the main playbook
-#   ssh ansible@<bastion_ip>
+#   ssh admin@<bastion_ip>
 #   cd ~/sophon
-#   ansible-playbook site.yml -i inventories/production/inventory.yml
+#   ansible-playbook site.yml
 #
 # =============================================================================
 
@@ -23,16 +22,12 @@
   hosts: localhost
   gather_facts: true
   vars_prompt:
-    - name: bastion_ip
+    - name: coreos_base_ip
       prompt: "Enter static IP for bastion VM"
       private: false
       default: ""
-    - name: bastion_gateway
+    - name: coreos_base_gateway
       prompt: "Enter gateway IP"
-      private: false
-      default: ""
-    - name: bastion_ssh_public_key
-      prompt: "Enter SSH public key (or leave empty for password-only)"
       private: false
       default: ""
 
@@ -40,9 +35,9 @@
     - name: Validate required variables
       ansible.builtin.assert:
         that:
-          - bastion_ip | length > 0
-          - bastion_gateway | length > 0
-        fail_msg: "bastion_ip and bastion_gateway are required"
+          - coreos_base_ip | length > 0
+          - coreos_base_gateway | length > 0
+        fail_msg: "coreos_base_ip and coreos_base_gateway are required"
 
   roles:
     - role: bastion

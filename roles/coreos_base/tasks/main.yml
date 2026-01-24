@@ -1,11 +1,38 @@
 ---
 # =============================================================================
-# CoreOS VM Deployment on Proxmox
+# CoreOS Base Role - Shared CoreOS VM Creation
 # =============================================================================
+# Creates a CoreOS VM on Proxmox with Ignition configuration passed via fw_cfg.
+# This role is designed to be included by other roles (portainer, bastion) that
+# provide their own Butane templates via coreos_base_butane_template variable.
+#
+# Required Variables:
+#   - coreos_base_vm_name: Name of the VM
+#   - coreos_base_ip: Static IP address
+#   - coreos_base_gateway: Network gateway
+#   - coreos_base_butane_template: Path to Butane template file
+#
+# Output Facts:
+#   - coreos_base_vmid: The VM ID (new or existing)
+#   - coreos_base_vm_created: Boolean, true if VM was newly created
+#   - coreos_base_existing_vm: The existing VM info (if found)
+#
 # Depends on: proxmox role (via meta/main.yml)
 
 # -----------------------------------------------------------------------------
-# VM Existence Check (skip image/ignition prep if VM already exists)
+# Validate Required Variables
+# -----------------------------------------------------------------------------
+- name: Validate required coreos_base variables
+  ansible.builtin.assert:
+    that:
+      - coreos_base_vm_name is defined
+      - coreos_base_ip is defined
+      - coreos_base_gateway is defined
+      - coreos_base_butane_template is defined
+    fail_msg: "Required variables: coreos_base_vm_name, coreos_base_ip, coreos_base_gateway, coreos_base_butane_template"
+
+# -----------------------------------------------------------------------------
+# VM Existence Check
 # -----------------------------------------------------------------------------
 - name: Check if VM with same name already exists
   ansible.builtin.uri:
@@ -18,23 +45,23 @@
 
 - name: Set existing VM fact
   ansible.builtin.set_fact:
-    existing_vm: "{{ existing_vms.json.data | selectattr('name', 'eq', coreos_vm_name) | list | first | default(none) }}"
+    coreos_base_existing_vm: "{{ existing_vms.json.data | selectattr('name', 'eq', coreos_base_vm_name) | list | first | default(none) }}"
 
-- name: Display existing VM info and skip preparation
+- name: Display existing VM info
   ansible.builtin.debug:
-    msg: "Found existing VM '{{ coreos_vm_name }}' with VMID {{ existing_vm.vmid }} - skipping image download and ignition prep"
-  when: existing_vm is not none
+    msg: "Found existing VM '{{ coreos_base_vm_name }}' with VMID {{ coreos_base_existing_vm.vmid }} - skipping creation"
+  when: coreos_base_existing_vm is not none
 
 # -----------------------------------------------------------------------------
-# CoreOS Image and Ignition Preparation (only if VM doesn't exist)
+# CoreOS Image and VM Creation (only if VM doesn't exist)
 # -----------------------------------------------------------------------------
-- name: Prepare CoreOS image and ignition config
-  when: existing_vm is none
+- name: Prepare and create CoreOS VM
+  when: coreos_base_existing_vm is none
   block:
     # -------------------------------------------------------------------------
-    # CoreOS Image: Check if exists on Proxmox via API
+    # CoreOS Image: Check if exists on Proxmox
     # -------------------------------------------------------------------------
-    - name: Check if CoreOS image already exists in Proxmox storage
+    - name: Check if CoreOS image exists in Proxmox storage
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
         method: GET
@@ -48,12 +75,12 @@
         coreos_image_exists: "{{ storage_content.json.data | selectattr('volid', 'search', coreos_qcow2_iso_filename) | list | length > 0 }}"
 
     # -------------------------------------------------------------------------
-    # CoreOS Image: Download and Prepare
+    # CoreOS Image: Download (Online Mode)
     # -------------------------------------------------------------------------
-    - name: Download and prepare CoreOS image
+    - name: Download CoreOS image
       when: not coreos_image_exists
       block:
-        - name: Attempt to download CoreOS image directly on Proxmox
+        - name: Try to download CoreOS image directly on Proxmox
           proxmox_shell:
             api_host: "{{ proxmox_host }}"
             api_port: "{{ proxmox_port }}"
@@ -71,12 +98,8 @@
           register: proxmox_download
           failed_when: false
 
-        - name: Set Proxmox download success fact
-          ansible.builtin.set_fact:
-            proxmox_download_success: "{{ 'SUCCESS' in (proxmox_download.stdout | default('')) }}"
-
         - name: Fallback to local download and upload
-          when: not proxmox_download_success
+          when: "'SUCCESS' not in (proxmox_download.stdout | default(''))"
           block:
             - name: Ensure local download directory exists
               ansible.builtin.file:
@@ -84,7 +107,7 @@
                 state: directory
                 mode: "0755"
 
-            - name: Check if local CoreOS ISO image exists
+            - name: Check if local CoreOS ISO exists
               ansible.builtin.stat:
                 path: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_iso_filename }}"
               register: local_iso_stat
@@ -92,7 +115,7 @@
             - name: Download and prepare CoreOS image locally
               when: not local_iso_stat.stat.exists
               block:
-                - name: Check if compressed image already exists locally
+                - name: Check if compressed image exists locally
                   ansible.builtin.stat:
                     path: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_xz_filename }}"
                   register: local_xz_stat
@@ -104,7 +127,7 @@
                     mode: "0644"
                   when: not local_xz_stat.stat.exists
 
-                - name: Check if uncompressed qcow2 already exists
+                - name: Check if uncompressed qcow2 exists
                   ansible.builtin.stat:
                     path: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_img_filename }}"
                   register: local_qcow2_stat
@@ -114,14 +137,14 @@
                     cmd: "xz -dk {{ coreos_local_download_dir }}/{{ coreos_qcow2_xz_filename }}"
                   when: not local_qcow2_stat.stat.exists
 
-                - name: Rename qcow2 to iso extension for Proxmox visibility
+                - name: Create ISO-named copy for Proxmox visibility
                   ansible.builtin.copy:
                     src: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_img_filename }}"
                     dest: "{{ coreos_local_download_dir }}/{{ coreos_qcow2_iso_filename }}"
                     remote_src: true
                     mode: "0644"
 
-            - name: Upload CoreOS image to Proxmox via curl
+            - name: Upload CoreOS image to Proxmox
               ansible.builtin.command:
                 cmd: >-
                   curl -k -s
@@ -146,7 +169,7 @@
               retries: 60
               delay: 10
 
-            - name: Create hardlink from qcow2.iso to qcow2 on Proxmox
+            - name: Create hardlink for qcow2 access on Proxmox
               proxmox_shell:
                 api_host: "{{ proxmox_host }}"
                 api_port: "{{ proxmox_port }}"
@@ -163,78 +186,7 @@
               failed_when: "'SUCCESS' not in (hardlink_result.stdout | default(''))"
 
     # -------------------------------------------------------------------------
-    # NFS Content Population (Online Mode)
-    # -------------------------------------------------------------------------
-    # In online mode, Proxmox downloads container images and RPMs to NFS shares
-    # so CoreOS can load them at boot. This block is skipped in air-gapped mode
-    # where the prestage/nfs_upload roles handle this instead.
-    - name: Populate NFS shares with container images and RPMs (online mode)
-      when: not (airgapped_mode | default(false))
-      block:
-        - name: Check if NFS shares are accessible from Proxmox
-          proxmox_shell:
-            api_host: "{{ proxmox_host }}"
-            api_port: "{{ proxmox_port }}"
-            api_user: "{{ proxmox_user }}"
-            node: "{{ proxmox_node }}"
-            pve_auth_cookie: "{{ proxmox_ticket }}"
-            proxmox_csrf_token: "{{ proxmox_csrf }}"
-            timeout: 30
-            command: >-
-              ping -c 1 -W 2 {{ nfs_server_ip }} && echo "NFS_REACHABLE" || echo "NFS_UNREACHABLE"
-          register: nfs_check
-          failed_when: false
-
-        - name: Download and stage container images on NFS (via Proxmox)
-          proxmox_shell:
-            api_host: "{{ proxmox_host }}"
-            api_port: "{{ proxmox_port }}"
-            api_user: "{{ proxmox_user }}"
-            node: "{{ proxmox_node }}"
-            pve_auth_cookie: "{{ proxmox_ticket }}"
-            proxmox_csrf_token: "{{ proxmox_csrf }}"
-            timeout: 600
-            command: >-
-              mkdir -p {{ nfs_docker_images_path }} &&
-              for img in {{ coreos_container_images | map(attribute='name') | zip(coreos_container_images | map(attribute='tag')) | map('join', ':') | join(' ') }}; do
-                tarname=$(echo "$img" | sed 's|.*/||; s|:.*||').tar;
-                if [ ! -f "{{ nfs_docker_images_path }}/$tarname" ]; then
-                  skopeo copy docker://docker.io/$img docker-archive:{{ nfs_docker_images_path }}/$tarname 2>/dev/null || true;
-                fi;
-              done &&
-              echo "IMAGES_STAGED"
-          register: images_stage
-          when: "'NFS_REACHABLE' in (nfs_check.stdout | default(''))"
-          failed_when: false
-
-        - name: Download and stage RPMs on NFS (via Proxmox)
-          proxmox_shell:
-            api_host: "{{ proxmox_host }}"
-            api_port: "{{ proxmox_port }}"
-            api_user: "{{ proxmox_user }}"
-            node: "{{ proxmox_node }}"
-            pve_auth_cookie: "{{ proxmox_ticket }}"
-            proxmox_csrf_token: "{{ proxmox_csrf }}"
-            timeout: 300
-            command: >-
-              mkdir -p {{ nfs_rpm_packages_path }} &&
-              cd {{ nfs_rpm_packages_path }} &&
-              if [ ! -f "{{ coreos_qemu_guest_agent_rpm_filename }}" ]; then
-                dnf download --resolve --alldeps qemu-guest-agent --releasever={{ coreos_fedora_version | default('43') }} 2>/dev/null || true;
-              fi &&
-              echo "RPMS_STAGED"
-          register: rpms_stage
-          when: "'NFS_REACHABLE' in (nfs_check.stdout | default(''))"
-          failed_when: false
-
-        - name: Display NFS staging status
-          ansible.builtin.debug:
-            msg: >-
-              NFS Content Staging: {{ 'SUCCESS' if 'IMAGES_STAGED' in (images_stage.stdout | default('')) and 'RPMS_STAGED' in (rpms_stage.stdout | default('')) else 'SKIPPED or PARTIAL - check NFS connectivity' }}
-          when: "'NFS_REACHABLE' in (nfs_check.stdout | default(''))"
-
-    # -------------------------------------------------------------------------
-    # Ignition Configuration (via Butane) - RPMs and images loaded from NFS
+    # Ignition Configuration (via Butane)
     # -------------------------------------------------------------------------
     - name: Ensure local cache directory exists
       ansible.builtin.file:
@@ -242,27 +194,23 @@
         state: directory
         mode: "0755"
 
-    - name: Generate Butane config
+    - name: Generate Butane config from caller's template
       ansible.builtin.template:
-        src: coreos.bu.j2
-        dest: "{{ coreos_local_cache_dir }}/coreos.bu"
+        src: "{{ coreos_base_butane_template }}"
+        dest: "{{ coreos_local_cache_dir }}/{{ coreos_base_vm_name }}.bu"
         mode: "0644"
 
-    - name: Convert Butane to Ignition
+    - name: Convert Butane to Ignition JSON
       ansible.builtin.command:
-        cmd: "butane --strict {{ coreos_local_cache_dir }}/coreos.bu"
+        cmd: "butane --strict {{ coreos_local_cache_dir }}/{{ coreos_base_vm_name }}.bu"
       register: ignition_result
       changed_when: false
 
-    - name: Set ignition JSON fact
-      ansible.builtin.set_fact:
-        ignition_json: "{{ ignition_result.stdout }}"
-
     - name: Base64 encode the ignition config
       ansible.builtin.set_fact:
-        ignition_b64: "{{ ignition_json | b64encode }}"
+        ignition_b64: "{{ ignition_result.stdout | b64encode }}"
 
-    - name: Create wrapper ignition config that merges the base64 config
+    - name: Create wrapper ignition config with merge directive
       ansible.builtin.set_fact:
         wrapper_config:
           ignition:
@@ -271,25 +219,23 @@
               merge:
                 - source: "data:;base64,{{ ignition_b64 }}"
 
-    - name: Convert wrapper to compact JSON (no spaces)
+    - name: Prepare fw_cfg args string (escape for QEMU)
       ansible.builtin.set_fact:
-        wrapper_json: "{{ wrapper_config | to_json | regex_replace(': ', ':') | regex_replace(', ', ',') }}"
-
-    - name: Escape quotes in wrapper JSON
-      ansible.builtin.set_fact:
-        wrapper_quoted: "{{ wrapper_json | regex_replace('\"', '\\\\\"') }}"
-
-    - name: Double commas inside the JSON value only
-      ansible.builtin.set_fact:
-        json_escaped: "{{ wrapper_quoted | regex_replace(',', ',,') }}"
-
-    - name: Build args string (single comma for fw_cfg separator, doubled commas in JSON)
-      ansible.builtin.set_fact:
-        args_escaped: "-fw_cfg name=opt/com.coreos/config,string={{ json_escaped }}"
+        args_escaped: "-fw_cfg name=opt/com.coreos/config,string={{ wrapper_config | to_json | regex_replace(': ', ':') | regex_replace(', ', ',') | regex_replace('\"', '\\\\\"') | regex_replace(',', ',,') }}"
 
     # -------------------------------------------------------------------------
-    # VM Creation (no CD-ROM - RPMs and images loaded from NFS)
+    # VM Creation
     # -------------------------------------------------------------------------
+    - name: Build virtio disk configuration
+      ansible.builtin.set_fact:
+        coreos_virtio_disks:
+          virtio0: "{{ proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_base_disk_size }}"
+
+    - name: Add data disk if specified
+      ansible.builtin.set_fact:
+        coreos_virtio_disks: "{{ coreos_virtio_disks | combine({'virtio1': proxmox_storage ~ ':' ~ (coreos_base_data_disk_size | regex_replace('[Gg]$', ''))}) }}"
+      when: coreos_base_data_disk_size | default('') | length > 0
+
     - name: Create CoreOS VM on Proxmox
       community.proxmox.proxmox_kvm:
         api_host: "{{ proxmox_host }}"
@@ -297,30 +243,33 @@
         api_user: "{{ proxmox_user }}"
         api_password: "{{ proxmox_password }}"
         node: "{{ proxmox_node }}"
-        name: "{{ coreos_vm_name }}"
-        cores: "{{ coreos_cores }}"
-        memory: "{{ coreos_memory }}"
+        name: "{{ coreos_base_vm_name }}"
+        cores: "{{ coreos_base_cores }}"
+        memory: "{{ coreos_base_memory }}"
         ostype: "l26"
         onboot: true
         autostart: true
         agent: "enabled=1"
         net:
-          net0: "virtio,bridge=vmbr0"
+          net0: "virtio,bridge={{ proxmox_vnet | default('vmbr0') }}"
         state: present
         timeout: 600
-        virtio:
-          virtio0: "{{ proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
+        virtio: "{{ coreos_virtio_disks }}"
         boot: "order=virtio0"
         args: "{{ args_escaped }}"
       register: vm_create
 
 # -----------------------------------------------------------------------------
-# Post-Creation: Start and Verify VM
+# Set Output Facts
 # -----------------------------------------------------------------------------
-- name: Set VM ID fact
+- name: Set coreos_base output facts
   ansible.builtin.set_fact:
-    coreos_vmid: "{{ existing_vm.vmid if existing_vm is not none else vm_create.vmid }}"
+    coreos_base_vmid: "{{ coreos_base_existing_vm.vmid if coreos_base_existing_vm is not none else vm_create.vmid }}"
+    coreos_base_vm_created: "{{ coreos_base_existing_vm is none }}"
 
+# -----------------------------------------------------------------------------
+# Start VM and Wait for Guest Agent
+# -----------------------------------------------------------------------------
 - name: Start CoreOS VM
   community.proxmox.proxmox_kvm:
     api_host: "{{ proxmox_host }}"
@@ -328,12 +277,12 @@
     api_user: "{{ proxmox_user }}"
     api_password: "{{ proxmox_password }}"
     node: "{{ proxmox_node }}"
-    vmid: "{{ coreos_vmid }}"
+    vmid: "{{ coreos_base_vmid }}"
     state: started
 
 - name: Wait for VM to boot and qemu-guest-agent to respond
   ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ coreos_vmid }}/agent/ping"
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ coreos_base_vmid }}/agent/ping"
     method: POST
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
@@ -345,3 +294,18 @@
   retries: 60
   delay: 10
   failed_when: false
+
+- name: Display CoreOS VM summary
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      CoreOS VM {{ 'created' if coreos_base_vm_created else 'found' }}
+      ═══════════════════════════════════════════════════════════════════
+      
+      Name: {{ coreos_base_vm_name }}
+      VMID: {{ coreos_base_vmid }}
+      IP: {{ coreos_base_ip }}
+      Status: {{ 'Created new VM' if coreos_base_vm_created else 'Using existing VM' }}
+      Guest Agent: {{ 'Responding' if agent_ping.status == 200 else 'Not responding (may still be booting)' }}
+      
+      ═══════════════════════════════════════════════════════════════════
