@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# Minimal Alpine Linux VM image builder (loop devices only, no NBD)
+# Usage: build-alpine-image [options] <output-image>
+set -euo pipefail
+
+# Defaults
+IMAGE_SIZE="2G"
+IMAGE_FORMAT="raw"
+ALPINE_VERSION="3.21"
+PACKAGES=""
+CHROOT_SCRIPT=""
+MIRROR="https://dl-cdn.alpinelinux.org/alpine"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options] <output-image>
+
+Options:
+  --image-size SIZE     Disk image size (default: 2G)
+  --image-format FMT    Output format: raw or qcow2 (default: raw)
+  --branch VERSION      Alpine version, e.g. v3.21 (default: v3.21)
+  --packages PKGS       Space-separated list of packages to install
+  --script-chroot FILE  Script to run inside chroot
+  --mirror URL          Alpine mirror URL
+  -h, --help            Show this help
+
+Example:
+  $(basename "$0") --image-size 2G --branch v3.21 \\
+    --packages "qemu-guest-agent nfs-utils" \\
+    --script-chroot setup.sh alpine.raw
+EOF
+    exit 1
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --image-size) IMAGE_SIZE="$2"; shift 2 ;;
+        --image-format) IMAGE_FORMAT="$2"; shift 2 ;;
+        --branch) ALPINE_VERSION="${2#v}"; shift 2 ;;
+        --packages) PACKAGES="$2"; shift 2 ;;
+        --script-chroot) CHROOT_SCRIPT="$2"; shift 2 ;;
+        --mirror) MIRROR="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        -*) echo "Unknown option: $1"; usage ;;
+        *) OUTPUT_IMAGE="$1"; shift ;;
+    esac
+done
+
+[[ -z "${OUTPUT_IMAGE:-}" ]] && { echo "Error: No output image specified"; usage; }
+
+# Temp files
+WORK_DIR=$(mktemp -d)
+RAW_IMAGE="$WORK_DIR/disk.raw"
+MOUNT_DIR="$WORK_DIR/rootfs"
+APK_STATIC="$WORK_DIR/apk.static"
+LOOP_DEV=""
+NEED_MBR_REATTACH=""
+
+cleanup() {
+    echo "==> Cleaning up..."
+    sync 2>/dev/null || true
+    if [[ -d "$MOUNT_DIR" ]]; then
+        umount -R "$MOUNT_DIR" 2>/dev/null || true
+    fi
+    if [[ -n "$LOOP_DEV" ]] && [[ -e "$LOOP_DEV" ]]; then
+        losetup -d "$LOOP_DEV" 2>/dev/null || true
+    fi
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+echo "==> Creating ${IMAGE_SIZE} raw disk image"
+truncate -s "$IMAGE_SIZE" "$RAW_IMAGE"
+
+echo "==> Setting up loop device for partitioning"
+LOOP_DEV=$(losetup --find --show "$RAW_IMAGE")
+echo "    Using $LOOP_DEV"
+
+echo "==> Creating partition table"
+# Parted may warn about kernel not being informed - this is OK since we detach and reattach
+set +e
+parted -s "$LOOP_DEV" mklabel msdos
+parted -s "$LOOP_DEV" mkpart primary ext4 1MiB 100%
+parted -s "$LOOP_DEV" set 1 boot on
+set -e
+
+echo "==> Reattaching with partition scanning"
+losetup -d "$LOOP_DEV" || true
+sleep 1
+LOOP_DEV=$(losetup --find --show --partscan "$RAW_IMAGE")
+echo "    Reattached as $LOOP_DEV"
+sleep 1
+
+# Determine partition device name
+if [[ -e "${LOOP_DEV}p1" ]]; then
+    PART_DEV="${LOOP_DEV}p1"
+else
+    # Manual offset calculation as fallback
+    echo "    Partition device not found, using manual offset"
+    PART_OFFSET=$((1024 * 1024))  # 1MiB in bytes
+    PART_SIZE=$(( $(stat -c%s "$RAW_IMAGE") - PART_OFFSET ))
+    losetup -d "$LOOP_DEV"
+    LOOP_DEV=$(losetup --find --show --offset "$PART_OFFSET" --sizelimit "$PART_SIZE" "$RAW_IMAGE")
+    PART_DEV="$LOOP_DEV"
+    # We'll need to reattach the whole disk for MBR later
+    NEED_MBR_REATTACH=1
+fi
+
+echo "==> Formatting partition ($PART_DEV)"
+mkfs.ext4 -q -L alpine-root "$PART_DEV"
+
+echo "==> Mounting filesystem"
+mkdir -p "$MOUNT_DIR"
+mount "$PART_DEV" "$MOUNT_DIR"
+
+echo "==> Downloading static apk"
+APK_URL="${MIRROR}/v${ALPINE_VERSION}/main/x86_64/"
+APK_PKG=$(curl -fsSL "$APK_URL" | grep -oP 'apk-tools-static-[\d.]+-r\d+\.apk' | head -1)
+curl -fsSL "${APK_URL}${APK_PKG}" | tar -xz -C "$WORK_DIR" sbin/apk.static --strip-components=1
+chmod +x "$APK_STATIC"
+
+echo "==> Installing Alpine base system"
+mkdir -p "$MOUNT_DIR/etc/apk"
+cat > "$MOUNT_DIR/etc/apk/repositories" <<EOF
+${MIRROR}/v${ALPINE_VERSION}/main
+${MIRROR}/v${ALPINE_VERSION}/community
+EOF
+
+"$APK_STATIC" -X "${MIRROR}/v${ALPINE_VERSION}/main" \
+    -U --allow-untrusted --root "$MOUNT_DIR" --initdb \
+    add alpine-base linux-lts linux-firmware-none mkinitfs
+
+echo "==> Installing additional packages"
+if [[ -n "$PACKAGES" ]]; then
+    # shellcheck disable=SC2086
+    "$APK_STATIC" --root "$MOUNT_DIR" add $PACKAGES syslinux
+else
+    "$APK_STATIC" --root "$MOUNT_DIR" add syslinux
+fi
+
+echo "==> Configuring system"
+# Mount pseudo-filesystems for chroot
+mount -t proc proc "$MOUNT_DIR/proc"
+mount -t sysfs sys "$MOUNT_DIR/sys"
+mount -t devtmpfs dev "$MOUNT_DIR/dev"
+
+# Copy resolv.conf
+cp /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf" 2>/dev/null || true
+
+# Create fstab
+cat > "$MOUNT_DIR/etc/fstab" <<'EOF'
+LABEL=alpine-root  /     ext4  defaults,noatime  0  1
+EOF
+
+# Run chroot script if provided
+if [[ -n "$CHROOT_SCRIPT" ]] && [[ -f "$CHROOT_SCRIPT" ]]; then
+    echo "==> Running chroot customization script"
+    cp "$CHROOT_SCRIPT" "$MOUNT_DIR/tmp/setup.sh"
+    chmod +x "$MOUNT_DIR/tmp/setup.sh"
+    chroot "$MOUNT_DIR" /tmp/setup.sh
+    rm -f "$MOUNT_DIR/tmp/setup.sh"
+fi
+
+echo "==> Generating initramfs"
+# Find kernel version
+KERNEL_VERSION=$(ls "$MOUNT_DIR/lib/modules" | head -1)
+echo "    Kernel version: $KERNEL_VERSION"
+
+# Verify kernel files exist
+ls -la "$MOUNT_DIR/boot/" || true
+echo "    Modules in $MOUNT_DIR/lib/modules/$KERNEL_VERSION:"
+ls "$MOUNT_DIR/lib/modules/$KERNEL_VERSION/" | head -5 || true
+
+# Alpine's default mkinitfs.conf should include virtio, but let's be explicit
+# Modify config to ensure virtio drivers are included
+sed -i 's/^features=.*/features="ata base ide scsi usb virtio ext4"/' "$MOUNT_DIR/etc/mkinitfs/mkinitfs.conf" 2>/dev/null || \
+    echo 'features="ata base ide scsi usb virtio ext4"' > "$MOUNT_DIR/etc/mkinitfs/mkinitfs.conf"
+
+# Generate initramfs
+chroot "$MOUNT_DIR" mkinitfs "$KERNEL_VERSION"
+
+# Verify initramfs was created
+echo "    Boot files after mkinitfs:"
+ls -la "$MOUNT_DIR/boot/"
+
+echo "==> Installing bootloader"
+KERNEL_VERSION=$(ls "$MOUNT_DIR/lib/modules" | head -1)
+
+# Create extlinux.conf in /boot (not /boot/extlinux)
+cat > "$MOUNT_DIR/boot/extlinux.conf" <<EOF
+DEFAULT alpine
+PROMPT 0
+TIMEOUT 20
+
+LABEL alpine
+    LINUX vmlinuz-lts
+    INITRD initramfs-lts
+    APPEND root=LABEL=alpine-root modules=ext4 rootfstype=ext4 console=tty0 console=ttyS0,115200n8
+EOF
+
+# Install extlinux to /boot directly
+chroot "$MOUNT_DIR" extlinux --install /boot
+
+# Copy required .c32 modules to /boot (same directory as ldlinux.sys)
+cp "$MOUNT_DIR/usr/share/syslinux/ldlinux.c32" "$MOUNT_DIR/boot/"
+cp "$MOUNT_DIR/usr/share/syslinux/libutil.c32" "$MOUNT_DIR/boot/" 2>/dev/null || true
+cp "$MOUNT_DIR/usr/share/syslinux/libcom32.c32" "$MOUNT_DIR/boot/" 2>/dev/null || true
+
+# Copy mbr.bin before unmounting (we'll need it after)
+echo "==> Copying MBR code"
+cp "$MOUNT_DIR/usr/share/syslinux/mbr.bin" "$WORK_DIR/mbr.bin"
+ls -la "$WORK_DIR/mbr.bin"
+
+# Unmount pseudo-filesystems before writing MBR
+umount "$MOUNT_DIR/dev" 2>/dev/null || true
+umount "$MOUNT_DIR/sys" 2>/dev/null || true
+umount "$MOUNT_DIR/proc" 2>/dev/null || true
+
+# Unmount the filesystem so we can write MBR safely
+echo "==> Unmounting filesystem for MBR write"
+sync
+umount "$MOUNT_DIR"
+
+# Find the base loop device (the whole disk, not a partition)
+# LOOP_DEV might be /dev/loop0 (if partscan worked) or the partition device (if fallback was used)
+if [[ "${NEED_MBR_REATTACH:-}" == "1" ]]; then
+    # In fallback mode, we need to detach and reattach the whole disk
+    echo "==> Reattaching whole disk for MBR write"
+    losetup -d "$LOOP_DEV" 2>/dev/null || true
+    DISK_LOOP=$(losetup --find --show "$RAW_IMAGE")
+else
+    # Partscan mode - LOOP_DEV is already the base disk device
+    DISK_LOOP="$LOOP_DEV"
+fi
+
+echo "==> Writing MBR to $DISK_LOOP"
+dd if="$WORK_DIR/mbr.bin" of="$DISK_LOOP" bs=440 count=1 conv=notrunc
+sync
+
+# Cleanup
+echo "==> Detaching loop device"
+losetup -d "$DISK_LOOP" 2>/dev/null || true
+# Convert to final format
+if [[ "$IMAGE_FORMAT" == "qcow2" ]]; then
+    echo "==> Converting to qcow2"
+    qemu-img convert -f raw -O qcow2 -c "$RAW_IMAGE" "$OUTPUT_IMAGE"
+else
+    echo "==> Moving raw image to output"
+    mv "$RAW_IMAGE" "$OUTPUT_IMAGE"
+fi
+
+echo "==> Build complete: $OUTPUT_IMAGE"

@@ -118,52 +118,49 @@
       when: airgapped_mode | default(false)
 
     # -------------------------------------------------------------------------
-    # Build Alpine NFS Image (if no cached image)
+    # Check if image exists on Proxmox
+    # -------------------------------------------------------------------------
+    - name: Check if image already exists on Proxmox
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/content"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: storage_content
+
+    - name: Set image exists on Proxmox fact
+      ansible.builtin.set_fact:
+        nfs_image_on_proxmox: "{{ storage_content.json.data | selectattr('volid', 'search', nfs_server_image_filename) | list | length > 0 }}"
+
+    # -------------------------------------------------------------------------
+    # Build Alpine NFS Image on Controller (uses loop devices, no NBD)
     # -------------------------------------------------------------------------
     - name: Build NFS Alpine image on controller
       when:
+        - not nfs_image_on_proxmox
         - not cached_image.stat.exists
-        - not (airgapped_mode | default(false) and prestaged_image.stat.exists | default(false))
+        - not (airgapped_mode | default(false))
       block:
-        - name: Ensure build directory exists
+        - name: Create build directory
           ansible.builtin.file:
             path: "{{ nfs_server_build_dir }}"
             state: directory
             mode: "0755"
           delegate_to: localhost
 
-        - name: Download alpine-make-vm-image script
-          ansible.builtin.get_url:
-            url: "{{ nfs_server_alpine_make_vm_image_url }}"
-            dest: "{{ nfs_server_alpine_make_vm_image_path }}"
+        - name: Copy build-alpine-image script
+          ansible.builtin.copy:
+            src: build-alpine-image
+            dest: "{{ nfs_server_build_dir }}/build-alpine-image"
             mode: "0755"
           delegate_to: localhost
 
-        - name: Copy setup-nfs-data init script
+        - name: Create chroot customization script
           ansible.builtin.copy:
-            src: setup-nfs-data
-            dest: "{{ nfs_server_build_dir }}/setup-nfs-data"
-            mode: "0755"
-          delegate_to: localhost
-
-        - name: Create Alpine NFS image build script
-          ansible.builtin.copy:
-            dest: "{{ nfs_server_build_dir }}/build-nfs-image.sh"
+            dest: "{{ nfs_server_build_dir }}/nfs-chroot-setup.sh"
             mode: "0755"
             content: |
-              #!/bin/bash
-              set -ex
-              
-              cd "{{ nfs_server_build_dir }}"
-              
-              # Build the Alpine NFS image
-              sudo "{{ nfs_server_alpine_make_vm_image_path }}" \
-                --image-format qcow2 \
-                --image-size {{ nfs_server_os_disk_size }} \
-                --branch v{{ nfs_server_alpine_version }} \
-                --packages "qemu-guest-agent nfs-utils parted e2fsprogs openrc util-linux" \
-                --script-chroot /dev/stdin \
-                "{{ nfs_server_image_cache_path }}" <<'CHROOT_SCRIPT'
               #!/bin/sh
               set -ex
               
@@ -184,29 +181,33 @@
               # Configure hostname
               echo "sophon-nfs" > /etc/hostname
               
-              # Configure network interface (will be overridden by static config)
-              cat > /etc/network/interfaces <<'EOF'
+              # Configure network interface (DHCP initially, static via QGA later)
+              cat > /etc/network/interfaces <<'IFACE'
               auto lo
               iface lo inet loopback
               
               auto eth0
               iface eth0 inet dhcp
-              EOF
-              
-              CHROOT_SCRIPT
-              
-              # Fix ownership
-              sudo chown $(id -u):$(id -g) "{{ nfs_server_image_cache_path }}"
-              
-              echo "SUCCESS: NFS Alpine image built at {{ nfs_server_image_cache_path }}"
+              IFACE
           delegate_to: localhost
 
-        - name: Build NFS Alpine image (requires sudo)
-          ansible.builtin.command:
-            cmd: "{{ nfs_server_build_dir }}/build-nfs-image.sh"
+        - name: Build Alpine NFS qcow2 image
+          ansible.builtin.shell:
+            cmd: >-
+              sudo --preserve-env=SSL_CERT_FILE,NIX_SSL_CERT_FILE
+              {{ nfs_server_build_dir }}/build-alpine-image
+              --image-size {{ nfs_server_os_disk_size }}
+              --image-format qcow2
+              --branch v{{ nfs_server_alpine_version }}
+              --packages "qemu-guest-agent nfs-utils parted e2fsprogs openrc util-linux"
+              --script-chroot {{ nfs_server_build_dir }}/nfs-chroot-setup.sh
+              {{ nfs_server_image_cache_path }}
+            creates: "{{ nfs_server_image_cache_path }}"
+          environment:
+            SSL_CERT_FILE: "{{ lookup('env', 'SSL_CERT_FILE') | default('/etc/ssl/certs/ca-certificates.crt', true) }}"
+            NIX_SSL_CERT_FILE: "{{ lookup('env', 'NIX_SSL_CERT_FILE') | default('', true) }}"
           delegate_to: localhost
           register: build_result
-          changed_when: "'SUCCESS' in build_result.stdout"
 
     # -------------------------------------------------------------------------
     # Use Prestaged Image (Air-gapped Mode)
@@ -224,52 +225,70 @@
         - not cached_image.stat.exists
 
     # -------------------------------------------------------------------------
-    # Upload Image to Proxmox
+    # Upload Image to Proxmox (common path for both build and prestaged)
     # -------------------------------------------------------------------------
-    - name: Check if image exists on Proxmox
+    - name: Check if image exists on Proxmox ISO storage
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/content"
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/content?content=iso"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
         validate_certs: "{{ proxmox_validate_certs }}"
-      register: storage_content
+      register: iso_content
+      failed_when: false
 
     - name: Set image exists on Proxmox fact
       ansible.builtin.set_fact:
-        nfs_image_on_proxmox: "{{ storage_content.json.data | selectattr('volid', 'search', nfs_server_image_filename) | list | length > 0 }}"
+        nfs_image_on_proxmox: "{{ (iso_content.json.data | default([]) | selectattr('volid', 'search', nfs_server_image_filename + '.iso') | list | length > 0) if iso_content.status == 200 else false }}"
 
     - name: Upload NFS Alpine image to Proxmox
       when: not nfs_image_on_proxmox
       block:
-        - name: Upload image via curl
-          ansible.builtin.command:
+        - name: Upload image via curl (as ISO for local storage compatibility)
+          ansible.builtin.shell:
             cmd: >-
               curl -k -s
               -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
               -H "CSRFPreventionToken: {{ proxmox_csrf }}"
               -F "content=iso"
-              -F "filename=@{{ nfs_server_image_cache_path }};type=application/octet-stream;filename={{ nfs_server_image_filename }}"
+              -F "filename=@{{ nfs_server_image_cache_path }};filename={{ nfs_server_image_filename }}.iso"
               "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/upload"
           register: upload_result
-          changed_when: "'UPID' in upload_result.stdout"
-          failed_when: "'UPID' not in upload_result.stdout"
           delegate_to: localhost
 
-        - name: Wait for upload to complete
+        - name: Debug upload result
+          ansible.builtin.debug:
+            var: upload_result.stdout
+
+        - name: Parse upload UPID
+          ansible.builtin.set_fact:
+            upload_upid: "{{ (upload_result.stdout | from_json).data | default('') }}"
+          when: upload_result.stdout is defined and 'data' in upload_result.stdout
+
+        - name: Fail if upload returned error
+          ansible.builtin.fail:
+            msg: "Upload failed: {{ upload_result.stdout }}"
+          when: upload_upid is not defined or upload_upid == ''
+
+        - name: Wait for upload task to complete
           ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ nfs_server_image_storage }}/content"
+            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/tasks/{{ upload_upid | urlencode }}/status"
             method: GET
             headers:
               Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
             validate_certs: "{{ proxmox_validate_certs }}"
-          register: upload_check
-          until: upload_check.json.data | selectattr('volid', 'search', nfs_server_image_filename) | list | length > 0
-          retries: 30
+          register: task_status
+          until: task_status.json.data.status == 'stopped'
+          retries: 60
           delay: 5
 
+        - name: Check upload task result
+          ansible.builtin.fail:
+            msg: "Upload task failed: {{ task_status.json.data.exitstatus | default('unknown') }}"
+          when: task_status.json.data.exitstatus | default('OK') != 'OK'
+
     # -------------------------------------------------------------------------
-    # VM Creation
+    # VM Creation (import-from uses full path with .iso extension)
     # -------------------------------------------------------------------------
     - name: Create NFS Server VM on Proxmox
       community.proxmox.proxmox_kvm:
@@ -289,7 +308,7 @@
         net:
           net0: "virtio,bridge={{ proxmox_vnet | default('vmbr0') }}"
         virtio:
-          virtio0: "{{ proxmox_storage }}:0,import-from={{ nfs_server_image_storage_path }}/{{ nfs_server_image_filename }},size={{ nfs_server_os_disk_size }}"
+          virtio0: "{{ proxmox_storage }}:0,import-from={{ nfs_server_image_storage_path }}/{{ nfs_server_image_filename }}.iso,size={{ nfs_server_os_disk_size }}"
           virtio1: "{{ proxmox_storage }}:{{ nfs_server_data_disk_size | regex_replace('[Gg]$', '') }}"
         boot: "order=virtio0"
         state: present

@@ -33,6 +33,9 @@
             qemu      # qemu-img for building Alpine NFS qcow2 images
             e2fsprogs # mkfs.ext4 for Alpine image build
             parted    # Disk partitioning for Alpine image build
+            syslinux  # extlinux bootloader for Alpine image
+            util-linux # losetup for loop devices
+            unixtools.xxd # Hex dump utility for debugging
           ];
 
           shellHook = ''
