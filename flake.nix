@@ -26,9 +26,9 @@
             python3Packages.proxmoxer
             python3Packages.requests  # Required by proxmoxer
             apacheHttpd
-            podman
             butane    # Convert Butane YAML to Ignition JSON
-            cdrkit    # genisoimage for creating ISOs
+            skopeo    # Download container images for NFS content prep
+            dnf5      # Download RPM packages with dependency resolution
           ];
 
           shellHook = ''

@@ -1,0 +1,96 @@
+---
+# =============================================================================
+# Bastion Role - Privileged Access Workstation
+# =============================================================================
+# Deploys an Alpine Linux VM with Cloudflared tunnel for remote access to
+# the Sophon network. This provides a jump host for running Ansible playbooks
+# when the operator doesn't have direct network access to the target VMs.
+
+# Enable/disable this role
+bastion_enabled: true
+
+# =============================================================================
+# Bastion VM Configuration
+# =============================================================================
+bastion_vm_name: "sophon-bastion"
+bastion_cores: 2
+bastion_memory: 1024
+bastion_disk_size: "8G"
+
+# User account to create
+bastion_username: "ansible"
+# Default password: 'changeme' - generate new with: mkpasswd --method=sha512 'yourpassword'
+bastion_password_hash: "$6$rounds=4096$randomsalt$5nZ8GZ4.QZy8YMqZ9qK7qz8GZ4.QZy8YMqZ9qK7qz"
+
+# SSH public key for passwordless access (required for Ansible)
+# bastion_ssh_public_key: "ssh-ed25519 AAAA..."
+
+# Network (static IP required - prompted if not set):
+# bastion_ip: "10.0.1.5"
+bastion_cidr: "24"
+# bastion_gateway: "10.0.1.1"
+bastion_dns: "1.1.1.1"
+
+# =============================================================================
+# Alpine Linux Cloud Image
+# =============================================================================
+bastion_alpine_version: "3.21"
+bastion_alpine_image_url: "https://dl-cdn.alpinelinux.org/alpine/v{{ bastion_alpine_version }}/releases/cloud/nocloud_alpine-{{ bastion_alpine_version }}.0-x86_64-bios-cloudinit-r0.qcow2"
+bastion_alpine_image_filename: "{{ bastion_alpine_image_url | basename }}"
+# Renamed with .iso extension for Proxmox GUI visibility
+bastion_alpine_iso_filename: "{{ bastion_alpine_image_filename }}.iso"
+
+# Proxmox storage for the Alpine image
+bastion_image_storage: "local"
+bastion_image_storage_path: "/var/lib/vz/template/iso"
+
+# =============================================================================
+# Cloudflared Tunnel Configuration
+# =============================================================================
+# Option 1: Use a pre-existing tunnel token (recommended for automation)
+# Generate via: cloudflared tunnel create bastion-tunnel
+# Then get token: cloudflared tunnel token bastion-tunnel
+# bastion_cloudflared_token: "eyJhI..."
+
+# Option 2: Manual login after VM is created
+# Set to empty to skip automatic tunnel setup
+bastion_cloudflared_token: ""
+
+# Tunnel name (used when creating new tunnel)
+bastion_cloudflared_tunnel_name: "sophon-bastion"
+
+# =============================================================================
+# Software to Install
+# =============================================================================
+# These packages will be installed via apk (Alpine package manager)
+bastion_packages:
+  - ansible
+  - py3-requests
+  - py3-pip
+  - git
+  - curl
+  - wget
+  - openssh-client
+  - rsync
+  - cloudflared
+
+# Additional Python packages via pip
+bastion_pip_packages:
+  - proxmoxer
+
+# Butane version to install (for CoreOS ignition generation)
+bastion_butane_version: "0.23.0"
+
+# =============================================================================
+# Clone Sophon Repository
+# =============================================================================
+# Optionally clone the Sophon repo into the bastion for convenience
+bastion_clone_sophon: true
+bastion_sophon_repo_url: "https://github.com/your-org/sophon.git"
+bastion_sophon_clone_path: "/home/{{ bastion_username }}/sophon"
+
+# =============================================================================
+# Local Cache Directory
+# =============================================================================
+bastion_local_download_dir: "/tmp/sophon_bastion"
+bastion_local_cache_dir: "/tmp/sophon_cache"

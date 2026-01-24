@@ -34,20 +34,26 @@ coreos_image_storage: "local"
 coreos_image_storage_path: "/var/lib/vz/template/iso"
 
 # =============================================================================
-# QEMU Guest Agent ISO (contains RPMs and container images, mounted as CD-ROM)
+# QEMU Guest Agent RPMs (loaded from NFS at boot)
 # =============================================================================
-coreos_qemu_guest_agent_rpm_url: "https://dl.fedoraproject.org/pub/fedora/linux/updates/43/Everything/x86_64/Packages/q/qemu-guest-agent-10.1.3-1.fc43.x86_64.rpm"
-coreos_qemu_guest_agent_rpm_filename: "{{ coreos_qemu_guest_agent_rpm_url | basename }}"
-# liburing is a dependency of qemu-guest-agent
-coreos_liburing_rpm_url: "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os/Packages/l/liburing-2.9-2.fc43.x86_64.rpm"
-coreos_liburing_rpm_filename: "{{ coreos_liburing_rpm_url | basename }}"
-coreos_qga_iso_filename: "qemu-guest-agent.iso"
+# RPM filenames to install from NFS share (qemu-guest-agent and dependencies)
+# These should be pre-staged on the NFS server at {{ nfs_rpm_packages_path }}
+coreos_qemu_guest_agent_rpm_filename: "qemu-guest-agent-10.1.3-1.fc43.x86_64.rpm"
+coreos_liburing_rpm_filename: "liburing-2.9-2.fc43.x86_64.rpm"
 coreos_local_cache_dir: "/tmp/sophon_cache"
 
 # =============================================================================
-# Container Images to include in ISO (loaded at boot)
+# NFS-based Container Images (loaded at boot from NFS share)
 # =============================================================================
-# List of container images to pull, save as tar, and include in the QGA ISO
+# NFS mount point on CoreOS for docker images
+coreos_nfs_docker_mount_point: "/mnt/nfs/docker-images"
+# NFS mount point on CoreOS for RPM packages
+coreos_nfs_rpm_mount_point: "/mnt/nfs/rpm-packages"
+# NFS mount options
+coreos_nfs_mount_options: "ro,noatime,vers=4.1"
+
+# List of container images to load from NFS share at boot
+# The .tar files should be pre-staged on the NFS server at {{ nfs_docker_images_path }}
 coreos_container_images:
   - name: "portainer/portainer-ce"
     tag: "2.27.1"
@@ -72,10 +78,3 @@ coreos_container_images:
 # Local Download Directory (used for fallback when Proxmox cannot download)
 # =============================================================================
 coreos_local_download_dir: "/tmp/sophon_images"
-
-# =============================================================================
-# ISO Storage (separate from image storage for Proxmox upload API)
-# =============================================================================
-# Proxmox storage ID for ISO uploads (usually "local-iso" or a storage with iso content type)
-coreos_iso_storage: "local-iso"
-coreos_iso_storage_path: "/mnt/pve/local-iso/template/iso"

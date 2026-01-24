@@ -26,12 +26,30 @@ Provisions a Fedora CoreOS VM on Proxmox with Ignition configuration.
 | `coreos_username` | `admin` | User created in VM |
 | `coreos_ssh_private_key_path` | `~/.ssh/id_rsa` | Path to SSH private key |
 | `coreos_ssh_public_key_path` | `{{ coreos_ssh_private_key_path }}.pub` | Path to SSH public key |
-| `coreos_airgapped_mode` | `false` | Use local HTTP server for image |
-| `coreos_http_file_server_port` | `8000` | HTTP server port for airgapped mode |
+| `nfs_server_ip` | `10.1.1.35` | NFS server for container images and RPMs |
+| `nfs_docker_images_path` | `/exports/nexus/docker-proxy` | NFS path for docker images (Nexus docker-proxy blob store) |
+| `nfs_rpm_packages_path` | `/exports/nexus/yum-proxy` | NFS path for RPM packages (Nexus yum-proxy blob store) |
+| `coreos_nfs_docker_mount_point` | `/mnt/nfs/docker-images` | Mount point in CoreOS for docker images NFS share |
+| `coreos_nfs_rpm_mount_point` | `/mnt/nfs/rpm-packages` | Mount point in CoreOS for RPM packages NFS share |
+| `coreos_container_images` | See defaults | List of container images to load from NFS |
 
 ## Dependencies
 
-- `http_file_server` role (for transferring QCOW2 image in airgapped mode)
+- `nfs_content` role (run first to prepare NFS shares)
+
+## NFS Content Preparation
+
+Before deploying CoreOS, run the nfs_content role to populate the NFS shares:
+
+```bash
+# Enter devshell (provides skopeo, dnf5)
+nix develop
+
+# Run NFS content preparation
+ansible-playbook nfs-content.yml -i inventories/production/inventory.yml
+```
+
+This downloads RPMs and container images to the NFS server. See `roles/nfs_content/README.md` for details.
 
 ## Example Playbook
 
@@ -50,3 +68,8 @@ Provisions a Fedora CoreOS VM on Proxmox with Ignition configuration.
 - The Proxmox API password can be set via `PROXMOX_API_PASSWORD` environment variable
 - Ignition config is embedded in VM args for first-boot configuration
 - SSH key is automatically generated if not present
+- All external dependencies (RPMs and container images) are loaded from NFS at first boot
+- The NFS paths are designed to serve as backend blob stores for Nexus proxy repositories:
+  - `nfs_docker_images_path` → Nexus docker-proxy blob store
+  - `nfs_rpm_packages_path` → Nexus yum-proxy blob store
+- No CD-ROM or ISO is required - the VM boots with only the CoreOS disk and NFS mounts

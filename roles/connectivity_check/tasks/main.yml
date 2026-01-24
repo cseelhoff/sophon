@@ -1,0 +1,84 @@
+---
+# =============================================================================
+# Connectivity Check Role - Tests reachability to CoreOS VM
+# =============================================================================
+# Sets facts: coreos_reachable, bastion_required
+
+- name: Skip connectivity check if disabled
+  ansible.builtin.meta: end_play
+  when: not (connectivity_check_enabled | default(true))
+
+- name: Validate target IP is set
+  ansible.builtin.fail:
+    msg: "connectivity_check_target_ip must be set (typically coreos_ip)"
+  when: connectivity_check_target_ip | length == 0
+
+# -----------------------------------------------------------------------------
+# Ping Check
+# -----------------------------------------------------------------------------
+- name: Check ping connectivity to target
+  ansible.builtin.command:
+    cmd: "ping -c 1 -W {{ connectivity_check_ping_timeout }} {{ connectivity_check_target_ip }}"
+  register: ping_result
+  failed_when: false
+  changed_when: false
+  retries: "{{ connectivity_check_ping_retries }}"
+  delay: 2
+  until: ping_result.rc == 0
+
+- name: Set ping reachability fact
+  ansible.builtin.set_fact:
+    coreos_ping_reachable: "{{ ping_result.rc == 0 }}"
+
+- name: Display ping result
+  ansible.builtin.debug:
+    msg: "Ping to {{ connectivity_check_target_ip }}: {{ 'REACHABLE' if coreos_ping_reachable else 'UNREACHABLE' }}"
+
+# -----------------------------------------------------------------------------
+# SSH Check (only if ping succeeded)
+# -----------------------------------------------------------------------------
+- name: Check SSH connectivity to target
+  ansible.builtin.command:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null
+          -o BatchMode=yes
+          -o ConnectTimeout={{ connectivity_check_ssh_timeout }}
+          -i {{ connectivity_check_ssh_key }}
+          -p {{ connectivity_check_ssh_port }}
+          {{ connectivity_check_target_user }}@{{ connectivity_check_target_ip }}
+          echo "SSH_OK"
+  register: ssh_result
+  failed_when: false
+  changed_when: false
+  when: coreos_ping_reachable
+
+- name: Set SSH reachability fact
+  ansible.builtin.set_fact:
+    coreos_ssh_reachable: "{{ ssh_result.rc | default(1) == 0 and 'SSH_OK' in (ssh_result.stdout | default('')) }}"
+
+- name: Display SSH result
+  ansible.builtin.debug:
+    msg: "SSH to {{ connectivity_check_target_user }}@{{ connectivity_check_target_ip }}: {{ 'REACHABLE' if coreos_ssh_reachable else 'UNREACHABLE' }}"
+
+# -----------------------------------------------------------------------------
+# Set Overall Reachability Facts
+# -----------------------------------------------------------------------------
+- name: Set overall reachability facts
+  ansible.builtin.set_fact:
+    coreos_reachable: "{{ coreos_ssh_reachable | default(false) }}"
+    bastion_required: "{{ not (coreos_ssh_reachable | default(false)) }}"
+
+- name: Display connectivity summary
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════
+      Connectivity Check Summary
+      ═══════════════════════════════════════════════════════════
+      Target:           {{ connectivity_check_target_ip }}
+      Ping Reachable:   {{ coreos_ping_reachable | default(false) }}
+      SSH Reachable:    {{ coreos_ssh_reachable | default(false) }}
+      ───────────────────────────────────────────────────────────
+      CoreOS Reachable: {{ coreos_reachable }}
+      Bastion Required: {{ bastion_required }}
+      ═══════════════════════════════════════════════════════════

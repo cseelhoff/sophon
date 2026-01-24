@@ -1,0 +1,347 @@
+---
+# =============================================================================
+# NFS Content Role - Main Tasks
+# =============================================================================
+# Modes:
+#   download_and_upload - Full online workflow (download + upload to NFS)
+#   upload_only         - Upload prestaged artifacts to NFS (air-gapped phase 2)
+#   download_only       - Download to local staging only (air-gapped phase 1)
+
+- name: Check if role is enabled
+  ansible.builtin.debug:
+    msg: "NFS content role is disabled"
+  when: not nfs_content_enabled
+
+- name: NFS content operations
+  when: nfs_content_enabled
+  block:
+    - name: Display operation mode
+      ansible.builtin.debug:
+        msg: "NFS Content Mode: {{ nfs_content_mode }}"
+
+    # =========================================================================
+    # DOWNLOAD PHASE (download_and_upload or download_only modes)
+    # =========================================================================
+    - name: Download artifacts
+      when: nfs_content_mode in ['download_and_upload', 'download_only']
+      block:
+        # -----------------------------------------------------------------------
+        # Prerequisites Check
+        # -----------------------------------------------------------------------
+        - name: Check for required tools on controller
+          ansible.builtin.command:
+            cmd: "which {{ item }}"
+          loop:
+            - skopeo
+            - dnf
+            - curl
+            - xz
+          register: tool_check
+          failed_when: false
+          changed_when: false
+
+        - name: Warn about missing tools
+          ansible.builtin.debug:
+            msg: "Warning: {{ item.item }} not found. Install via 'nix develop'."
+          loop: "{{ tool_check.results }}"
+          when: item.rc != 0
+
+        # -----------------------------------------------------------------------
+        # Create Staging Directories
+        # -----------------------------------------------------------------------
+        - name: Create local staging directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ nfs_content_local_staging_dir }}/images"
+            - "{{ nfs_content_local_staging_dir }}/rpm"
+            - "{{ nfs_content_local_staging_dir }}/containers"
+            - "{{ nfs_content_local_staging_dir }}/bin"
+
+        # -----------------------------------------------------------------------
+        # VM Images
+        # -----------------------------------------------------------------------
+        - name: Download CoreOS image
+          when: nfs_content_coreos_enabled
+          block:
+            - name: Check if CoreOS image exists
+              ansible.builtin.stat:
+                path: "{{ nfs_content_local_staging_dir }}/images/fedora-coreos.qcow2"
+              register: coreos_image
+
+            - name: Download CoreOS qcow2
+              ansible.builtin.get_url:
+                url: "{{ nfs_content_coreos_url }}"
+                dest: "{{ nfs_content_local_staging_dir }}/images/fedora-coreos.qcow2.xz"
+                mode: "0644"
+              when: not coreos_image.stat.exists
+
+            - name: Decompress CoreOS image
+              ansible.builtin.command:
+                cmd: xz -dk "{{ nfs_content_local_staging_dir }}/images/fedora-coreos.qcow2.xz"
+                creates: "{{ nfs_content_local_staging_dir }}/images/fedora-coreos.qcow2"
+              when: not coreos_image.stat.exists
+
+        - name: Download Alpine image
+          when: nfs_content_alpine_enabled
+          block:
+            - name: Check if Alpine image exists
+              ansible.builtin.stat:
+                path: "{{ nfs_content_local_staging_dir }}/images/alpine-cloud.qcow2"
+              register: alpine_image
+
+            - name: Download Alpine qcow2
+              ansible.builtin.get_url:
+                url: "{{ nfs_content_alpine_url }}"
+                dest: "{{ nfs_content_local_staging_dir }}/images/alpine-cloud.qcow2"
+                mode: "0644"
+              when: not alpine_image.stat.exists
+
+        # -----------------------------------------------------------------------
+        # RPM Packages
+        # -----------------------------------------------------------------------
+        - name: Check existing RPMs
+          ansible.builtin.find:
+            paths: "{{ nfs_content_local_staging_dir }}/rpm"
+            patterns: "*.rpm"
+          register: existing_rpms
+
+        - name: Download RPM packages with dependencies
+          ansible.builtin.command:
+            cmd: >-
+              dnf download
+              --resolve
+              --alldeps
+              --arch {{ nfs_content_arch }}
+              --destdir {{ nfs_content_local_staging_dir }}/rpm
+              --releasever {{ nfs_content_fedora_version }}
+              {{ nfs_content_rpm_packages | join(' ') }}
+          when: existing_rpms.files | length == 0
+          register: rpm_download
+          changed_when: rpm_download.rc == 0
+
+        # -----------------------------------------------------------------------
+        # Container Images
+        # -----------------------------------------------------------------------
+        - name: Download container images
+          ansible.builtin.shell:
+            cmd: |
+              IMAGE="{{ item }}"
+              BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
+              TARFILE="{{ nfs_content_local_staging_dir }}/containers/${BASENAME}.tar"
+              
+              if [ -f "$TARFILE" ]; then
+                echo "EXISTS"
+              else
+                skopeo copy \
+                  --override-os linux \
+                  --override-arch amd64 \
+                  "docker://$IMAGE" \
+                  "docker-archive:$TARFILE:$IMAGE" && \
+                echo "DOWNLOADED"
+              fi
+          loop: "{{ nfs_content_container_images }}"
+          register: image_downloads
+          changed_when: "'DOWNLOADED' in image_downloads.stdout"
+
+        # -----------------------------------------------------------------------
+        # Butane Binary
+        # -----------------------------------------------------------------------
+        - name: Download butane binary
+          when: nfs_content_butane_enabled
+          block:
+            - name: Check if butane exists
+              ansible.builtin.stat:
+                path: "{{ nfs_content_local_staging_dir }}/bin/butane"
+              register: butane_bin
+
+            - name: Download butane
+              ansible.builtin.get_url:
+                url: "{{ nfs_content_butane_url }}"
+                dest: "{{ nfs_content_local_staging_dir }}/bin/butane"
+                mode: "0755"
+              when: not butane_bin.stat.exists
+
+        - name: Display download summary
+          ansible.builtin.debug:
+            msg: |
+              Download complete to: {{ nfs_content_local_staging_dir }}
+              
+              Contents:
+              - VM Images: {{ nfs_content_local_staging_dir }}/images/
+              - RPM Packages: {{ nfs_content_local_staging_dir }}/rpm/
+              - Containers: {{ nfs_content_local_staging_dir }}/containers/
+              - Binaries: {{ nfs_content_local_staging_dir }}/bin/
+
+    # =========================================================================
+    # UPLOAD PHASE (download_and_upload or upload_only modes)
+    # =========================================================================
+    - name: Upload artifacts to NFS
+      when: nfs_content_mode in ['download_and_upload', 'upload_only']
+      block:
+        # -----------------------------------------------------------------------
+        # Determine Source Directory
+        # -----------------------------------------------------------------------
+        - name: Set source directory based on mode
+          ansible.builtin.set_fact:
+            _nfs_source_dir: "{{ nfs_content_source_dir if nfs_content_mode == 'upload_only' else nfs_content_local_staging_dir }}"
+
+        - name: Validate source directory exists
+          ansible.builtin.stat:
+            path: "{{ _nfs_source_dir }}"
+          register: source_dir_check
+
+        - name: Fail if source directory missing
+          ansible.builtin.fail:
+            msg: |
+              Source directory not found: {{ _nfs_source_dir }}
+              
+              {% if nfs_content_mode == 'upload_only' %}
+              Run prestage first: ansible-playbook prestage.yml
+              {% else %}
+              Download phase may have failed.
+              {% endif %}
+          when: not source_dir_check.stat.exists
+
+        # -----------------------------------------------------------------------
+        # Test NFS Connectivity
+        # -----------------------------------------------------------------------
+        - name: Test SSH to NFS server
+          ansible.builtin.wait_for:
+            host: "{{ nfs_content_server }}"
+            port: 22
+            timeout: 10
+          register: nfs_ssh
+          failed_when: false
+
+        - name: Fail if NFS unreachable
+          ansible.builtin.fail:
+            msg: "Cannot reach NFS server {{ nfs_content_server }}:22"
+          when: nfs_ssh.failed | default(false)
+
+        # -----------------------------------------------------------------------
+        # Create Remote Directories
+        # -----------------------------------------------------------------------
+        - name: Create NFS directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ nfs_content_images_path }}"
+            - "{{ nfs_content_rpm_path }}"
+            - "{{ nfs_content_docker_path }}"
+            - "{{ nfs_content_bin_path }}"
+          delegate_to: "{{ nfs_content_server }}"
+          remote_user: "{{ nfs_content_user }}"
+
+        # -----------------------------------------------------------------------
+        # Upload VM Images
+        # -----------------------------------------------------------------------
+        - name: Find VM images
+          ansible.builtin.find:
+            paths: "{{ _nfs_source_dir }}/images"
+            patterns: "*.qcow2"
+          register: vm_images
+
+        - name: Upload VM images
+          ansible.posix.synchronize:
+            src: "{{ item.path }}"
+            dest: "{{ nfs_content_images_path }}/"
+            mode: push
+            rsync_opts:
+              - "--ignore-existing"
+          loop: "{{ vm_images.files }}"
+          delegate_to: "{{ nfs_content_server }}"
+          remote_user: "{{ nfs_content_user }}"
+          when: vm_images.files | length > 0
+
+        # -----------------------------------------------------------------------
+        # Upload RPMs
+        # -----------------------------------------------------------------------
+        - name: Find RPM packages
+          ansible.builtin.find:
+            paths: "{{ _nfs_source_dir }}/rpm"
+            patterns: "*.rpm"
+          register: rpms
+
+        - name: Upload RPMs
+          ansible.posix.synchronize:
+            src: "{{ _nfs_source_dir }}/rpm/"
+            dest: "{{ nfs_content_rpm_path }}/"
+            mode: push
+            rsync_opts:
+              - "--ignore-existing"
+          delegate_to: "{{ nfs_content_server }}"
+          remote_user: "{{ nfs_content_user }}"
+          when: rpms.files | length > 0
+
+        # -----------------------------------------------------------------------
+        # Upload Container Images
+        # -----------------------------------------------------------------------
+        - name: Find container images
+          ansible.builtin.find:
+            paths: "{{ _nfs_source_dir }}/containers"
+            patterns: "*.tar"
+          register: containers
+
+        - name: Upload container images
+          ansible.posix.synchronize:
+            src: "{{ _nfs_source_dir }}/containers/"
+            dest: "{{ nfs_content_docker_path }}/"
+            mode: push
+            rsync_opts:
+              - "--ignore-existing"
+          delegate_to: "{{ nfs_content_server }}"
+          remote_user: "{{ nfs_content_user }}"
+          when: containers.files | length > 0
+
+        # -----------------------------------------------------------------------
+        # Upload Binaries
+        # -----------------------------------------------------------------------
+        - name: Find binaries
+          ansible.builtin.find:
+            paths: "{{ _nfs_source_dir }}/bin"
+            file_type: file
+          register: bins
+
+        - name: Upload binaries
+          ansible.posix.synchronize:
+            src: "{{ _nfs_source_dir }}/bin/"
+            dest: "{{ nfs_content_bin_path }}/"
+            mode: push
+            rsync_opts:
+              - "--ignore-existing"
+          delegate_to: "{{ nfs_content_server }}"
+          remote_user: "{{ nfs_content_user }}"
+          when: bins.files | length > 0
+
+        # -----------------------------------------------------------------------
+        # Verification
+        # -----------------------------------------------------------------------
+        - name: Verify NFS content
+          ansible.builtin.find:
+            paths: "{{ item.path }}"
+            patterns: "{{ item.pattern }}"
+          loop:
+            - { path: "{{ nfs_content_images_path }}", pattern: "*.qcow2" }
+            - { path: "{{ nfs_content_rpm_path }}", pattern: "*.rpm" }
+            - { path: "{{ nfs_content_docker_path }}", pattern: "*.tar" }
+          register: nfs_verify
+          delegate_to: "{{ nfs_content_server }}"
+          remote_user: "{{ nfs_content_user }}"
+
+        - name: Display NFS summary
+          ansible.builtin.debug:
+            msg: |
+              ═══════════════════════════════════════════════════════════════════
+              NFS CONTENT READY - {{ nfs_content_server }}
+              ═══════════════════════════════════════════════════════════════════
+              
+              VM Images:        {{ nfs_verify.results[0].files | length }} files → {{ nfs_content_images_path }}
+              RPM Packages:     {{ nfs_verify.results[1].files | length }} files → {{ nfs_content_rpm_path }}
+              Container Images: {{ nfs_verify.results[2].files | length }} files → {{ nfs_content_docker_path }}
+              
+              ═══════════════════════════════════════════════════════════════════

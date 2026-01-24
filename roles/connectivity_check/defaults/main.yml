@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# Connectivity Check Role
+# =============================================================================
+# Tests network reachability to target hosts and sets facts for workflow routing
+
+# Enable/disable this role
+connectivity_check_enabled: true
+
+# =============================================================================
+# SSH Connection Settings
+# =============================================================================
+# Target host to check connectivity (typically the CoreOS VM)
+connectivity_check_target_ip: "{{ coreos_ip | default('') }}"
+connectivity_check_target_user: "{{ coreos_username | default('admin') }}"
+connectivity_check_ssh_port: 22
+
+# SSH key for connection test
+connectivity_check_ssh_key: "{{ coreos_ssh_private_key_path | default('~/.ssh/id_rsa') }}"
+
+# =============================================================================
+# Timeout Settings
+# =============================================================================
+# How long to wait for ping response (seconds)
+connectivity_check_ping_timeout: 5
+
+# How long to wait for SSH connection (seconds)
+connectivity_check_ssh_timeout: 10
+
+# Number of ping retries before declaring unreachable
+connectivity_check_ping_retries: 3
+
+# =============================================================================
+# Output Facts
+# =============================================================================
+# After this role runs, the following facts will be set:
+# - coreos_ping_reachable: true/false (can we ping the host?)
+# - coreos_ssh_reachable: true/false (can we SSH to the host?)
+# - coreos_reachable: true/false (overall reachability - SSH preferred)
+# - bastion_required: true/false (inverse of coreos_reachable)

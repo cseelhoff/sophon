@@ -1,0 +1,48 @@
+---
+# =============================================================================
+# Bastion Deployment Playbook
+# =============================================================================
+# Deploys a privileged access workstation (PAW) on Proxmox for running
+# Sophon playbooks from within the target network.
+#
+# This solves the bootstrapping problem: users who can access Proxmox but
+# don't have a machine inside the network where CoreOS gets deployed.
+#
+# Usage:
+#   # First, deploy the bastion from anywhere with Proxmox access
+#   ansible-playbook bastion.yml -i inventories/production/inventory.yml
+#
+#   # Then SSH into the bastion and run the main playbook
+#   ssh ansible@<bastion_ip>
+#   cd ~/sophon
+#   ansible-playbook site.yml -i inventories/production/inventory.yml
+#
+# =============================================================================
+
+- name: Deploy Sophon Bastion VM
+  hosts: localhost
+  gather_facts: true
+  vars_prompt:
+    - name: bastion_ip
+      prompt: "Enter static IP for bastion VM"
+      private: false
+      default: ""
+    - name: bastion_gateway
+      prompt: "Enter gateway IP"
+      private: false
+      default: ""
+    - name: bastion_ssh_public_key
+      prompt: "Enter SSH public key (or leave empty for password-only)"
+      private: false
+      default: ""
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - bastion_ip | length > 0
+          - bastion_gateway | length > 0
+        fail_msg: "bastion_ip and bastion_gateway are required"
+
+  roles:
+    - role: bastion

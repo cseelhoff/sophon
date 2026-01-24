@@ -163,92 +163,78 @@
               failed_when: "'SUCCESS' not in (hardlink_result.stdout | default(''))"
 
     # -------------------------------------------------------------------------
-    # QEMU Guest Agent ISO: Create and upload
+    # NFS Content Population (Online Mode)
     # -------------------------------------------------------------------------
-    - name: Check if QGA ISO already exists in Proxmox storage
-      ansible.builtin.set_fact:
-        qga_iso_exists: "{{ storage_content.json.data | selectattr('volid', 'search', coreos_qga_iso_filename) | list | length > 0 }}"
-
-    - name: Create and upload QGA ISO
-      when: not qga_iso_exists
+    # In online mode, Proxmox downloads container images and RPMs to NFS shares
+    # so CoreOS can load them at boot. This block is skipped in air-gapped mode
+    # where the prestage/nfs_upload roles handle this instead.
+    - name: Populate NFS shares with container images and RPMs (online mode)
+      when: not (airgapped_mode | default(false))
       block:
-        - name: Ensure local cache directory exists
-          ansible.builtin.file:
-            path: "{{ coreos_local_cache_dir }}"
-            state: directory
-            mode: "0755"
+        - name: Check if NFS shares are accessible from Proxmox
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
+            timeout: 30
+            command: >-
+              ping -c 1 -W 2 {{ nfs_server_ip }} && echo "NFS_REACHABLE" || echo "NFS_UNREACHABLE"
+          register: nfs_check
+          failed_when: false
 
-        - name: Download qemu-guest-agent RPM
-          ansible.builtin.get_url:
-            url: "{{ coreos_qemu_guest_agent_rpm_url }}"
-            dest: "{{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}"
-            mode: "0644"
+        - name: Download and stage container images on NFS (via Proxmox)
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
+            timeout: 600
+            command: >-
+              mkdir -p {{ nfs_docker_images_path }} &&
+              for img in {{ coreos_container_images | map(attribute='name') | zip(coreos_container_images | map(attribute='tag')) | map('join', ':') | join(' ') }}; do
+                tarname=$(echo "$img" | sed 's|.*/||; s|:.*||').tar;
+                if [ ! -f "{{ nfs_docker_images_path }}/$tarname" ]; then
+                  skopeo copy docker://docker.io/$img docker-archive:{{ nfs_docker_images_path }}/$tarname 2>/dev/null || true;
+                fi;
+              done &&
+              echo "IMAGES_STAGED"
+          register: images_stage
+          when: "'NFS_REACHABLE' in (nfs_check.stdout | default(''))"
+          failed_when: false
 
-        - name: Download liburing dependency RPM
-          ansible.builtin.get_url:
-            url: "{{ coreos_liburing_rpm_url }}"
-            dest: "{{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}"
-            mode: "0644"
+        - name: Download and stage RPMs on NFS (via Proxmox)
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
+            timeout: 300
+            command: >-
+              mkdir -p {{ nfs_rpm_packages_path }} &&
+              cd {{ nfs_rpm_packages_path }} &&
+              if [ ! -f "{{ coreos_qemu_guest_agent_rpm_filename }}" ]; then
+                dnf download --resolve --alldeps qemu-guest-agent --releasever={{ coreos_fedora_version | default('43') }} 2>/dev/null || true;
+              fi &&
+              echo "RPMS_STAGED"
+          register: rpms_stage
+          when: "'NFS_REACHABLE' in (nfs_check.stdout | default(''))"
+          failed_when: false
 
-        - name: Pull and save container images for ISO
-          ansible.builtin.shell:
-            cmd: |
-              if [ ! -f "{{ coreos_local_cache_dir }}/{{ item.tar_filename }}" ]; then
-                podman pull docker.io/{{ item.name }}:{{ item.tag }} && \
-                podman save -o "{{ coreos_local_cache_dir }}/{{ item.tar_filename }}" docker.io/{{ item.name }}:{{ item.tag }}
-              fi
-          loop: "{{ coreos_container_images | default([]) }}"
-          when: coreos_container_images is defined and coreos_container_images | length > 0
-
-        - name: Build list of files for ISO
-          ansible.builtin.set_fact:
-            iso_files: >-
-              {{ coreos_local_cache_dir }}/{{ coreos_qemu_guest_agent_rpm_filename }}
-              {{ coreos_local_cache_dir }}/{{ coreos_liburing_rpm_filename }}
-              {% for img in coreos_container_images | default([]) %}
-              {{ coreos_local_cache_dir }}/{{ img.tar_filename }}
-              {% endfor %}
-
-        - name: Create ISO containing RPMs and container images
-          ansible.builtin.command:
-            cmd: >-
-              genisoimage -o {{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}
-              -V QGA_RPM -R -J {{ iso_files }}
-          register: iso_create_result
-          changed_when: iso_create_result.rc == 0
-
-        - name: Verify QGA ISO exists
-          ansible.builtin.stat:
-            path: "{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }}"
-          register: qga_iso_stat
-
-        - name: Upload QGA ISO to Proxmox via curl
-          ansible.builtin.command:
-            cmd: >-
-              curl -k -s
-              -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
-              -H "CSRFPreventionToken: {{ proxmox_csrf }}"
-              -F "content=iso"
-              -F "filename=@{{ coreos_local_cache_dir }}/{{ coreos_qga_iso_filename }};type=application/octet-stream;filename={{ coreos_qga_iso_filename }}"
-              "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/upload"
-          register: qga_upload_result
-          changed_when: "'UPID' in qga_upload_result.stdout"
-          failed_when: "'UPID' not in qga_upload_result.stdout"
-
-        - name: Wait for QGA ISO upload to complete
-          ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ coreos_image_storage }}/content"
-            method: GET
-            headers:
-              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-            validate_certs: "{{ proxmox_validate_certs }}"
-          register: qga_upload_check
-          until: qga_upload_check.json.data | selectattr('volid', 'search', coreos_qga_iso_filename) | list | length > 0
-          retries: 30
-          delay: 5
+        - name: Display NFS staging status
+          ansible.builtin.debug:
+            msg: >-
+              NFS Content Staging: {{ 'SUCCESS' if 'IMAGES_STAGED' in (images_stage.stdout | default('')) and 'RPMS_STAGED' in (rpms_stage.stdout | default('')) else 'SKIPPED or PARTIAL - check NFS connectivity' }}
+          when: "'NFS_REACHABLE' in (nfs_check.stdout | default(''))"
 
     # -------------------------------------------------------------------------
-    # Ignition Configuration (via Butane) - lightweight, no embedded RPM
+    # Ignition Configuration (via Butane) - RPMs and images loaded from NFS
     # -------------------------------------------------------------------------
     - name: Ensure local cache directory exists
       ansible.builtin.file:
@@ -302,7 +288,7 @@
         args_escaped: "-fw_cfg name=opt/com.coreos/config,string={{ json_escaped }}"
 
     # -------------------------------------------------------------------------
-    # VM Creation with QGA ISO attached as CD-ROM
+    # VM Creation (no CD-ROM - RPMs and images loaded from NFS)
     # -------------------------------------------------------------------------
     - name: Create CoreOS VM on Proxmox
       community.proxmox.proxmox_kvm:
@@ -324,8 +310,6 @@
         timeout: 600
         virtio:
           virtio0: "{{ proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_disk_size }}"
-        ide:
-          ide2: "{{ coreos_image_storage }}:iso/{{ coreos_qga_iso_filename }},media=cdrom"
         boot: "order=virtio0"
         args: "{{ args_escaped }}"
       register: vm_create

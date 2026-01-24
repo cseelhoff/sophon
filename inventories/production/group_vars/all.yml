@@ -161,6 +161,16 @@ kopia_retention_keep_monthly: 24
 # kopia_server_password: "{{ vault_kopia_password }}"
 
 # -----------------------------------------------------------------------------
+# NFS Storage Configuration
+# -----------------------------------------------------------------------------
+# NFS server for shared storage (container images, RPMs, nexus blob store, etc.)
+nfs_server_ip: "10.1.1.35"
+# Path on NFS server for docker images (used as Nexus docker proxy blob store backend)
+nfs_docker_images_path: "/exports/nexus/docker-proxy"
+# Path on NFS server for RPM packages (used as Nexus yum proxy blob store backend)
+nfs_rpm_packages_path: "/exports/nexus/yum-proxy"
+
+# -----------------------------------------------------------------------------
 # TLS/Certificate Settings
 # -----------------------------------------------------------------------------
 validate_certs: true

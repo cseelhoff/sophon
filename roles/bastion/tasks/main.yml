@@ -1,0 +1,287 @@
+---
+# =============================================================================
+# Bastion VM Deployment on Proxmox
+# =============================================================================
+# Deploys an Alpine Linux VM with Cloudflared tunnel for privileged access
+# Depends on: proxmox role (via meta/main.yml)
+
+# -----------------------------------------------------------------------------
+# VM Existence Check
+# -----------------------------------------------------------------------------
+- name: Check if VM with same name already exists
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: existing_vms
+
+- name: Set existing VM fact
+  ansible.builtin.set_fact:
+    existing_bastion: "{{ existing_vms.json.data | selectattr('name', 'eq', bastion_vm_name) | list | first | default(none) }}"
+
+- name: Display existing VM info and skip preparation
+  ansible.builtin.debug:
+    msg: "Found existing VM '{{ bastion_vm_name }}' with VMID {{ existing_bastion.vmid }} - skipping image download and cloud-init prep"
+  when: existing_bastion is not none
+
+# -----------------------------------------------------------------------------
+# Alpine Image and Cloud-Init Preparation (only if VM doesn't exist)
+# -----------------------------------------------------------------------------
+- name: Prepare Alpine image and cloud-init config
+  when: existing_bastion is none
+  block:
+    # -------------------------------------------------------------------------
+    # Alpine Image: Check if exists on Proxmox via API
+    # -------------------------------------------------------------------------
+    - name: Check if Alpine image already exists in Proxmox storage
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ bastion_image_storage }}/content"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: storage_content
+
+    - name: Set image exists fact
+      ansible.builtin.set_fact:
+        alpine_image_exists: "{{ storage_content.json.data | selectattr('volid', 'search', bastion_alpine_iso_filename) | list | length > 0 }}"
+
+    # -------------------------------------------------------------------------
+    # Alpine Image: Download and Prepare
+    # -------------------------------------------------------------------------
+    - name: Download and prepare Alpine image
+      when: not alpine_image_exists
+      block:
+        - name: Attempt to download Alpine image directly on Proxmox
+          proxmox_shell:
+            api_host: "{{ proxmox_host }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
+            pve_auth_cookie: "{{ proxmox_ticket }}"
+            proxmox_csrf_token: "{{ proxmox_csrf }}"
+            timeout: 300
+            command: >-
+              cd {{ bastion_image_storage_path }} &&
+              curl -fLO {{ bastion_alpine_image_url }} &&
+              ln -f {{ bastion_alpine_image_filename }} {{ bastion_alpine_iso_filename }} &&
+              echo "SUCCESS"
+          register: proxmox_download
+          failed_when: false
+
+        - name: Set Proxmox download success fact
+          ansible.builtin.set_fact:
+            proxmox_download_success: "{{ 'SUCCESS' in (proxmox_download.stdout | default('')) }}"
+
+        - name: Fallback to local download and upload
+          when: not proxmox_download_success
+          block:
+            - name: Ensure local download directory exists
+              ansible.builtin.file:
+                path: "{{ bastion_local_download_dir }}"
+                state: directory
+                mode: "0755"
+
+            - name: Check if local Alpine image exists
+              ansible.builtin.stat:
+                path: "{{ bastion_local_download_dir }}/{{ bastion_alpine_iso_filename }}"
+              register: local_iso_stat
+
+            - name: Download Alpine image locally
+              when: not local_iso_stat.stat.exists
+              block:
+                - name: Download Alpine cloud image
+                  ansible.builtin.get_url:
+                    url: "{{ bastion_alpine_image_url }}"
+                    dest: "{{ bastion_local_download_dir }}/{{ bastion_alpine_image_filename }}"
+                    mode: "0644"
+
+                - name: Rename to iso extension for Proxmox visibility
+                  ansible.builtin.copy:
+                    src: "{{ bastion_local_download_dir }}/{{ bastion_alpine_image_filename }}"
+                    dest: "{{ bastion_local_download_dir }}/{{ bastion_alpine_iso_filename }}"
+                    remote_src: true
+                    mode: "0644"
+
+            - name: Upload Alpine image to Proxmox via curl
+              ansible.builtin.command:
+                cmd: >-
+                  curl -k -s
+                  -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
+                  -H "CSRFPreventionToken: {{ proxmox_csrf }}"
+                  -F "content=iso"
+                  -F "filename=@{{ bastion_local_download_dir }}/{{ bastion_alpine_iso_filename }};type=application/octet-stream;filename={{ bastion_alpine_iso_filename }}"
+                  "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ bastion_image_storage }}/upload"
+              register: upload_result
+              changed_when: "'UPID' in upload_result.stdout"
+              failed_when: "'UPID' not in upload_result.stdout"
+
+            - name: Wait for upload to complete
+              ansible.builtin.uri:
+                url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/{{ bastion_image_storage }}/content"
+                method: GET
+                headers:
+                  Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+                validate_certs: "{{ proxmox_validate_certs }}"
+              register: upload_check
+              until: upload_check.json.data | selectattr('volid', 'search', bastion_alpine_iso_filename) | list | length > 0
+              retries: 30
+              delay: 5
+
+            - name: Create hardlink from qcow2.iso to qcow2 on Proxmox
+              proxmox_shell:
+                api_host: "{{ proxmox_host }}"
+                api_port: "{{ proxmox_port }}"
+                api_user: "{{ proxmox_user }}"
+                node: "{{ proxmox_node }}"
+                pve_auth_cookie: "{{ proxmox_ticket }}"
+                proxmox_csrf_token: "{{ proxmox_csrf }}"
+                timeout: 30
+                command: >-
+                  cd {{ bastion_image_storage_path }} &&
+                  ln -f {{ bastion_alpine_iso_filename }} {{ bastion_alpine_image_filename }} &&
+                  echo "SUCCESS"
+              register: hardlink_result
+              failed_when: "'SUCCESS' not in (hardlink_result.stdout | default(''))"
+
+    # -------------------------------------------------------------------------
+    # Cloud-Init Configuration
+    # -------------------------------------------------------------------------
+    - name: Ensure local cache directory exists
+      ansible.builtin.file:
+        path: "{{ bastion_local_cache_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate cloud-init user-data
+      ansible.builtin.template:
+        src: user-data.yaml.j2
+        dest: "{{ bastion_local_cache_dir }}/bastion-userdata.yaml"
+        mode: "0644"
+
+    - name: Generate cloud-init meta-data
+      ansible.builtin.template:
+        src: meta-data.yaml.j2
+        dest: "{{ bastion_local_cache_dir }}/bastion-metadata.yaml"
+        mode: "0644"
+
+    - name: Upload cloud-init user-data to Proxmox snippets
+      proxmox_shell:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        node: "{{ proxmox_node }}"
+        pve_auth_cookie: "{{ proxmox_ticket }}"
+        proxmox_csrf_token: "{{ proxmox_csrf }}"
+        timeout: 30
+        command: "mkdir -p /var/lib/vz/snippets && cat > /var/lib/vz/snippets/bastion-userdata.yaml"
+        stdin: "{{ lookup('file', bastion_local_cache_dir + '/bastion-userdata.yaml') }}"
+      register: userdata_upload
+
+    - name: Upload cloud-init meta-data to Proxmox snippets
+      proxmox_shell:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        node: "{{ proxmox_node }}"
+        pve_auth_cookie: "{{ proxmox_ticket }}"
+        proxmox_csrf_token: "{{ proxmox_csrf }}"
+        timeout: 30
+        command: "cat > /var/lib/vz/snippets/bastion-metadata.yaml"
+        stdin: "{{ lookup('file', bastion_local_cache_dir + '/bastion-metadata.yaml') }}"
+      register: metadata_upload
+
+    # -------------------------------------------------------------------------
+    # VM Creation
+    # -------------------------------------------------------------------------
+    - name: Create Bastion VM on Proxmox
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        node: "{{ proxmox_node }}"
+        name: "{{ bastion_vm_name }}"
+        cores: "{{ bastion_cores }}"
+        memory: "{{ bastion_memory }}"
+        ostype: "l26"
+        onboot: true
+        autostart: true
+        agent: "enabled=1"
+        net:
+          net0: "virtio,bridge=vmbr0"
+        state: present
+        timeout: 300
+        virtio:
+          virtio0: "{{ proxmox_storage }}:0,import-from={{ bastion_image_storage_path }}/{{ bastion_alpine_image_filename }},size={{ bastion_disk_size }}"
+        boot: "order=virtio0"
+        cicustom: "user=local:snippets/bastion-userdata.yaml,meta=local:snippets/bastion-metadata.yaml"
+        ipconfig:
+          ipconfig0: "ip={{ bastion_ip }}/{{ bastion_cidr }},gw={{ bastion_gateway }}"
+        nameserver: "{{ bastion_dns }}"
+      register: vm_create
+
+# -----------------------------------------------------------------------------
+# Post-Creation: Start and Verify VM
+# -----------------------------------------------------------------------------
+- name: Set VM ID fact
+  ansible.builtin.set_fact:
+    bastion_vmid: "{{ existing_bastion.vmid if existing_bastion is not none else vm_create.vmid }}"
+
+- name: Start Bastion VM
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_host }}"
+    api_port: "{{ proxmox_port }}"
+    api_user: "{{ proxmox_user }}"
+    api_password: "{{ proxmox_password }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ bastion_vmid }}"
+    state: started
+
+- name: Wait for VM to boot and qemu-guest-agent to respond
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ bastion_vmid }}/agent/ping"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200, 500]
+  register: agent_ping
+  until: agent_ping.status == 200
+  retries: 60
+  delay: 10
+  failed_when: false
+
+- name: Display connection info
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      Bastion VM deployed successfully!
+      ═══════════════════════════════════════════════════════════════════
+      
+      VM Name: {{ bastion_vm_name }}
+      VMID: {{ bastion_vmid }}
+      IP Address: {{ bastion_ip }}
+      Username: {{ bastion_username }}
+      
+      SSH Access:
+        ssh {{ bastion_username }}@{{ bastion_ip }}
+      
+      {% if bastion_cloudflared_token %}
+      Cloudflared tunnel is being configured automatically.
+      {% else %}
+      To setup Cloudflared tunnel manually:
+        1. SSH into the bastion
+        2. Run: cloudflared tunnel login
+        3. Run: cloudflared tunnel create {{ bastion_cloudflared_tunnel_name }}
+        4. Configure /etc/cloudflared/config.yml
+        5. Run: rc-update add cloudflared default && rc-service cloudflared start
+      {% endif %}
+      
+      To run Sophon playbooks from the bastion:
+        cd {{ bastion_sophon_clone_path }}
+        ansible-playbook -i inventories/production/inventory.yml site.yml
+      ═══════════════════════════════════════════════════════════════════

@@ -1,0 +1,84 @@
+---
+# =============================================================================
+# NFS Content Role - Download and/or Upload Artifacts
+# =============================================================================
+# Prepares NFS shares with VM images, RPMs, and container images for CoreOS.
+#
+# MODES:
+#   download_and_upload - Downloads artifacts AND uploads to NFS (online mode)
+#   upload_only         - Uploads from prestage dir to NFS (air-gapped phase 2)
+#   download_only       - Downloads to local staging only (air-gapped phase 1)
+
+# Enable/disable this role
+nfs_content_enabled: true
+
+# =============================================================================
+# Operation Mode
+# =============================================================================
+# download_and_upload: Full online workflow - download from internet, upload to NFS
+# upload_only: Air-gapped phase 2 - upload prestaged files to NFS
+# download_only: Air-gapped phase 1 - just download (same as prestage role)
+nfs_content_mode: "download_and_upload"
+
+# =============================================================================
+# NFS Server Configuration
+# =============================================================================
+nfs_content_server: "{{ nfs_server_ip }}"
+nfs_content_user: "root"
+
+# Destination paths on NFS
+nfs_content_images_path: "/var/lib/vz/template/iso"
+nfs_content_rpm_path: "{{ nfs_rpm_packages_path | default('/exports/nexus/yum-proxy') }}"
+nfs_content_docker_path: "{{ nfs_docker_images_path | default('/exports/nexus/docker-proxy') }}"
+nfs_content_bin_path: "/exports/sophon/bin"
+
+# =============================================================================
+# Source Directory (for upload_only mode)
+# =============================================================================
+# Points to prestage directory when uploading prestaged artifacts
+nfs_content_source_dir: "{{ prestage_local_dir | default('/tmp/sophon_prestage') }}"
+
+# =============================================================================
+# Local Staging Directory (for download modes)
+# =============================================================================
+nfs_content_local_staging_dir: "/tmp/sophon_nfs_content"
+
+# =============================================================================
+# CoreOS Image
+# =============================================================================
+nfs_content_coreos_enabled: true
+nfs_content_coreos_url: "{{ coreos_qcow2_url | default('https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz') }}"
+
+# =============================================================================
+# Alpine Image (for Bastion)
+# =============================================================================
+nfs_content_alpine_enabled: true
+nfs_content_alpine_version: "{{ bastion_alpine_version | default('3.21') }}"
+nfs_content_alpine_url: "https://dl-cdn.alpinelinux.org/alpine/v{{ nfs_content_alpine_version }}/releases/cloud/nocloud_alpine-{{ nfs_content_alpine_version }}.0-x86_64-bios-cloudinit-r0.qcow2"
+
+# =============================================================================
+# RPM Configuration (Fedora)
+# =============================================================================
+nfs_content_fedora_version: "43"
+nfs_content_arch: "x86_64"
+nfs_content_rpm_packages:
+  - qemu-guest-agent
+
+# =============================================================================
+# Container Images
+# =============================================================================
+# Filenames derived automatically: docker.io/foo/bar:1.0 -> bar.tar
+nfs_content_container_images:
+  - "docker.io/portainer/portainer-ce:2.27.1"
+  - "docker.io/coredns/coredns:1.12.0"
+  - "docker.io/traefik:v3.2"
+  - "docker.io/osixia/openldap:1.5.0"
+  - "docker.io/osixia/phpldapadmin:0.9.0"
+  - "docker.io/sonatype/nexus3:3.72.0"
+
+# =============================================================================
+# Butane Binary
+# =============================================================================
+nfs_content_butane_enabled: true
+nfs_content_butane_version: "0.23.0"
+nfs_content_butane_url: "https://github.com/coreos/butane/releases/download/v{{ nfs_content_butane_version }}/butane-x86_64-unknown-linux-gnu"

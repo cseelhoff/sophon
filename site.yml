@@ -1,19 +1,40 @@
 ---
+# =============================================================================
 # Sophon Infrastructure Master Playbook
-# Deploys all services in the correct order
+# =============================================================================
+# Deploys all services in the correct order with automatic connectivity routing
 #
-# Quick Start:
-#   cd ansible && ansible-playbook -i inventories/development/inventory.yml site.yml
-#   (You will be prompted for Proxmox host, domain name, and password if not configured)
+# DEPLOYMENT MODES:
+# ─────────────────────────────────────────────────────────────────────────────
+# Online Mode (default):
+#   ansible-playbook -i inventories/production/inventory.yml site.yml
 #
-# With explicit parameters (for scripting/CI):
-#   ansible-playbook -i inventories/development/inventory.yml site.yml \
-#     -e proxmox_host=pve.example.com \
-#     -e domain_name=homelab.local \
-#     -e proxmox_password=secret
+# Air-Gapped Mode (after running prestage.yml and nfs-upload.yml):
+#   ansible-playbook -i inventories/production/inventory.yml site.yml -e airgapped_mode=true
 #
-# Deploy specific services:
-#   ansible-playbook -i inventories/development/inventory.yml site.yml --tags "traefik,homepage"
+# With Cloudflared tunnel (for remote bastion access):
+#   CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook -i inventories/production/inventory.yml site.yml
+#
+# WORKFLOW:
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Deploy CoreOS VM on Proxmox
+# 2. Check connectivity to CoreOS
+# 3. If unreachable → Deploy bastion VM → Route via:
+#    a. Cloudflared ProxyJump (if CLOUDFLARED_TUNNEL_TOKEN set)
+#    b. Direct SSH ProxyJump (if bastion reachable)
+#    c. QGA Remote Execution (last resort)
+# 4. Continue with Portainer, CoreDNS, Traefik, and other services
+#
+# AIR-GAPPED WORKFLOW:
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 (on internet):   ansible-playbook prestage.yml
+# --- SWITCH NETWORKS ---
+# Phase 2 (on air-gapped): ansible-playbook nfs-upload.yml -i inventories/production/inventory.yml
+# Phase 3 (on air-gapped): ansible-playbook site.yml -i inventories/production/inventory.yml -e airgapped_mode=true
+#
+# TAGS:
+# ─────────────────────────────────────────────────────────────────────────────
+#   ansible-playbook -i inventories/production/inventory.yml site.yml --tags "traefik,homepage"
 
 - name: Gather Required Variables
   hosts: localhost
@@ -69,6 +90,11 @@
         coreos_ip: "{{ _ip.user_input | default(coreos_ip, true) }}"
         coreos_gateway: "{{ _gw.user_input | default(coreos_gateway, true) }}"
 
+    - name: Set deployment mode variables
+      ansible.builtin.set_fact:
+        airgapped_mode: "{{ airgapped_mode | default(false) }}"
+        cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+
 - name: Deploy CoreOS VM
   hosts: localhost
   connection: local
@@ -76,6 +102,80 @@
   tags: [coreos, infrastructure]
   roles:
     - coreos
+
+# =============================================================================
+# Connectivity Check and Bastion Routing
+# =============================================================================
+- name: Check Connectivity and Deploy Bastion if Needed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [connectivity, bastion, infrastructure]
+  tasks:
+    - name: Check connectivity to CoreOS VM
+      ansible.builtin.include_role:
+        name: connectivity_check
+      vars:
+        connectivity_check_target_ip: "{{ coreos_ip }}"
+      when: not (skip_bastion_deployment | default(false))
+
+    - name: Deploy bastion if CoreOS is not reachable
+      when:
+        - bastion_required | default(false)
+        - not (skip_bastion_deployment | default(false))
+      block:
+        - name: Display bastion deployment notice
+          ansible.builtin.debug:
+            msg: |
+              ═══════════════════════════════════════════════════════════════════
+              DEPLOYING BASTION VM
+              ═══════════════════════════════════════════════════════════════════
+              CoreOS VM is not directly reachable from this host.
+              Deploying bastion VM for indirect access.
+              
+              Cloudflared: {{ 'ENABLED' if cloudflared_tunnel_token | length > 0 else 'DISABLED' }}
+              ═══════════════════════════════════════════════════════════════════
+
+        - name: Deploy Bastion VM
+          ansible.builtin.include_role:
+            name: bastion
+          vars:
+            bastion_cloudflared_token: "{{ cloudflared_tunnel_token }}"
+
+        - name: Check bastion connectivity
+          ansible.builtin.include_role:
+            name: connectivity_check
+          vars:
+            connectivity_check_target_ip: "{{ bastion_ip }}"
+            connectivity_check_target_user: "{{ bastion_username | default('ansible') }}"
+
+        - name: Determine bastion access method
+          ansible.builtin.set_fact:
+            bastion_access_method: >-
+              {% if cloudflared_tunnel_token | length > 0 %}cloudflared
+              {% elif coreos_ssh_reachable | default(false) %}direct_ssh
+              {% else %}qga{% endif %}
+
+        - name: Display access method
+          ansible.builtin.debug:
+            msg: "Bastion access method: {{ bastion_access_method | trim }}"
+
+        # QGA Remote Execution (last resort - when no SSH access to bastion)
+        - name: Execute via QGA if no SSH access
+          when: bastion_access_method | trim == 'qga'
+          block:
+            - name: Execute Sophon on bastion via QGA
+              ansible.builtin.include_role:
+                name: qga_remote_exec
+              vars:
+                qga_remote_exec_vmid: "{{ bastion_vmid }}"
+                qga_remote_exec_playbook: "site.yml"
+                qga_remote_exec_env_vars:
+                  PROXMOX_API_PASSWORD: "{{ proxmox_password }}"
+                  PORTAINER_ADMIN_PASSWORD: "{{ portainer_admin_password | default('') }}"
+
+            - name: End play after QGA execution
+              ansible.builtin.meta: end_play
 
 - name: Deploy Portainer
   hosts: localhost
