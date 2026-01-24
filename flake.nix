@@ -31,10 +31,8 @@
             skopeo    # Download container images for NFS content prep
             dnf5      # Download RPM packages with dependency resolution
             qemu      # qemu-img for building Alpine NFS qcow2 images
-            e2fsprogs # mkfs.ext4 for Alpine image build
-            parted    # Disk partitioning for Alpine image build
-            syslinux  # extlinux bootloader for Alpine image
-            util-linux # losetup for loop devices
+            libguestfs-with-appliance  # Build VM images without root (guestfish)
+            proot     # User-space chroot/root emulation via ptrace (works with musl)
             unixtools.xxd # Hex dump utility for debugging
           ];
 

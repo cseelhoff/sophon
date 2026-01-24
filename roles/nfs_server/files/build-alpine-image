@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Minimal Alpine Linux VM image builder (loop devices only, no NBD)
+# Minimal Alpine Linux VM image builder using libguestfs (no root required)
 # Usage: build-alpine-image [options] <output-image>
+#
+# This script builds Alpine VM images using:
+# 1. apk-tools-static to install packages to a local rootfs (no root needed)
+# 2. guestfish to create the disk image and install bootloader (no root needed)
 set -euo pipefail
+
+# Ensure SSL certificates are found (needed for apk on NixOS)
+export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
 
 # Defaults
 IMAGE_SIZE="2G"
@@ -20,14 +27,14 @@ Options:
   --image-format FMT    Output format: raw or qcow2 (default: raw)
   --branch VERSION      Alpine version, e.g. v3.21 (default: v3.21)
   --packages PKGS       Space-separated list of packages to install
-  --script-chroot FILE  Script to run inside chroot
+  --script-chroot FILE  Script with rc-update/mkdir/echo commands to apply
   --mirror URL          Alpine mirror URL
   -h, --help            Show this help
 
 Example:
   $(basename "$0") --image-size 2G --branch v3.21 \\
     --packages "qemu-guest-agent nfs-utils" \\
-    --script-chroot setup.sh alpine.raw
+    --script-chroot setup.sh alpine.qcow2
 EOF
     exit 1
 }
@@ -52,143 +59,60 @@ done
 # Temp files
 WORK_DIR=$(mktemp -d)
 RAW_IMAGE="$WORK_DIR/disk.raw"
-MOUNT_DIR="$WORK_DIR/rootfs"
+ROOTFS_DIR="$WORK_DIR/rootfs"
+ROOTFS_TAR="$WORK_DIR/rootfs.tar"
 APK_STATIC="$WORK_DIR/apk.static"
-LOOP_DEV=""
-NEED_MBR_REATTACH=""
 
 cleanup() {
     echo "==> Cleaning up..."
-    sync 2>/dev/null || true
-    if [[ -d "$MOUNT_DIR" ]]; then
-        umount -R "$MOUNT_DIR" 2>/dev/null || true
-    fi
-    if [[ -n "$LOOP_DEV" ]] && [[ -e "$LOOP_DEV" ]]; then
-        losetup -d "$LOOP_DEV" 2>/dev/null || true
-    fi
     rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
 
-echo "==> Creating ${IMAGE_SIZE} raw disk image"
-truncate -s "$IMAGE_SIZE" "$RAW_IMAGE"
-
-echo "==> Setting up loop device for partitioning"
-LOOP_DEV=$(losetup --find --show "$RAW_IMAGE")
-echo "    Using $LOOP_DEV"
-
-echo "==> Creating partition table"
-# Parted may warn about kernel not being informed - this is OK since we detach and reattach
-set +e
-parted -s "$LOOP_DEV" mklabel msdos
-parted -s "$LOOP_DEV" mkpart primary ext4 1MiB 100%
-parted -s "$LOOP_DEV" set 1 boot on
-set -e
-
-echo "==> Reattaching with partition scanning"
-losetup -d "$LOOP_DEV" || true
-sleep 1
-LOOP_DEV=$(losetup --find --show --partscan "$RAW_IMAGE")
-echo "    Reattached as $LOOP_DEV"
-sleep 1
-
-# Determine partition device name
-if [[ -e "${LOOP_DEV}p1" ]]; then
-    PART_DEV="${LOOP_DEV}p1"
-else
-    # Manual offset calculation as fallback
-    echo "    Partition device not found, using manual offset"
-    PART_OFFSET=$((1024 * 1024))  # 1MiB in bytes
-    PART_SIZE=$(( $(stat -c%s "$RAW_IMAGE") - PART_OFFSET ))
-    losetup -d "$LOOP_DEV"
-    LOOP_DEV=$(losetup --find --show --offset "$PART_OFFSET" --sizelimit "$PART_SIZE" "$RAW_IMAGE")
-    PART_DEV="$LOOP_DEV"
-    # We'll need to reattach the whole disk for MBR later
-    NEED_MBR_REATTACH=1
-fi
-
-echo "==> Formatting partition ($PART_DEV)"
-mkfs.ext4 -q -L alpine-root "$PART_DEV"
-
-echo "==> Mounting filesystem"
-mkdir -p "$MOUNT_DIR"
-mount "$PART_DEV" "$MOUNT_DIR"
-
-echo "==> Downloading static apk"
+echo "==> Downloading apk-tools-static"
 APK_URL="${MIRROR}/v${ALPINE_VERSION}/main/x86_64/"
 APK_PKG=$(curl -fsSL "$APK_URL" | grep -oP 'apk-tools-static-[\d.]+-r\d+\.apk' | head -1)
 curl -fsSL "${APK_URL}${APK_PKG}" | tar -xz -C "$WORK_DIR" sbin/apk.static --strip-components=1
 chmod +x "$APK_STATIC"
 
-echo "==> Installing Alpine base system"
-mkdir -p "$MOUNT_DIR/etc/apk"
-cat > "$MOUNT_DIR/etc/apk/repositories" <<EOF
+echo "==> Creating rootfs directory structure"
+mkdir -p "$ROOTFS_DIR"
+mkdir -p "$ROOTFS_DIR/etc/apk"
+
+cat > "$ROOTFS_DIR/etc/apk/repositories" <<REPOS
 ${MIRROR}/v${ALPINE_VERSION}/main
 ${MIRROR}/v${ALPINE_VERSION}/community
-EOF
+REPOS
 
-"$APK_STATIC" -X "${MIRROR}/v${ALPINE_VERSION}/main" \
-    -U --allow-untrusted --root "$MOUNT_DIR" --initdb \
-    add alpine-base linux-lts linux-firmware-none mkinitfs
+echo "==> Installing Alpine base system (this may take a minute)"
+# Create directories needed for bind mounts
+mkdir -p "$ROOTFS_DIR/etc/ssl/certs"
 
-echo "==> Installing additional packages"
-if [[ -n "$PACKAGES" ]]; then
-    # shellcheck disable=SC2086
-    "$APK_STATIC" --root "$MOUNT_DIR" add $PACKAGES syslinux
-else
-    "$APK_STATIC" --root "$MOUNT_DIR" add syslinux
-fi
+# Use proot to emulate root and chroot via ptrace (works with musl/static binaries)
+# -0: fake root (uid 0)
+# -r: set root filesystem for chroot emulation
+# -w: set working directory to / (avoids warning about host cwd not existing in guest)
+# -b: bind mount apk.static, resolv.conf, ssl certs into the guest
+proot -0 -w / -r "$ROOTFS_DIR" \
+    -b "$APK_STATIC:/apk.static" \
+    -b /etc/resolv.conf:/etc/resolv.conf \
+    -b /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt \
+    /apk.static -X "${MIRROR}/v${ALPINE_VERSION}/main" -X "${MIRROR}/v${ALPINE_VERSION}/community" \
+    -U --allow-untrusted --initdb \
+    add alpine-base linux-lts linux-firmware-none mkinitfs syslinux $PACKAGES
 
 echo "==> Configuring system"
-# Mount pseudo-filesystems for chroot
-mount -t proc proc "$MOUNT_DIR/proc"
-mount -t sysfs sys "$MOUNT_DIR/sys"
-mount -t devtmpfs dev "$MOUNT_DIR/dev"
-
-# Copy resolv.conf
-cp /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf" 2>/dev/null || true
-
 # Create fstab
-cat > "$MOUNT_DIR/etc/fstab" <<'EOF'
+cat > "$ROOTFS_DIR/etc/fstab" <<'FSTAB'
 LABEL=alpine-root  /     ext4  defaults,noatime  0  1
-EOF
+FSTAB
 
-# Run chroot script if provided
-if [[ -n "$CHROOT_SCRIPT" ]] && [[ -f "$CHROOT_SCRIPT" ]]; then
-    echo "==> Running chroot customization script"
-    cp "$CHROOT_SCRIPT" "$MOUNT_DIR/tmp/setup.sh"
-    chmod +x "$MOUNT_DIR/tmp/setup.sh"
-    chroot "$MOUNT_DIR" /tmp/setup.sh
-    rm -f "$MOUNT_DIR/tmp/setup.sh"
-fi
+# Configure mkinitfs for virtio
+mkdir -p "$ROOTFS_DIR/etc/mkinitfs"
+echo 'features="ata base ide scsi usb virtio ext4"' > "$ROOTFS_DIR/etc/mkinitfs/mkinitfs.conf"
 
-echo "==> Generating initramfs"
-# Find kernel version
-KERNEL_VERSION=$(ls "$MOUNT_DIR/lib/modules" | head -1)
-echo "    Kernel version: $KERNEL_VERSION"
-
-# Verify kernel files exist
-ls -la "$MOUNT_DIR/boot/" || true
-echo "    Modules in $MOUNT_DIR/lib/modules/$KERNEL_VERSION:"
-ls "$MOUNT_DIR/lib/modules/$KERNEL_VERSION/" | head -5 || true
-
-# Alpine's default mkinitfs.conf should include virtio, but let's be explicit
-# Modify config to ensure virtio drivers are included
-sed -i 's/^features=.*/features="ata base ide scsi usb virtio ext4"/' "$MOUNT_DIR/etc/mkinitfs/mkinitfs.conf" 2>/dev/null || \
-    echo 'features="ata base ide scsi usb virtio ext4"' > "$MOUNT_DIR/etc/mkinitfs/mkinitfs.conf"
-
-# Generate initramfs
-chroot "$MOUNT_DIR" mkinitfs "$KERNEL_VERSION"
-
-# Verify initramfs was created
-echo "    Boot files after mkinitfs:"
-ls -la "$MOUNT_DIR/boot/"
-
-echo "==> Installing bootloader"
-KERNEL_VERSION=$(ls "$MOUNT_DIR/lib/modules" | head -1)
-
-# Create extlinux.conf in /boot (not /boot/extlinux)
-cat > "$MOUNT_DIR/boot/extlinux.conf" <<EOF
+# Create extlinux.conf
+cat > "$ROOTFS_DIR/boot/extlinux.conf" <<'EXTLINUX'
 DEFAULT alpine
 PROMPT 0
 TIMEOUT 20
@@ -197,50 +121,109 @@ LABEL alpine
     LINUX vmlinuz-lts
     INITRD initramfs-lts
     APPEND root=LABEL=alpine-root modules=ext4 rootfstype=ext4 console=tty0 console=ttyS0,115200n8
-EOF
+EXTLINUX
 
-# Install extlinux to /boot directly
-chroot "$MOUNT_DIR" extlinux --install /boot
+# Copy syslinux modules to /boot
+cp "$ROOTFS_DIR/usr/share/syslinux/ldlinux.c32" "$ROOTFS_DIR/boot/"
+cp "$ROOTFS_DIR/usr/share/syslinux/libutil.c32" "$ROOTFS_DIR/boot/" 2>/dev/null || true
+cp "$ROOTFS_DIR/usr/share/syslinux/libcom32.c32" "$ROOTFS_DIR/boot/" 2>/dev/null || true
 
-# Copy required .c32 modules to /boot (same directory as ldlinux.sys)
-cp "$MOUNT_DIR/usr/share/syslinux/ldlinux.c32" "$MOUNT_DIR/boot/"
-cp "$MOUNT_DIR/usr/share/syslinux/libutil.c32" "$MOUNT_DIR/boot/" 2>/dev/null || true
-cp "$MOUNT_DIR/usr/share/syslinux/libcom32.c32" "$MOUNT_DIR/boot/" 2>/dev/null || true
+# Save MBR for later
+cp "$ROOTFS_DIR/usr/share/syslinux/mbr.bin" "$WORK_DIR/mbr.bin"
 
-# Copy mbr.bin before unmounting (we'll need it after)
-echo "==> Copying MBR code"
-cp "$MOUNT_DIR/usr/share/syslinux/mbr.bin" "$WORK_DIR/mbr.bin"
-ls -la "$WORK_DIR/mbr.bin"
-
-# Unmount pseudo-filesystems before writing MBR
-umount "$MOUNT_DIR/dev" 2>/dev/null || true
-umount "$MOUNT_DIR/sys" 2>/dev/null || true
-umount "$MOUNT_DIR/proc" 2>/dev/null || true
-
-# Unmount the filesystem so we can write MBR safely
-echo "==> Unmounting filesystem for MBR write"
-sync
-umount "$MOUNT_DIR"
-
-# Find the base loop device (the whole disk, not a partition)
-# LOOP_DEV might be /dev/loop0 (if partscan worked) or the partition device (if fallback was used)
-if [[ "${NEED_MBR_REATTACH:-}" == "1" ]]; then
-    # In fallback mode, we need to detach and reattach the whole disk
-    echo "==> Reattaching whole disk for MBR write"
-    losetup -d "$LOOP_DEV" 2>/dev/null || true
-    DISK_LOOP=$(losetup --find --show "$RAW_IMAGE")
-else
-    # Partscan mode - LOOP_DEV is already the base disk device
-    DISK_LOOP="$LOOP_DEV"
+# Process chroot script - apply file-based customizations
+if [[ -n "$CHROOT_SCRIPT" ]] && [[ -f "$CHROOT_SCRIPT" ]]; then
+    echo "==> Processing customization script"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        
+        # Handle rc-update add <service> <runlevel>
+        if [[ "$line" =~ rc-update[[:space:]]+add[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+) ]]; then
+            service="${BASH_REMATCH[1]}"
+            runlevel="${BASH_REMATCH[2]}"
+            mkdir -p "$ROOTFS_DIR/etc/runlevels/$runlevel"
+            if [[ -f "$ROOTFS_DIR/etc/init.d/$service" ]]; then
+                ln -sf "/etc/init.d/$service" "$ROOTFS_DIR/etc/runlevels/$runlevel/$service"
+                echo "    Enabled $service in $runlevel"
+            else
+                echo "    Warning: service $service not found"
+            fi
+        # Handle mkdir -p /path
+        elif [[ "$line" =~ mkdir[[:space:]]+-p[[:space:]]+(/[^[:space:]]+) ]]; then
+            dir="${BASH_REMATCH[1]}"
+            mkdir -p "$ROOTFS_DIR$dir"
+            echo "    Created $dir"
+        # Handle echo "content" > /path
+        elif [[ "$line" =~ echo[[:space:]]+[\"\']([^\"\']+)[\"\'][[:space:]]*\>[[:space:]]*(/[^[:space:]]+) ]]; then
+            content="${BASH_REMATCH[1]}"
+            filepath="${BASH_REMATCH[2]}"
+            mkdir -p "$(dirname "$ROOTFS_DIR$filepath")"
+            echo "$content" > "$ROOTFS_DIR$filepath"
+            echo "    Wrote $filepath"
+        # Handle cat > /path <<'EOF' ... EOF blocks (hostname case)
+        elif [[ "$line" =~ echo[[:space:]]+([^[:space:]\"\']+)[[:space:]]*\>[[:space:]]*(/[^[:space:]]+) ]]; then
+            content="${BASH_REMATCH[1]}"
+            filepath="${BASH_REMATCH[2]}"
+            mkdir -p "$(dirname "$ROOTFS_DIR$filepath")"
+            echo "$content" > "$ROOTFS_DIR$filepath"
+            echo "    Wrote $filepath"
+        fi
+    done < "$CHROOT_SCRIPT"
 fi
 
-echo "==> Writing MBR to $DISK_LOOP"
-dd if="$WORK_DIR/mbr.bin" of="$DISK_LOOP" bs=440 count=1 conv=notrunc
-sync
+echo "==> Creating rootfs tarball"
+# Create tarball - proot handles ownership via ptrace, files are owned by user on disk
+# guestfish will fix ownership when extracting (it has real root)
+tar -C "$ROOTFS_DIR" -cf "$ROOTFS_TAR" .
 
-# Cleanup
-echo "==> Detaching loop device"
-losetup -d "$DISK_LOOP" 2>/dev/null || true
+echo "==> Creating ${IMAGE_SIZE} disk image"
+truncate -s "$IMAGE_SIZE" "$RAW_IMAGE"
+
+echo "==> Building disk with guestfish"
+guestfish --rw -a "$RAW_IMAGE" <<GUESTFISH_EOF
+run
+
+# Partition the disk (MBR with single bootable partition)
+part-disk /dev/sda mbr
+part-set-bootable /dev/sda 1 true
+
+# Format partition with ext4
+mkfs ext4 /dev/sda1 label:alpine-root
+
+# Mount the partition
+mount /dev/sda1 /
+
+# Extract rootfs tarball
+tar-in $ROOTFS_TAR / xattrs:true
+
+# Fix ownership (files were created by non-root user on host)
+# Exclude virtual filesystems that can't be chowned
+sh "find / -xdev -exec chown root:root {} + 2>/dev/null || true"
+
+# Generate initramfs (needs to run inside guest for proper paths)
+sh "KVER=\$(ls /lib/modules | head -1) && mkinitfs \$KVER"
+
+# Remove any boot->. symlink that causes issues
+sh "rm -f /boot/boot"
+
+# Install extlinux bootloader using native guestfish command
+extlinux /boot
+
+# Copy required syslinux modules (ldlinux.c32 is required for booting)
+sh "cp /usr/share/syslinux/ldlinux.c32 /boot/"
+sh "cp /usr/share/syslinux/libutil.c32 /boot/ 2>/dev/null || true"
+sh "cp /usr/share/syslinux/libcom32.c32 /boot/ 2>/dev/null || true"
+
+# Sync and close
+sync
+umount-all
+GUESTFISH_EOF
+
+echo "==> Writing MBR to disk image"
+dd if="$WORK_DIR/mbr.bin" of="$RAW_IMAGE" bs=440 count=1 conv=notrunc 2>/dev/null
+
 # Convert to final format
 if [[ "$IMAGE_FORMAT" == "qcow2" ]]; then
     echo "==> Converting to qcow2"
@@ -251,3 +234,4 @@ else
 fi
 
 echo "==> Build complete: $OUTPUT_IMAGE"
+ls -lh "$OUTPUT_IMAGE"

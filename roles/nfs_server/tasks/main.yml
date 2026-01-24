@@ -194,7 +194,6 @@
         - name: Build Alpine NFS qcow2 image
           ansible.builtin.shell:
             cmd: >-
-              sudo --preserve-env=SSL_CERT_FILE,NIX_SSL_CERT_FILE
               {{ nfs_server_build_dir }}/build-alpine-image
               --image-size {{ nfs_server_os_disk_size }}
               --image-format qcow2
@@ -206,6 +205,7 @@
           environment:
             SSL_CERT_FILE: "{{ lookup('env', 'SSL_CERT_FILE') | default('/etc/ssl/certs/ca-certificates.crt', true) }}"
             NIX_SSL_CERT_FILE: "{{ lookup('env', 'NIX_SSL_CERT_FILE') | default('', true) }}"
+            LIBGUESTFS_BACKEND: "direct"
           delegate_to: localhost
           register: build_result
 
