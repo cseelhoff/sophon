@@ -1,6 +1,6 @@
 ---
 # Kopia backup configuration for filesystem-level backups
-kopia_enabled: true
+kopia_enabled: false  # TODO: Rewrite to use portainer_stack
 kopia_image_name: "kopia/kopia"
 kopia_image_tag: "0.17"
 

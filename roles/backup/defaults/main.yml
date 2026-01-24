@@ -1,6 +1,6 @@
 ---
 # Backup configuration using offen/docker-volume-backup
-backup_enabled: true
+backup_enabled: false  # TODO: Rewrite to use portainer_stack
 backup_image_name: "offen/docker-volume-backup"
 backup_image_tag: "v2.43.0"
 

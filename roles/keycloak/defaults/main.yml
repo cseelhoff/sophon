@@ -1,6 +1,6 @@
 ---
 # Keycloak configuration
-keycloak_enabled: true
+keycloak_enabled: false  # TODO: Rewrite to use portainer_stack
 keycloak_image_name: "quay.io/keycloak/keycloak"
 keycloak_image_tag: "26.0"
 

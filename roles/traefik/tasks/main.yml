@@ -1,71 +1,47 @@
 ---
-# Deploy Traefik to Portainer
+# Deploy Traefik via Portainer stack
 
 - name: Deploy Traefik
-  when: traefik_enabled is true
+  when: traefik_enabled | default(true)
   block:
-    - name: Set deployment variables
-      ansible.builtin.set_fact:
-        traefik_validate_certs: false
-        traefik_file_server_ip: "{{ ansible_default_ipv4.address }}"
-
-    - name: Check if Traefik image exists
-      ansible.builtin.raw: podman images | grep -q "{{ traefik_image_name }}[ ]*{{ traefik_image_tag }}"
-      delegate_to: "{{ coreos_ip }}"
-      register: traefik_image_exists
-      failed_when: false
-      changed_when: false
-
-    - name: Download and load Traefik image from HTTP file server
-      ansible.builtin.raw: |
-        cd /tmp &&
-        curl -o traefik.tar http://{{ traefik_file_server_ip }}:{{ http_file_server_port }}/traefik.tar &&
-        podman load -i traefik.tar &&
-        rm -f traefik.tar
-      delegate_to: "{{ coreos_ip }}"
-      when: traefik_image_exists.rc != 0
-
-    - name: Create Traefik directories
-      ansible.builtin.raw: |
-        mkdir -p {{ traefik_config_dir }}
-        mkdir -p {{ traefik_data_dir }}
-      delegate_to: "{{ coreos_ip }}"
-      become: true
-
-    - name: Create traefik.yml configuration
-      ansible.builtin.raw: |
-        cat > {{ traefik_config_dir }}/traefik.yml << 'TRAEFIKYML'
-        {{ lookup('template', 'traefik.yml.j2') }}
-        TRAEFIKYML
-      delegate_to: "{{ coreos_ip }}"
-      become: true
-
-    - name: Create config.yml for file provider
-      ansible.builtin.raw: |
-        cat > {{ traefik_config_dir }}/config.yml << 'CONFIGYML'
-        {{ lookup('template', 'config.yml.j2') }}
-        CONFIGYML
-      delegate_to: "{{ coreos_ip }}"
-      become: true
-
-    - name: Create empty acme.json with correct permissions
-      ansible.builtin.raw: |
-        touch {{ traefik_data_dir }}/acme.json
-        chmod 600 {{ traefik_data_dir }}/acme.json
-      delegate_to: "{{ coreos_ip }}"
-      become: true
-
-    - name: Generate docker-compose content in base64
-      ansible.builtin.set_fact:
-        traefik_compose_base64: "{{ lookup('template', 'docker-compose.yml.j2') | b64encode }}"
-
-    - name: Deploy Traefik stack using portainer
+    - name: Deploy Traefik stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
         portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
         portainer_stack_name: "traefik"
-        portainer_stack_compose_content: "{{ traefik_compose_base64 | b64decode }}"
-        portainer_stack_env_vars:
-          - name: CF_DNS_API_TOKEN
-            value: "{{ traefik_cf_dns_api_token | default('') }}"
+        portainer_stack_compose_content: |
+          version: '3'
+          services:
+            traefik:
+              image: docker.io/library/traefik:{{ traefik_image_tag }}
+              pull_policy: never
+              container_name: traefik
+              restart: unless-stopped
+              network_mode: host
+              volumes:
+                - /etc/traefik:/etc/traefik:ro
+                - traefik_data:/data
+                - /run/podman/podman.sock:/var/run/docker.sock:ro
+              command:
+                - --api.dashboard=true
+                - --api.insecure=true
+                - --entrypoints.web.address=:80
+                - --entrypoints.websecure.address=:443
+                - --providers.docker=true
+                - --providers.docker.exposedbydefault=false
+                - --providers.file.directory=/etc/traefik
+                - --providers.file.watch=true
+                - --log.level={{ traefik_log_level }}
+          volumes:
+            traefik_data:
+
+    - name: Wait for Traefik to be ready
+      ansible.builtin.wait_for:
+        host: "{{ coreos_ip }}"
+        port: "{{ traefik_port_http }}"
+        timeout: 60
+
+    - name: Display Traefik status
+      ansible.builtin.debug:
+        msg: "Traefik ready at http://{{ coreos_ip }}:{{ traefik_port_ui }} (dashboard)"

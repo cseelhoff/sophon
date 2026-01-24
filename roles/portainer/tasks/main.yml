@@ -2,12 +2,17 @@
 # Portainer Role Tasks
 # Portainer is deployed at boot via systemd (defined in CoreOS Butane config)
 # This role waits for Portainer and initializes admin password via direct API calls
-# (QGA network calls are blocked by permissions)
 
 - name: Generate Portainer admin password
   ansible.builtin.set_fact:
     portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
   when: portainer_admin_password is not defined
+
+- name: Validate Portainer password meets requirements
+  ansible.builtin.assert:
+    that:
+      - portainer_admin_password | length >= 12
+    fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
 
 - name: Wait for Portainer API to be ready
   ansible.builtin.uri:
@@ -19,10 +24,6 @@
   until: portainer_status.status == 200
   retries: 60
   delay: 3
-
-- name: Show Portainer version
-  ansible.builtin.debug:
-    msg: "Portainer version: {{ portainer_status.json.Version }}"
 
 - name: Initialize Portainer admin user
   ansible.builtin.uri:
@@ -36,18 +37,14 @@
     status_code: [200, 409]
   register: portainer_init
 
-- name: Display admin init result
+- name: Warn if admin already exists and password was auto-generated
   ansible.builtin.debug:
-    msg: "{{ portainer_init.json | default('Admin already initialized') }}"
+    msg: "WARNING: Admin already exists. If auth fails, set -e portainer_admin_password=<existing_password>"
+  when: portainer_init.status == 409
 
 - name: Display Portainer access info
   ansible.builtin.debug:
-    msg: |
-      ============================================
-      Portainer is available at:
-      https://{{ coreos_ip }}:{{ portainer_port }}
-
-      Admin credentials:
-      Username: admin
-      Password: {{ portainer_admin_password }}
-      ============================================
+    msg: >-
+      Portainer {{ portainer_status.json.Version }} ready at https://{{ coreos_ip }}:{{ portainer_port }}
+      | admin / {{ portainer_admin_password }}
+      {{ '(existing admin)' if portainer_init.status == 409 else '' }}

@@ -52,6 +52,21 @@ coreos_container_images:
   - name: "portainer/portainer-ce"
     tag: "2.27.1"
     tar_filename: "portainer-ce.tar"
+  - name: "coredns/coredns"
+    tag: "1.12.0"
+    tar_filename: "coredns.tar"
+  - name: "traefik"
+    tag: "v3.2"
+    tar_filename: "traefik.tar"
+  - name: "osixia/openldap"
+    tag: "1.5.0"
+    tar_filename: "openldap.tar"
+  - name: "osixia/phpldapadmin"
+    tag: "0.9.0"
+    tar_filename: "phpldapadmin.tar"
+  - name: "sonatype/nexus3"
+    tag: "3.72.0"
+    tar_filename: "nexus3.tar"
 
 # =============================================================================
 # Local Download Directory (used for fallback when Proxmox cannot download)

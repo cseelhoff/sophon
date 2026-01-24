@@ -1,6 +1,6 @@
 ---
 # Enable/disable this role
-dns_sync_enabled: true
+dns_sync_enabled: false  # TODO: Rewrite to use portainer_stack
 
 # Container image
 dns_sync_image_name: "python"

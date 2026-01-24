@@ -1,64 +1,75 @@
 ---
-# Deploy OpenLDAP Directory Service
+# Deploy OpenLDAP Directory Service via Portainer Stack
 
-- name: Set deployment variables
-  ansible.builtin.set_fact:
-    openldap_validate_certs: false
-    openldap_file_server_ip: "{{ ansible_default_ipv4.address }}"
+- name: Skip openldap deployment (disabled)
+  ansible.builtin.debug:
+    msg: "OpenLDAP role is disabled (openldap_enabled=false)"
+  when: not (openldap_enabled | default(false))
 
-- name: Check if OpenLDAP image exists
-  ansible.builtin.raw: podman images | grep -q "openldap[ ]*{{ openldap_image_tag }}"
-  delegate_to: "{{ coreos_ip }}"
-  register: openldap_image_exists
-  failed_when: false
-  changed_when: false
+- name: Deploy OpenLDAP
+  when: openldap_enabled | default(false)
+  block:
+    - name: Deploy OpenLDAP stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port | default(9443) }}"
+        portainer_stack_name: "openldap"
+        portainer_stack_compose_content: |
+          services:
+            openldap:
+              image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
+              pull_policy: never
+              container_name: openldap
+              restart: unless-stopped
+              hostname: ldap
+              network_mode: host
+              environment:
+                - LDAP_LOG_LEVEL={{ openldap_log_level }}
+                - LDAP_ORGANISATION={{ openldap_organisation }}
+                - LDAP_DOMAIN={{ openldap_domain }}
+                - LDAP_ADMIN_PASSWORD={{ openldap_admin_password | default('admin') }}
+                - LDAP_CONFIG_PASSWORD={{ openldap_config_password | default('config') }}
+                - LDAP_READONLY_USER=false
+                - LDAP_RFC2307BIS_SCHEMA=false
+                - LDAP_BACKEND=mdb
+                - LDAP_TLS={{ openldap_tls_enabled | string | lower }}
+                - LDAP_TLS_ENFORCE={{ openldap_tls_enforce | string | lower }}
+                - LDAP_REPLICATION=false
+                - KEEP_EXISTING_CONFIG=false
+                - LDAP_REMOVE_CONFIG_AFTER_SETUP=true
+              tty: true
+              stdin_open: true
+              volumes:
+                - openldap_data:/var/lib/ldap
+                - openldap_config:/etc/ldap/slapd.d
 
-- name: Download and load OpenLDAP image from HTTP file server
-  ansible.builtin.raw: |
-    cd /tmp &&
-    curl -o openldap.tar http://{{ openldap_file_server_ip }}:{{ http_file_server_port }}/openldap.tar &&
-    podman load -i openldap.tar &&
-    rm -f openldap.tar
-  delegate_to: "{{ coreos_ip }}"
-  when: openldap_image_exists.rc != 0
+            phpldapadmin:
+              image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
+              pull_policy: never
+              container_name: phpldapadmin
+              restart: unless-stopped
+              network_mode: host
+              environment:
+                - PHPLDAPADMIN_LDAP_HOSTS=127.0.0.1
+                - PHPLDAPADMIN_HTTPS=false
+                - PHPLDAPADMIN_SERVER_ADMIN=admin@{{ openldap_domain }}
 
-- name: Check if phpLDAPadmin image exists
-  ansible.builtin.raw: podman images | grep -q "phpldapadmin[ ]*{{ openldap_phpldapadmin_image_tag }}"
-  delegate_to: "{{ coreos_ip }}"
-  register: openldap_phpldapadmin_image_exists
-  failed_when: false
-  changed_when: false
+          volumes:
+            openldap_data:
+            openldap_config:
 
-- name: Download and load phpLDAPadmin image from HTTP file server
-  ansible.builtin.raw: |
-    cd /tmp &&
-    curl -o phpldapadmin.tar http://{{ openldap_file_server_ip }}:{{ http_file_server_port }}/phpldapadmin.tar &&
-    podman load -i phpldapadmin.tar &&
-    rm -f phpldapadmin.tar
-  delegate_to: "{{ coreos_ip }}"
-  when: openldap_phpldapadmin_image_exists.rc != 0
+    - name: Wait for OpenLDAP to be ready
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ openldap_port_admin }}"
+        method: GET
+        status_code: [200, 302]
+        validate_certs: false
+      register: openldap_health
+      until: openldap_health.status in [200, 302]
+      retries: 30
+      delay: 5
 
-- name: Create OpenLDAP directories
-  ansible.builtin.raw: |
-    mkdir -p {{ openldap_data_dir }}/database
-    mkdir -p {{ openldap_data_dir }}/config
-    mkdir -p {{ openldap_data_dir }}/certs
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-
-- name: Generate docker-compose content in base64
-  ansible.builtin.set_fact:
-    openldap_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
-
-- name: Deploy OpenLDAP stack using portainer
-  ansible.builtin.include_role:
-    name: portainer_stack
-  vars:
-    portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
-    portainer_stack_name: "openldap"
-    portainer_stack_compose_content: "{{ openldap_compose_base64 | b64decode }}"
-    portainer_stack_env_vars:
-      - name: LDAP_ADMIN_PASSWORD
-        value: "{{ openldap_admin_password | default('admin') }}"
-      - name: LDAP_CONFIG_PASSWORD
-        value: "{{ openldap_config_password | default('config') }}"
+    - name: Display OpenLDAP status
+      ansible.builtin.debug:
+        msg: "OpenLDAP ready - phpLDAPadmin at http://{{ coreos_ip }}:{{ openldap_port_admin }}, LDAP at {{ coreos_ip }}:{{ openldap_port_ldap }}"

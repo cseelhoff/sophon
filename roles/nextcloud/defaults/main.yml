@@ -1,6 +1,6 @@
 ---
 # Nextcloud configuration
-nextcloud_enabled: true
+nextcloud_enabled: false  # TODO: Rewrite to use portainer_stack
 nextcloud_image_name: "nextcloud"
 nextcloud_image_tag: "29"
 

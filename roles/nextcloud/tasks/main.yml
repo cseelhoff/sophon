@@ -1,66 +1,8 @@
 ---
 # Deploy Nextcloud
+# TODO: Rewrite to use portainer_stack approach (no delegate_to)
 
-- name: Set deployment variables
-  ansible.builtin.set_fact:
-    nextcloud_validate_certs: false
-    nextcloud_file_server_ip: "{{ ansible_default_ipv4.address }}"
-
-- name: Check if Nextcloud image exists
-  ansible.builtin.raw: podman images | grep -q "nextcloud[ ]*{{ nextcloud_image_tag }}"
-  delegate_to: "{{ coreos_ip }}"
-  register: nextcloud_image_exists
-  failed_when: false
-  changed_when: false
-
-- name: Download and load Nextcloud image from HTTP file server
-  ansible.builtin.raw: |
-    cd /tmp &&
-    curl -o nextcloud.tar http://{{ nextcloud_file_server_ip }}:{{ http_file_server_port }}/nextcloud.tar &&
-    podman load -i nextcloud.tar &&
-    rm -f nextcloud.tar
-  delegate_to: "{{ coreos_ip }}"
-  when: nextcloud_image_exists.rc != 0
-
-- name: Check if PostgreSQL image exists
-  ansible.builtin.raw: podman images | grep -q "postgres[ ]*{{ nextcloud_db_image_tag }}"
-  delegate_to: "{{ coreos_ip }}"
-  register: nextcloud_postgres_image_exists
-  failed_when: false
-  changed_when: false
-
-- name: Download and load PostgreSQL image from HTTP file server
-  ansible.builtin.raw: |
-    cd /tmp &&
-    curl -o postgres.tar http://{{ nextcloud_file_server_ip }}:{{ http_file_server_port }}/postgres.tar &&
-    podman load -i postgres.tar &&
-    rm -f postgres.tar
-  delegate_to: "{{ coreos_ip }}"
-  when: nextcloud_postgres_image_exists.rc != 0
-
-- name: Create Nextcloud directories
-  ansible.builtin.raw: |
-    mkdir -p {{ nextcloud_data_dir }}/app
-    mkdir -p {{ nextcloud_data_dir }}/data
-    mkdir -p {{ nextcloud_data_dir }}/db
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-
-- name: Generate docker-compose content in base64
-  ansible.builtin.set_fact:
-    nextcloud_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
-
-- name: Deploy Nextcloud stack using portainer
-  ansible.builtin.include_role:
-    name: portainer_stack
-  vars:
-    portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
-    portainer_stack_name: "nextcloud"
-    portainer_stack_compose_content: "{{ nextcloud_compose_base64 | b64decode }}"
-    portainer_stack_env_vars:
-      - name: POSTGRES_PASSWORD
-        value: "{{ nextcloud_db_password | default('nextcloud') }}"
-      - name: NEXTCLOUD_ADMIN_USER
-        value: "{{ nextcloud_admin_user | default('admin') }}"
-      - name: NEXTCLOUD_ADMIN_PASSWORD
-        value: "{{ nextcloud_admin_password | default('admin') }}"
+- name: Skip nextcloud deployment (disabled)
+  ansible.builtin.debug:
+    msg: "Nextcloud role is disabled (nextcloud_enabled=false)"
+  when: not (nextcloud_enabled | default(false))

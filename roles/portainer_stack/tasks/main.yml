@@ -41,7 +41,8 @@
     body:
       Name: "local"
       EndpointCreationType: 1
-    status_code: 200
+      URL: "unix:///var/run/docker.sock"
+    status_code: [200, 201]
     validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
   register: portainer_stack_endpoint_create_response
   when: portainer_stack_endpoint_id is not defined or portainer_stack_endpoint_id == 'null'
@@ -51,7 +52,21 @@
     portainer_stack_endpoint_id: "{{ portainer_stack_endpoint_create_response.json.Id }}"
   when: portainer_stack_endpoint_create_response is defined and portainer_stack_endpoint_create_response.json is defined
 
-- name: Deploy stack to Portainer
+- name: Get existing stacks
+  ansible.builtin.uri:
+    url: "{{ portainer_stack_url }}/api/stacks"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    status_code: 200
+    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
+  register: portainer_stack_list_response
+
+- name: Check if stack already exists
+  ansible.builtin.set_fact:
+    portainer_stack_existing: "{{ portainer_stack_list_response.json | selectattr('Name', 'equalto', portainer_stack_name) | list | first | default(none) }}"
+
+- name: Deploy new stack to Portainer
   ansible.builtin.uri:
     url: "{{ portainer_stack_url }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}"
     method: POST
@@ -66,3 +81,21 @@
       stackFileContent: "{{ portainer_stack_compose_content }}"
     status_code: 200
     validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
+  when: portainer_stack_existing is none
+
+- name: Update existing stack
+  ansible.builtin.uri:
+    url: "{{ portainer_stack_url }}/api/stacks/{{ portainer_stack_existing.Id }}?endpointId={{ portainer_stack_endpoint_id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      env: "{{ portainer_stack_env_vars | default([]) }}"
+      stackFileContent: "{{ portainer_stack_compose_content }}"
+      prune: true
+      pullImage: false
+    status_code: 200
+    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
+  when: portainer_stack_existing is not none

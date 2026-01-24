@@ -1,6 +1,6 @@
 ---
 # Guacamole configuration
-guacamole_enabled: true
+guacamole_enabled: false  # TODO: Rewrite to use portainer_stack
 guacamole_image_name: "guacamole/guacamole"
 guacamole_image_tag: "1.5.5"
 guacamole_guacd_image_name: "guacamole/guacd"

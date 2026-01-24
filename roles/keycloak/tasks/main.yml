@@ -1,55 +1,8 @@
 ---
 # Deploy Keycloak Identity Provider
+# TODO: Rewrite to use portainer_stack approach (no delegate_to)
 
-- name: Set deployment variables
-  ansible.builtin.set_fact:
-    keycloak_validate_certs: false
-    keycloak_file_server_ip: "{{ ansible_default_ipv4.address }}"
-
-- name: Check if Keycloak image exists
-  ansible.builtin.raw: podman images | grep -q "keycloak[ ]*{{ keycloak_image_tag }}"
-  delegate_to: "{{ coreos_ip }}"
-  register: keycloak_image_exists
-  failed_when: false
-  changed_when: false
-
-- name: Download and load Keycloak image from HTTP file server
-  ansible.builtin.raw: |
-    cd /tmp &&
-    curl -o keycloak.tar http://{{ keycloak_file_server_ip }}:{{ http_file_server_port }}/keycloak.tar &&
-    podman load -i keycloak.tar &&
-    rm -f keycloak.tar
-  delegate_to: "{{ coreos_ip }}"
-  when: keycloak_image_exists.rc != 0
-
-- name: Create Keycloak directories
-  ansible.builtin.raw: mkdir -p {{ keycloak_data_dir }}/data {{ keycloak_data_dir }}/import
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-
-- name: Generate realm import configuration
-  ansible.builtin.set_fact:
-    keycloak_realm_config_base64: "{{ lookup('template', 'templates/realm-export.json.j2') | b64encode }}"
-
-- name: Deploy realm configuration to CoreOS
-  ansible.builtin.raw: |
-    echo '{{ keycloak_realm_config_base64 }}' | base64 -d > {{ keycloak_data_dir }}/import/{{ keycloak_realm }}-realm.json
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-
-- name: Generate docker-compose content in base64
-  ansible.builtin.set_fact:
-    keycloak_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
-
-- name: Deploy Keycloak stack using portainer
-  ansible.builtin.include_role:
-    name: portainer_stack
-  vars:
-    portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
-    portainer_stack_name: "keycloak"
-    portainer_stack_compose_content: "{{ keycloak_compose_base64 | b64decode }}"
-    portainer_stack_env_vars:
-      - name: KEYCLOAK_ADMIN
-        value: "{{ keycloak_admin_user | default('admin') }}"
-      - name: KEYCLOAK_ADMIN_PASSWORD
-        value: "{{ keycloak_admin_password | default('admin') }}"
+- name: Skip keycloak deployment (disabled)
+  ansible.builtin.debug:
+    msg: "Keycloak role is disabled (keycloak_enabled=false)"
+  when: not (keycloak_enabled | default(false))

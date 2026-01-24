@@ -29,6 +29,34 @@ storage:
           address1={{ coreos_ip }}/{{ coreos_cidr }},{{ coreos_gateway }}
           method=manual
 
+    # Disable systemd-resolved DNS stub listener to free port 53 for CoreDNS
+    - path: /etc/systemd/resolved.conf.d/no-stub.conf
+      mode: 0644
+      contents:
+        inline: |
+          [Resolve]
+          DNSStubListener=no
+
+    # CoreDNS configuration
+    - path: /etc/coredns/Corefile
+      mode: 0644
+      contents:
+        inline: |
+          . {
+              forward . 8.8.8.8 8.8.4.4
+              log
+              errors
+              cache 30
+          }
+
+    # Traefik dynamic configuration
+    - path: /etc/traefik/dynamic.yml
+      mode: 0644
+      contents:
+        inline: |
+          # Dynamic configuration for Traefik
+          # Add routers and services here
+
     # Script to install QGA from ISO and load container images
     - path: /usr/local/bin/setup-from-iso.sh
       mode: 0755
@@ -46,7 +74,7 @@ storage:
           # Install RPMs (qemu-guest-agent and dependencies)
           rpm-ostree install --apply-live --allow-inactive --assumeyes --cache-only $ISO_MOUNT/*.rpm
           
-          # Load container images from ISO
+          # Load container images from ISO (running as root, images go to /var/lib/containers)
           for tarfile in $ISO_MOUNT/*.tar; do
             if [ -f "$tarfile" ]; then
               echo "Loading container image: $tarfile"
@@ -85,26 +113,29 @@ systemd:
       contents: |
         [Unit]
         Description=Portainer Container Management
-        After=setup-from-iso.service network-online.target
-        Requires=setup-from-iso.service
+        # On first boot, wait for ISO setup; on subsequent boots, this is a no-op
+        After=setup-from-iso.service network-online.target podman.socket
         Wants=network-online.target
+        Requires=podman.socket
+        # Only start after images are loaded (first boot creates this file)
+        ConditionPathExists=/var/lib/setup-from-iso.stamp
 
         [Service]
         Type=simple
         Restart=always
-        RestartSec=5
+        RestartSec=10
         ExecStartPre=-/usr/bin/podman rm -f portainer
-        ExecStartPre=/usr/bin/podman volume create portainer_data
-        ExecStart=/usr/bin/podman run --rm --name portainer \
+        ExecStartPre=-/usr/bin/podman volume create portainer_data
+        ExecStart=/usr/bin/podman run --rm --name portainer --privileged \
           -p {{ portainer_port | default(9443) }}:9443 \
-          -v /run/podman/podman.sock:/var/run/docker.sock:z \
-          -v portainer_data:/data:z \
+          -v /run/podman/podman.sock:/var/run/docker.sock \
+          -v portainer_data:/data \
           docker.io/portainer/portainer-ce:{{ portainer_image_tag | default('2.27.1') }}
         ExecStop=/usr/bin/podman stop portainer
 
         [Install]
         WantedBy=multi-user.target
 
-    # Enable podman socket for Portainer
+    # Enable podman socket for Portainer (system-level, not user)
     - name: podman.socket
       enabled: true

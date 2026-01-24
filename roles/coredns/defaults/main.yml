@@ -12,6 +12,9 @@ coredns_config_dir: "/opt/coredns"
 # DNS forwarding settings
 coredns_forward_dns: "8.8.8.8 8.8.4.4"
 
+# Portainer connection (for stack deployment)
+portainer_port: 9443
+
 # Local zones (synced by dns_sync sidecar)
 # coredns_local_zones:
 #   - name: "homelab.local"
