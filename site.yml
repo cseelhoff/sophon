@@ -392,13 +392,13 @@
       vars:
         nfs_content_mode: "{{ 'skip' if airgapped_mode | default(false) else 'download_and_upload' }}"
 
-- name: Deploy CoreOS VM
+- name: Deploy Portainer VM
   hosts: localhost
   connection: local
   gather_facts: true
-  tags: [coreos, infrastructure]
+  tags: [portainer, infrastructure]
   roles:
-    - coreos
+    - portainer
 
 # =============================================================================
 # Connectivity Check and Bastion Routing
