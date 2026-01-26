@@ -3,7 +3,7 @@
 # CoreOS Base Role - Shared CoreOS VM Creation
 # =============================================================================
 # This role creates a CoreOS VM on Proxmox with Ignition configuration.
-# It is designed to be included by other roles (portainer, bastion) that
+# It is designed to be included by other roles (infravm) that
 # provide their own Butane templates via coreos_base_butane_template.
 
 # =============================================================================

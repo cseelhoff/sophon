@@ -1,84 +1,100 @@
 ---
 # =============================================================================
-# Connectivity Check Role - Tests reachability to CoreOS VM
+# Connectivity Check Role - Tests NFS reachability from Bootstrap
 # =============================================================================
-# Sets facts: coreos_reachable, bastion_required
+# Determines if Bootstrap can directly access the NFS server network.
+# If not, and cloudflared_tunnel_token is set, cloudflared will be used.
 
 - name: Skip connectivity check if disabled
   ansible.builtin.meta: end_play
   when: not (connectivity_check_enabled | default(true))
 
-- name: Validate target IP is set
+- name: Validate NFS server IP is set
   ansible.builtin.fail:
-    msg: "connectivity_check_target_ip must be set (typically coreos_ip)"
-  when: connectivity_check_target_ip | length == 0
+    msg: "connectivity_check_nfs_server must be set (typically nfs_server_ip)"
+  when: connectivity_check_nfs_server | length == 0
 
 # -----------------------------------------------------------------------------
-# Ping Check
+# NFS Mount Test
 # -----------------------------------------------------------------------------
-- name: Check ping connectivity to target
-  ansible.builtin.command:
-    cmd: "ping -c 1 -W {{ connectivity_check_ping_timeout }} {{ connectivity_check_target_ip }}"
-  register: ping_result
+- name: Create temporary mount point
+  ansible.builtin.file:
+    path: "{{ connectivity_check_nfs_mount_point }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+
+- name: Test NFS mount from Bootstrap
+  ansible.builtin.shell:
+    cmd: |
+      # Try to mount NFS with timeout
+      timeout {{ connectivity_check_nfs_timeout }} mount -t nfs \
+        -o ro,nolock,timeo=30,retrans=1 \
+        {{ connectivity_check_nfs_server }}:{{ connectivity_check_nfs_export }} \
+        {{ connectivity_check_nfs_mount_point }} 2>/dev/null
+      
+      if [ $? -eq 0 ]; then
+        # Mount succeeded, unmount and report success
+        umount {{ connectivity_check_nfs_mount_point }} 2>/dev/null || true
+        echo "NFS_REACHABLE"
+        exit 0
+      else
+        echo "NFS_UNREACHABLE"
+        exit 1
+      fi
+  register: nfs_mount_result
   failed_when: false
   changed_when: false
-  retries: "{{ connectivity_check_ping_retries }}"
-  delay: 2
-  until: ping_result.rc == 0
+  delegate_to: localhost
 
-- name: Set ping reachability fact
+- name: Set NFS reachability fact
   ansible.builtin.set_fact:
-    coreos_ping_reachable: "{{ ping_result.rc == 0 }}"
+    nfs_reachable: "{{ nfs_mount_result.rc == 0 }}"
 
-- name: Display ping result
-  ansible.builtin.debug:
-    msg: "Ping to {{ connectivity_check_target_ip }}: {{ 'REACHABLE' if coreos_ping_reachable else 'UNREACHABLE' }}"
-
-# -----------------------------------------------------------------------------
-# SSH Check (only if ping succeeded)
-# -----------------------------------------------------------------------------
-- name: Check SSH connectivity to target
-  ansible.builtin.command:
-    cmd: >-
-      ssh -o StrictHostKeyChecking=no
-          -o UserKnownHostsFile=/dev/null
-          -o BatchMode=yes
-          -o ConnectTimeout={{ connectivity_check_ssh_timeout }}
-          -i {{ connectivity_check_ssh_key }}
-          -p {{ connectivity_check_ssh_port }}
-          {{ connectivity_check_target_user }}@{{ connectivity_check_target_ip }}
-          echo "SSH_OK"
-  register: ssh_result
+- name: Cleanup temporary mount point
+  ansible.builtin.file:
+    path: "{{ connectivity_check_nfs_mount_point }}"
+    state: absent
+  delegate_to: localhost
   failed_when: false
-  changed_when: false
-  when: coreos_ping_reachable
-
-- name: Set SSH reachability fact
-  ansible.builtin.set_fact:
-    coreos_ssh_reachable: "{{ ssh_result.rc | default(1) == 0 and 'SSH_OK' in (ssh_result.stdout | default('')) }}"
-
-- name: Display SSH result
-  ansible.builtin.debug:
-    msg: "SSH to {{ connectivity_check_target_user }}@{{ connectivity_check_target_ip }}: {{ 'REACHABLE' if coreos_ssh_reachable else 'UNREACHABLE' }}"
 
 # -----------------------------------------------------------------------------
-# Set Overall Reachability Facts
+# Cloudflared Decision
 # -----------------------------------------------------------------------------
-- name: Set overall reachability facts
+- name: Set cloudflared enabled fact
   ansible.builtin.set_fact:
-    coreos_reachable: "{{ coreos_ssh_reachable | default(false) }}"
-    bastion_required: "{{ not (coreos_ssh_reachable | default(false)) }}"
+    cloudflared_enabled: "{{ (not nfs_reachable) and (cloudflared_tunnel_token | default('') != '') }}"
 
 - name: Display connectivity summary
   ansible.builtin.debug:
     msg: |
       ═══════════════════════════════════════════════════════════
-      Connectivity Check Summary
+      Bootstrap Connectivity Check
       ═══════════════════════════════════════════════════════════
-      Target:           {{ connectivity_check_target_ip }}
-      Ping Reachable:   {{ coreos_ping_reachable | default(false) }}
-      SSH Reachable:    {{ coreos_ssh_reachable | default(false) }}
+      NFS Server:       {{ connectivity_check_nfs_server }}
+      NFS Reachable:    {{ nfs_reachable }}
       ───────────────────────────────────────────────────────────
-      CoreOS Reachable: {{ coreos_reachable }}
-      Bastion Required: {{ bastion_required }}
+      Cloudflared Token Set: {{ 'Yes' if cloudflared_tunnel_token | default('') != '' else 'No' }}
+      Cloudflared Enabled:   {{ cloudflared_enabled }}
       ═══════════════════════════════════════════════════════════
+
+- name: Fail if NFS unreachable and no cloudflared token
+  ansible.builtin.fail:
+    msg: |
+      ═══════════════════════════════════════════════════════════
+      ERROR: Cannot reach NFS server and no cloudflared token set
+      ═══════════════════════════════════════════════════════════
+      
+      Bootstrap cannot mount NFS at {{ connectivity_check_nfs_server }}:{{ connectivity_check_nfs_export }}
+      
+      Options:
+      1. Ensure network connectivity to {{ connectivity_check_nfs_server }}
+      2. Set CLOUDFLARED_TUNNEL_TOKEN environment variable for tunnel access:
+         
+         export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
+         ansible-playbook site.yml
+      
+      ═══════════════════════════════════════════════════════════
+  when:
+    - not nfs_reachable
+    - cloudflared_tunnel_token | default('') == ''

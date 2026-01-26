@@ -12,28 +12,25 @@
 # Air-Gapped Mode (after running prestage.yml and nfs-upload.yml):
 #   ansible-playbook site.yml -e airgapped_mode=true
 #
-# With Cloudflared tunnel (for remote bastion access):
+# With Cloudflared tunnel (for remote access when Bootstrap cannot reach NFS):
 #   CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook site.yml
 #
 # Skip prompts (CI/scripting):
 #   ansible-playbook site.yml \
 #     -e proxmox_host=10.0.0.10 \
-#     -e coreos_ip=10.0.0.100 \
-#     -e coreos_gateway=10.0.0.1 \
-#     -e nfs_server_ip=10.0.0.35 \
-#     -e domain_name=sophon.local
+#     -e domain_name=sophon.local \
+#     -e proxmox_password=secret
 #
 # WORKFLOW:
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Check/deploy NFS server (if not already in Proxmox)
-# 2. Populate NFS with container images and RPMs
-# 3. Deploy CoreOS VM on Proxmox
-# 4. Check connectivity to CoreOS
-# 5. If unreachable → Deploy bastion VM → Route via:
-#    a. Cloudflared ProxyJump (if CLOUDFLARED_TUNNEL_TOKEN set)
-#    b. Direct SSH ProxyJump (if bastion reachable)
-#    c. QGA Remote Execution (last resort)
-# 6. Continue with Portainer, CoreDNS, Traefik, and other services
+# 2. Check Bootstrap connectivity to NFS
+# 3. If NFS unreachable AND cloudflared token set:
+#    - Download cloudflared binary to NFS via Proxmox API
+# 4. Deploy InfraVM (CoreOS with NFS mount + optional cloudflared)
+# 5. Load container images on InfraVM (via SSH)
+# 6. Initialize Portainer
+# 7. Deploy CoreDNS, Traefik, and other services via Portainer Stacks
 #
 # AIR-GAPPED WORKFLOW:
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,9 +54,11 @@
         proxmox_host: "{{ proxmox_host | default(lookup('env', 'PROXMOX_HOST')) | default('', true) }}"
         domain_name: "{{ domain_name | default(lookup('env', 'DOMAIN_NAME')) | default('', true) }}"
         proxmox_password: "{{ proxmox_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
-        coreos_ip: "{{ coreos_ip | default(lookup('env', 'COREOS_IP')) | default('', true) }}"
+        infravm_ip: "{{ infravm_ip | default(lookup('env', 'INFRAVM_IP')) | default('', true) }}"
         nfs_server_ip: "{{ nfs_server_ip | default(lookup('env', 'NFS_SERVER_IP')) | default('', true) }}"
         proxmox_vnet: "{{ proxmox_vnet | default(lookup('env', 'PROXMOX_VNET')) | default('vmbr0', true) }}"
+        cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+        airgapped_mode: "{{ airgapped_mode | default(false) }}"
 
     - name: Prompt for missing Proxmox host
       ansible.builtin.pause:
@@ -89,9 +88,6 @@
 # =============================================================================
 # IP Address Auto-Discovery
 # =============================================================================
-# Discovers NFS and CoreOS IPs automatically by:
-# 1. Checking existing Proxmox storage/VMs
-# 2. Ping scanning the vnet for available IPs if needed
 - name: Auto-Discover IP Addresses
   hosts: localhost
   connection: local
@@ -123,15 +119,10 @@
         - _storage_list is defined
         - _storage_list.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0
 
-    - name: Display discovered NFS IP
-      ansible.builtin.debug:
-        msg: "Discovered NFS server IP from existing storage: {{ nfs_server_ip }}"
-      when: nfs_server_ip != ""
-
     # -------------------------------------------------------------------------
-    # CoreOS VM IP Discovery
+    # InfraVM IP Discovery
     # -------------------------------------------------------------------------
-    - name: Check for existing sophon-coreos VM
+    - name: Check for existing sophon-infravm VM
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/cluster/resources?type=vm"
         method: GET
@@ -139,42 +130,37 @@
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
         validate_certs: "{{ proxmox_validate_certs | default(false) }}"
       register: _vm_list
-      when: coreos_ip == ""
+      when: infravm_ip == ""
 
-    - name: Find sophon-coreos VM
+    - name: Find sophon-infravm VM
       ansible.builtin.set_fact:
-        _coreos_vm: "{{ _vm_list.json.data | selectattr('name', 'eq', coreos_vm_name | default('sophon-coreos')) | first | default({}) }}"
+        _infravm_vm: "{{ _vm_list.json.data | selectattr('name', 'eq', 'sophon-infravm') | first | default({}) }}"
       when:
-        - coreos_ip == ""
+        - infravm_ip == ""
         - _vm_list is defined
 
-    - name: Get CoreOS VM config for IP
+    - name: Get InfraVM config for IP
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ _coreos_vm.node }}/qemu/{{ _coreos_vm.vmid }}/config"
+        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ _infravm_vm.node }}/qemu/{{ _infravm_vm.vmid }}/config"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
         validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-      register: _coreos_config
+      register: _infravm_config
       when:
-        - coreos_ip == ""
-        - _coreos_vm is defined
-        - _coreos_vm.vmid is defined
+        - infravm_ip == ""
+        - _infravm_vm is defined
+        - _infravm_vm.vmid is defined
 
-    - name: Extract CoreOS IP from VM config (ipconfig0)
+    - name: Extract InfraVM IP from VM config
       ansible.builtin.set_fact:
-        coreos_ip: "{{ _coreos_config.json.data.ipconfig0 | regex_search('ip=([0-9.]+)', '\\1') | first }}"
+        infravm_ip: "{{ _infravm_config.json.data.ipconfig0 | regex_search('ip=([0-9.]+)', '\\1') | first }}"
       when:
-        - coreos_ip == ""
-        - _coreos_config is defined
-        - _coreos_config.json.data.ipconfig0 is defined
-        - "'ip=' in _coreos_config.json.data.ipconfig0"
+        - infravm_ip == ""
+        - _infravm_config is defined
+        - _infravm_config.json.data.ipconfig0 is defined
+        - "'ip=' in _infravm_config.json.data.ipconfig0"
       ignore_errors: true
-
-    - name: Display discovered CoreOS IP
-      ansible.builtin.debug:
-        msg: "Discovered CoreOS IP from existing VM: {{ coreos_ip }}"
-      when: coreos_ip != ""
 
     # -------------------------------------------------------------------------
     # Vnet Configuration for IP Scanning
@@ -187,7 +173,7 @@
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
         validate_certs: "{{ proxmox_validate_certs | default(false) }}"
       register: _proxmox_network
-      when: (nfs_server_ip == "") or (coreos_ip == "")
+      when: (nfs_server_ip == "") or (infravm_ip == "")
 
     - name: Find vnet configuration
       ansible.builtin.set_fact:
@@ -203,11 +189,11 @@
         - _vnet_config | length > 0
 
     # -------------------------------------------------------------------------
-    # ARP Scan for Network Discovery (runs on Proxmox node)
+    # ARP Scan for Network Discovery
     # -------------------------------------------------------------------------
     - name: Scan network for used IPs
       when:
-        - (nfs_server_ip == "") or (coreos_ip == "")
+        - (nfs_server_ip == "") or (infravm_ip == "")
         - _network_base is defined
         - _network_base != ""
       block:
@@ -228,11 +214,7 @@
           ansible.builtin.set_fact:
             _used_ips: "{{ _arp_scan_result.stdout | default('') | split('\n') | select('match', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$') | list }}"
 
-        - name: Debug used IPs
-          ansible.builtin.debug:
-            msg: "IPs currently in use on {{ proxmox_vnet }}: {{ _used_ips }}"
-
-        - name: Find available IPs for NFS and CoreOS
+        - name: Find available IPs
           ansible.builtin.set_fact:
             _available_ips: >-
               {{
@@ -250,17 +232,12 @@
             - nfs_server_ip == ""
             - _available_ips | length > 0
 
-        - name: Set discovered CoreOS IP
+        - name: Set discovered InfraVM IP
           ansible.builtin.set_fact:
-            coreos_ip: "{{ _available_ips[1] }}"
+            infravm_ip: "{{ _available_ips[1] }}"
           when:
-            - coreos_ip == ""
+            - infravm_ip == ""
             - _available_ips | length > 1
-
-        - name: Display auto-discovered IPs
-          ansible.builtin.debug:
-            msg: "Auto-discovered IPs via arp-scan - NFS: {{ nfs_server_ip }}, CoreOS: {{ coreos_ip }}"
-          when: nfs_server_ip != "" or coreos_ip != ""
 
     # -------------------------------------------------------------------------
     # Final Prompts (if auto-discovery failed)
@@ -278,26 +255,25 @@
         - nfs_server_ip == ""
         - _nfs_prompt.user_input is defined
 
-    - name: Prompt for CoreOS IP if not discovered
+    - name: Prompt for InfraVM IP if not discovered
       ansible.builtin.pause:
-        prompt: "CoreOS VM static IP (auto-discovery failed)"
-      register: _coreos_prompt
-      when: coreos_ip == ""
+        prompt: "InfraVM static IP (auto-discovery failed)"
+      register: _infravm_prompt
+      when: infravm_ip == ""
 
-    - name: Set prompted CoreOS IP
+    - name: Set prompted InfraVM IP
       ansible.builtin.set_fact:
-        coreos_ip: "{{ _coreos_prompt.user_input }}"
+        infravm_ip: "{{ _infravm_prompt.user_input }}"
       when:
-        - coreos_ip == ""
-        - _coreos_prompt.user_input is defined
+        - infravm_ip == ""
+        - _infravm_prompt.user_input is defined
 
     # -------------------------------------------------------------------------
-    # Derive Gateway from Vnet
+    # Derive Gateway and CIDR
     # -------------------------------------------------------------------------
     - name: Set gateway and CIDR from vnet
       ansible.builtin.set_fact:
-        coreos_gateway: "{{ _gateway | default(coreos_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
-        # Extract CIDR prefix - handle both 'address/prefix' format and plain netmask
+        infravm_gateway: "{{ _gateway | default(infravm_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
         proxmox_cidr: >-
           {%- if _vnet_config.cidr is defined and '/' in (_vnet_config.cidr | string) -%}
             {{ (_vnet_config.cidr | string).split('/')[1] }}
@@ -308,12 +284,7 @@
           {%- else -%}
             24
           {%- endif -%}
-      when: coreos_gateway is not defined or coreos_gateway == ""
-
-    - name: Set deployment mode variables
-      ansible.builtin.set_fact:
-        airgapped_mode: "{{ airgapped_mode | default(false) }}"
-        cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+      when: infravm_gateway is not defined or infravm_gateway == ""
 
     - name: Display final IP configuration
       ansible.builtin.debug:
@@ -322,14 +293,15 @@
           IP ADDRESS CONFIGURATION
           ═══════════════════════════════════════════════════════════════════
           NFS Server IP:    {{ nfs_server_ip }}
-          CoreOS VM IP:     {{ coreos_ip }}
-          Gateway:          {{ coreos_gateway }}
+          InfraVM IP:       {{ infravm_ip }}
+          Gateway:          {{ infravm_gateway }}
           CIDR:             {{ proxmox_cidr | default('24') }}
           Vnet:             {{ proxmox_vnet }}
+          Cloudflared:      {{ 'ENABLED' if cloudflared_tunnel_token != '' else 'DISABLED' }}
           ═══════════════════════════════════════════════════════════════════
 
 # =============================================================================
-# NFS Server Detection and Deployment
+# Step 2: NFS Server Detection and Deployment
 # =============================================================================
 - name: Check and Deploy NFS Server
   hosts: localhost
@@ -352,9 +324,7 @@
 
     - name: Set NFS detection facts
       ansible.builtin.set_fact:
-        nfs_storage_exists: "{{ proxmox_storage_query.json.data | selectattr('type', 'eq', 'nfs') | selectattr('server', 'eq', nfs_server_ip) | list | length > 0 }}"
         sophon_nfs_exists: "{{ proxmox_storage_query.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0 }}"
-        # Set default storage for VM disks (first available storage that supports images)
         proxmox_storage: "{{ proxmox_storage | default('local-lvm') }}"
 
     - name: Deploy NFS server if needed
@@ -364,125 +334,115 @@
       block:
         - name: Display NFS deployment notice
           ansible.builtin.debug:
-            msg: |
-              ═══════════════════════════════════════════════════════════════════
-              DEPLOYING NFS SERVER
-              ═══════════════════════════════════════════════════════════════════
-              No 'sophon-nfs' storage found in Proxmox.
-              Deploying Alpine-based NFS server at {{ nfs_server_ip }}...
-              ═══════════════════════════════════════════════════════════════════
+            msg: "Deploying Alpine-based NFS server at {{ nfs_server_ip }}..."
 
         - name: Deploy NFS Server
           ansible.builtin.include_role:
             name: nfs_server
 
-    - name: Display NFS server status
-      ansible.builtin.debug:
-        msg: "NFS storage '{{ 'sophon-nfs' if sophon_nfs_exists else 'to be created' }}' at {{ nfs_server_ip }}"
-
 # =============================================================================
-# NFS Content Population
+# Step 3: Bootstrap Connectivity Check
 # =============================================================================
-- name: Populate NFS with Content
+- name: Check Bootstrap Connectivity to NFS
   hosts: localhost
   connection: local
   gather_facts: false
-  tags: [nfs_content, infrastructure]
-  roles:
-    - role: nfs_content
-      vars:
-        nfs_content_mode: "{{ 'skip' if airgapped_mode | default(false) else 'download_and_upload' }}"
-
-- name: Deploy Portainer VM
-  hosts: localhost
-  connection: local
-  gather_facts: true
-  tags: [portainer, infrastructure]
-  roles:
-    - portainer
-
-# =============================================================================
-# Connectivity Check and Bastion Routing
-# =============================================================================
-- name: Check Connectivity and Deploy Bastion if Needed
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [connectivity, bastion, infrastructure]
+  tags: [connectivity, infrastructure]
   tasks:
-    - name: Check connectivity to CoreOS VM
+    - name: Check if Bootstrap can reach NFS
       ansible.builtin.include_role:
         name: connectivity_check
       vars:
-        connectivity_check_target_ip: "{{ coreos_ip }}"
-      when: not (skip_bastion_deployment | default(false))
+        connectivity_check_nfs_server: "{{ nfs_server_ip }}"
 
-    - name: Deploy bastion if CoreOS is not reachable
-      when:
-        - bastion_required | default(false)
-        - not (skip_bastion_deployment | default(false))
-      block:
-        - name: Display bastion deployment notice
-          ansible.builtin.debug:
-            msg: |
-              ═══════════════════════════════════════════════════════════════════
-              DEPLOYING BASTION VM
-              ═══════════════════════════════════════════════════════════════════
-              CoreOS VM is not directly reachable from this host.
-              Deploying bastion VM for indirect access.
-              
-              Cloudflared: {{ 'ENABLED' if cloudflared_tunnel_token | length > 0 else 'DISABLED' }}
-              ═══════════════════════════════════════════════════════════════════
+    - name: Display connectivity result
+      ansible.builtin.debug:
+        msg: |
+          NFS Reachable: {{ nfs_reachable }}
+          Cloudflared Enabled: {{ cloudflared_enabled | default(false) }}
 
-        - name: Deploy Bastion VM
-          ansible.builtin.include_role:
-            name: bastion
-          vars:
-            bastion_cloudflared_token: "{{ cloudflared_tunnel_token }}"
-
-        - name: Check bastion connectivity
-          ansible.builtin.include_role:
-            name: connectivity_check
-          vars:
-            connectivity_check_target_ip: "{{ bastion_ip }}"
-            connectivity_check_target_user: "{{ bastion_username | default('ansible') }}"
-
-        - name: Determine bastion access method
-          ansible.builtin.set_fact:
-            bastion_access_method: >-
-              {% if cloudflared_tunnel_token | length > 0 %}cloudflared
-              {% elif coreos_ssh_reachable | default(false) %}direct_ssh
-              {% else %}qga{% endif %}
-
-        - name: Display access method
-          ansible.builtin.debug:
-            msg: "Bastion access method: {{ bastion_access_method | trim }}"
-
-        # QGA Remote Execution (last resort - when no SSH access to bastion)
-        - name: Execute via QGA if no SSH access
-          when: bastion_access_method | trim == 'qga'
-          block:
-            - name: Execute Sophon on bastion via QGA
-              ansible.builtin.include_role:
-                name: qga_remote_exec
-              vars:
-                qga_remote_exec_vmid: "{{ bastion_vmid }}"
-                qga_remote_exec_playbook: "site.yml"
-                qga_remote_exec_env_vars:
-                  PROXMOX_API_PASSWORD: "{{ proxmox_password }}"
-                  PORTAINER_ADMIN_PASSWORD: "{{ portainer_admin_password | default('') }}"
-
-            - name: End play after QGA execution
-              ansible.builtin.meta: end_play
-
-- name: Deploy Portainer
+# =============================================================================
+# Step 3b: Download Cloudflared to NFS (if needed)
+# =============================================================================
+- name: Download Cloudflared to NFS
   hosts: localhost
   connection: local
   gather_facts: false
-  tags: [portainer, infrastructure]
-  roles:
-    - portainer
+  tags: [cloudflared, infrastructure]
+  tasks:
+    - name: Download cloudflared binary via Proxmox API
+      when: cloudflared_enabled | default(false)
+      block:
+        - name: Authenticate with Proxmox
+          ansible.builtin.include_role:
+            name: proxmox
 
+        - name: Check if cloudflared already exists on NFS
+          ansible.builtin.uri:
+            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/sophon-nfs/content"
+            method: GET
+            headers:
+              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+          register: nfs_content_check
+          failed_when: false
+
+        - name: Set cloudflared exists fact
+          ansible.builtin.set_fact:
+            cloudflared_on_nfs: "{{ (nfs_content_check.json.data | default([]) | selectattr('volid', 'search', 'cloudflared-linux-amd64.iso') | list | length > 0) if nfs_content_check.status == 200 else false }}"
+
+        - name: Download cloudflared to NFS via Proxmox API
+          when: not cloudflared_on_nfs
+          ansible.builtin.uri:
+            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/sophon-nfs/download-url"
+            method: POST
+            headers:
+              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+              CSRFPreventionToken: "{{ proxmox_csrf }}"
+            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+            body_format: form-urlencoded
+            body:
+              url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+              filename: "cloudflared-linux-amd64.iso"
+              content: "iso"
+          register: cloudflared_download
+
+        - name: Wait for cloudflared download to complete
+          ansible.builtin.uri:
+            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/tasks/{{ cloudflared_download.json.data | urlencode }}/status"
+            method: GET
+            headers:
+              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+          register: download_task_status
+          until: download_task_status.json.data.status == 'stopped'
+          retries: 60
+          delay: 5
+          when: cloudflared_download is changed
+
+        - name: Display cloudflared download result
+          ansible.builtin.debug:
+            msg: "Cloudflared binary downloaded to NFS at /export/template/iso/cloudflared-linux-amd64.iso"
+          when: not cloudflared_on_nfs
+
+# =============================================================================
+# Step 4: Deploy InfraVM
+# =============================================================================
+- name: Deploy InfraVM
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [infravm, infrastructure]
+  vars:
+    # Pass coreos_base variables from discovered values
+    coreos_base_ip: "{{ infravm_ip }}"
+    coreos_base_gateway: "{{ infravm_gateway }}"
+  roles:
+    - infravm
+
+# =============================================================================
+# Step 5-10: Deploy Services via Portainer Stacks
+# =============================================================================
 - name: Deploy CoreDNS
   hosts: localhost
   connection: local
@@ -587,6 +547,9 @@
   roles:
     - kopia
 
+# =============================================================================
+# Final Summary
+# =============================================================================
 - name: Display Generated Credentials
   hosts: localhost
   connection: local
@@ -597,21 +560,31 @@
       ansible.builtin.debug:
         msg: |
           ============================================================================
-          GENERATED CREDENTIALS - SAVE THESE SECURELY
+          SOPHON DEPLOYMENT COMPLETE
           ============================================================================
 
-          Portainer Admin:     {{ portainer_admin_password | default('not generated') }}
-          Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
-          Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
-          Nextcloud Admin:     {{ nextcloud_admin_password | default('not generated') }}
-          Nexus Admin:         {{ nexus_admin_password | default('not generated') }}
-          OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
-          Guacamole DB:        {{ guacamole_db_password | default('not generated') }}
-          Kopia:               {{ kopia_password | default('not generated') }}
+          InfraVM:
+            IP:              {{ infravm_ip }}
+            SSH:             ssh admin@{{ infravm_ansible_host | default(infravm_ip) }}
+            NFS Mount:       /mnt/nfs -> {{ nfs_server_ip }}:/export
 
-          CoreOS VM IP:        {{ coreos_ip | default('check Proxmox console') }}
+          Portainer:
+            URL:             https://{{ infravm_ip }}:9443
+            Username:        admin
+            Password:        {{ portainer_admin_password | default('not generated') }}
+
+          {% if cloudflared_tunnel_token != '' %}
+          Cloudflared:       ENABLED (tunnel active)
+          {% endif %}
+
+          Other Credentials:
+            Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
+            Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
+            Nextcloud Admin:     {{ nextcloud_admin_password | default('not generated') }}
+            Nexus Admin:         {{ nexus_admin_password | default('not generated') }}
+            OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
 
           ============================================================================
           Store these credentials in your password manager!
           ============================================================================
-      when: portainer_admin_password is defined or keycloak_admin_password is defined
+      when: portainer_admin_password is defined or infravm_ip is defined

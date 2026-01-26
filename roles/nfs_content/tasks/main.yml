@@ -1,211 +1,209 @@
 ---
 # =============================================================================
-# NFS Content Role - Main Tasks
+# NFS Content Role - Air-Gapped Prestaging Tasks
 # =============================================================================
-# Modes:
-#   download_and_upload - Full online workflow (download + upload to NFS)
-#   upload_only         - Upload prestaged artifacts to NFS (air-gapped phase 2)
-#   download_only       - Download to local staging only (air-gapped phase 1)
+# Used only for air-gapped deployments. In online mode (site.yml),
+# this role is skipped and InfraVM pulls images directly.
 
-- name: Check if role is enabled
+- name: Check operation mode
   ansible.builtin.debug:
-    msg: "NFS content role is disabled"
+    msg: "NFS Content Mode: {{ nfs_content_mode }}"
+
+- name: Skip if mode is 'skip'
+  ansible.builtin.meta: end_play
+  when: nfs_content_mode == 'skip'
+
+- name: Skip if role is disabled
+  ansible.builtin.meta: end_play
   when: not nfs_content_enabled
 
-- name: NFS content operations
-  when: nfs_content_enabled
+# =============================================================================
+# DOWNLOAD MODE (Air-Gapped Phase 1 - run on internet-connected machine)
+# =============================================================================
+- name: Download artifacts for air-gapped deployment
+  when: nfs_content_mode == 'download_only'
   block:
-    - name: Display operation mode
-      ansible.builtin.debug:
-        msg: "NFS Content Mode: {{ nfs_content_mode }}"
+    - name: Create staging directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ nfs_content_local_staging_dir }}/containers"
+        - "{{ nfs_content_local_staging_dir }}/iso"
 
-    # =========================================================================
-    # DOWNLOAD PHASE (download_and_upload or download_only modes)
-    # =========================================================================
-    - name: Download artifacts
-      when: nfs_content_mode in ['download_and_upload', 'download_only']
+    # -------------------------------------------------------------------------
+    # Container Images (via skopeo)
+    # -------------------------------------------------------------------------
+    - name: Download container images
+      ansible.builtin.shell:
+        cmd: |
+          IMAGE="{{ item }}"
+          BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
+          TARFILE="{{ nfs_content_local_staging_dir }}/containers/${BASENAME}.tar"
+          
+          if [ -f "$TARFILE" ]; then
+            echo "EXISTS"
+          else
+            skopeo copy \
+              --override-os linux \
+              --override-arch amd64 \
+              "docker://$IMAGE" \
+              "docker-archive:$TARFILE:$IMAGE" && \
+            echo "DOWNLOADED"
+          fi
+      loop: "{{ nfs_content_container_images }}"
+      register: image_downloads
+      changed_when: "'DOWNLOADED' in image_downloads.stdout"
+
+    # -------------------------------------------------------------------------
+    # CoreOS Image
+    # -------------------------------------------------------------------------
+    - name: Download CoreOS qcow2 image
+      when: nfs_content_coreos_enabled
       block:
-        # -----------------------------------------------------------------------
-        # Create Staging Directories
-        # -----------------------------------------------------------------------
-        - name: Create local staging directories
-          ansible.builtin.file:
-            path: "{{ item }}"
-            state: directory
-            mode: "0755"
-          loop:
-            - "{{ nfs_content_local_staging_dir }}/rpm"
-            - "{{ nfs_content_local_staging_dir }}/containers"
-
-        # -----------------------------------------------------------------------
-        # RPM Packages (direct download via curl)
-        # -----------------------------------------------------------------------
-        - name: Check if RPM already exists
+        - name: Check if CoreOS image already exists
           ansible.builtin.stat:
-            path: "{{ nfs_content_local_staging_dir }}/rpm/{{ item | basename }}"
-          loop: "{{ nfs_content_rpm_urls }}"
-          register: rpm_exists
+            path: "{{ nfs_content_local_staging_dir }}/iso/fedora-coreos.qcow2"
+          register: coreos_exists
 
-        - name: Download qemu-guest-agent RPMs
-          ansible.builtin.get_url:
-            url: "{{ item.item }}"
-            dest: "{{ nfs_content_local_staging_dir }}/rpm/{{ item.item | basename }}"
-            mode: "0644"
-          loop: "{{ rpm_exists.results }}"
-          when: not item.stat.exists
-          register: rpm_download
-
-        # -----------------------------------------------------------------------
-        # Container Images
-        # -----------------------------------------------------------------------
-        - name: Download container images
+        - name: Download and decompress CoreOS image
+          when: not coreos_exists.stat.exists
           ansible.builtin.shell:
             cmd: |
-              IMAGE="{{ item }}"
-              BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
-              TARFILE="{{ nfs_content_local_staging_dir }}/containers/${BASENAME}.tar"
-              
-              if [ -f "$TARFILE" ]; then
-                echo "EXISTS"
-              else
-                skopeo copy \
-                  --override-os linux \
-                  --override-arch amd64 \
-                  "docker://$IMAGE" \
-                  "docker-archive:$TARFILE:$IMAGE" && \
-                echo "DOWNLOADED"
-              fi
-          loop: "{{ nfs_content_container_images }}"
-          register: image_downloads
-          changed_when: "'DOWNLOADED' in image_downloads.stdout"
+              cd {{ nfs_content_local_staging_dir }}/iso
+              curl -L -o fedora-coreos.qcow2.xz "{{ nfs_content_coreos_url }}"
+              xz -d fedora-coreos.qcow2.xz
+          register: coreos_download
 
-        - name: Display download summary
-          ansible.builtin.debug:
-            msg: |
-              Download complete to: {{ nfs_content_local_staging_dir }}
-              
-              Contents:
-              - RPM Packages: {{ nfs_content_local_staging_dir }}/rpm/
-              - Containers: {{ nfs_content_local_staging_dir }}/containers/
+    - name: Display download summary
+      ansible.builtin.debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════════
+          PRESTAGE DOWNLOAD COMPLETE
+          ═══════════════════════════════════════════════════════════════════
+          
+          Staging Directory: {{ nfs_content_local_staging_dir }}
+          
+          Contents:
+          - Containers: {{ nfs_content_local_staging_dir }}/containers/
+          - CoreOS Image: {{ nfs_content_local_staging_dir }}/iso/
+          
+          Next Steps:
+          1. Switch to air-gapped network
+          2. Run: ansible-playbook nfs-upload.yml
+          
+          ═══════════════════════════════════════════════════════════════════
 
-    # =========================================================================
-    # UPLOAD PHASE (download_and_upload or upload_only modes)
-    # =========================================================================
-    - name: Upload artifacts to NFS via Proxmox API
-      when: nfs_content_mode in ['download_and_upload', 'upload_only']
+# =============================================================================
+# UPLOAD MODE (Air-Gapped Phase 2 - run on air-gapped network)
+# =============================================================================
+- name: Upload prestaged artifacts to NFS
+  when: nfs_content_mode == 'upload_only'
+  block:
+    - name: Validate source directory exists
+      ansible.builtin.stat:
+        path: "{{ nfs_content_source_dir }}"
+      register: source_dir_check
+
+    - name: Fail if source directory missing
+      ansible.builtin.fail:
+        msg: |
+          Source directory not found: {{ nfs_content_source_dir }}
+          Run prestage.yml first on an internet-connected machine.
+      when: not source_dir_check.stat.exists
+
+    - name: Authenticate with Proxmox
+      ansible.builtin.include_role:
+        name: proxmox
+
+    # -------------------------------------------------------------------------
+    # Upload Container Images to NFS
+    # -------------------------------------------------------------------------
+    - name: Find container images to upload
+      ansible.builtin.find:
+        paths: "{{ nfs_content_source_dir }}/containers"
+        patterns: "*.tar"
+      register: containers
+
+    - name: Upload container images to NFS via Proxmox API
+      ansible.builtin.shell:
+        cmd: >-
+          curl -k -s
+          -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
+          -H "CSRFPreventionToken: {{ proxmox_csrf }}"
+          -F "content=iso"
+          -F "filename=@{{ item.path }};filename={{ item.path | basename }}.iso"
+          "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/local/upload"
+      loop: "{{ containers.files }}"
+      register: container_upload
+      when: containers.files | length > 0
+
+    - name: Wait for container uploads and move to NFS
+      when: containers.files | length > 0
       block:
-        # -----------------------------------------------------------------------
-        # Determine Source Directory
-        # -----------------------------------------------------------------------
-        - name: Set source directory based on mode
-          ansible.builtin.set_fact:
-            _nfs_source_dir: "{{ nfs_content_source_dir if nfs_content_mode == 'upload_only' else nfs_content_local_staging_dir }}"
-
-        - name: Validate source directory exists
-          ansible.builtin.stat:
-            path: "{{ _nfs_source_dir }}"
-          register: source_dir_check
-
-        - name: Fail if source directory missing
-          ansible.builtin.fail:
-            msg: |
-              Source directory not found: {{ _nfs_source_dir }}
-              
-              {% if nfs_content_mode == 'upload_only' %}
-              Run prestage first: ansible-playbook prestage.yml
-              {% else %}
-              Download phase may have failed.
-              {% endif %}
-          when: not source_dir_check.stat.exists
-
-        # -----------------------------------------------------------------------
-        # Upload RPMs via Proxmox API then move to correct path
-        # -----------------------------------------------------------------------
-        - name: Find RPM packages
-          ansible.builtin.find:
-            paths: "{{ _nfs_source_dir }}/rpm"
-            patterns: "*.rpm"
-          register: rpms
-          delegate_to: localhost
-
-        - name: Upload RPMs to local storage temporarily
-          ansible.builtin.shell:
-            cmd: >-
-              curl -k -s
-              -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
-              -H "CSRFPreventionToken: {{ proxmox_csrf }}"
-              -F "content=iso"
-              -F "filename=@{{ item.path }};filename={{ item.path | basename }}.iso"
-              "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/local/upload"
-          loop: "{{ rpms.files }}"
-          register: rpm_upload
-          delegate_to: localhost
-          when: rpms.files | length > 0
-
-        - name: Wait for RPM uploads to complete
+        - name: Wait for upload tasks to complete
           ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/tasks/{{ (item.stdout | from_json).data | urlencode }}/status"
+            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/tasks/{{ (item.stdout | from_json).data | urlencode }}/status"
             method: GET
             headers:
               Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-            validate_certs: "{{ proxmox_validate_certs }}"
-          register: rpm_task_status
-          until: rpm_task_status.json.data.status == 'stopped'
-          retries: 60
+            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+          register: task_status
+          until: task_status.json.data.status == 'stopped'
+          retries: 120
           delay: 5
-          loop: "{{ rpm_upload.results | selectattr('stdout', 'defined') | list }}"
-          when: rpm_upload.results is defined
+          loop: "{{ container_upload.results | selectattr('stdout', 'defined') | list }}"
 
-        - name: Move RPMs from local to NFS via Proxmox shell
+        - name: Move containers from local to NFS
           proxmox_shell:
             api_host: "{{ proxmox_host }}"
             api_port: "{{ proxmox_port | default(8006) }}"
             api_user: "{{ proxmox_user | default('root@pam') }}"
-            node: "{{ proxmox_node }}"
+            node: "{{ proxmox_node | default('pve') }}"
             pve_auth_cookie: "{{ proxmox_ticket }}"
             proxmox_csrf_token: "{{ proxmox_csrf }}"
             validate_certs: "{{ proxmox_validate_certs | default(false) }}"
             timeout: 60
             command: |
-              for f in /var/lib/vz/template/iso/*.rpm.iso; do
-                [ -f "$f" ] && mv "$f" "/mnt/pve/{{ nfs_server_proxmox_storage_name }}/rpm/$(basename "$f" .iso)"
+              for f in /var/lib/vz/template/iso/*.tar.iso; do
+                [ -f "$f" ] && mv "$f" "/mnt/pve/{{ nfs_content_storage_name }}/containers/$(basename "$f" .iso)"
               done
-          when: rpms.files | length > 0
 
-        # -----------------------------------------------------------------------
-        # Upload Container Images via Proxmox API then move to correct path
-        # -----------------------------------------------------------------------
-        - name: Find container images
-          ansible.builtin.find:
-            paths: "{{ _nfs_source_dir }}/containers"
-            patterns: "*.tar"
-          register: containers
-          delegate_to: localhost
+    # -------------------------------------------------------------------------
+    # Upload CoreOS Image to Proxmox Local Storage
+    # -------------------------------------------------------------------------
+    - name: Check for CoreOS image in prestage
+      ansible.builtin.stat:
+        path: "{{ nfs_content_source_dir }}/iso/fedora-coreos.qcow2"
+      register: prestaged_coreos
+      when: nfs_content_coreos_enabled
 
-        - name: Upload container images to local storage temporarily
-          ansible.builtin.shell:
-            cmd: >-
-              curl -k -s
-              -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
-              -H "CSRFPreventionToken: {{ proxmox_csrf }}"
-              -F "content=iso"
-              -F "filename=@{{ item.path }};filename={{ item.path | basename }}.iso"
-              "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/storage/local/upload"
-          loop: "{{ containers.files }}"
-          register: container_upload
-          delegate_to: localhost
-          when: containers.files | length > 0
+    - name: Upload CoreOS image to Proxmox
+      when:
+        - nfs_content_coreos_enabled
+        - prestaged_coreos.stat.exists | default(false)
+      ansible.builtin.shell:
+        cmd: >-
+          curl -k -s
+          -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
+          -H "CSRFPreventionToken: {{ proxmox_csrf }}"
+          -F "content=iso"
+          -F "filename=@{{ nfs_content_source_dir }}/iso/fedora-coreos.qcow2;filename=fedora-coreos.qcow2.iso"
+          "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/local/upload"
+      register: coreos_upload
 
-        - name: Wait for container uploads to complete
-          ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/tasks/{{ (item.stdout | from_json).data | urlencode }}/status"
-            method: GET
-            headers:
-              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-            validate_certs: "{{ proxmox_validate_certs }}"
-          register: container_task_status
-          until: container_task_status.json.data.status == 'stopped'
-          retries: 120
-          delay: 5
-          loop: "{{ container_upload.results | selectattr('stdout', 'defined') | list }}"
-          when: container_upload.results is defined
+    - name: Display upload summary
+      ansible.builtin.debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════════
+          NFS UPLOAD COMPLETE
+          ═══════════════════════════════════════════════════════════════════
+          
+          Container images uploaded to: /mnt/pve/{{ nfs_content_storage_name }}/containers/
+          CoreOS image uploaded to: Proxmox local storage
+          
+          Next Steps:
+          Run: ansible-playbook site.yml -e airgapped_mode=true
+          
+          ═══════════════════════════════════════════════════════════════════

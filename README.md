@@ -4,70 +4,161 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 
 ## Architecture Overview
 
-1. Prepare Airgap
-  if airgapped(primary toggle (-e airgapped_mode=true):
-    bootstrap downloads:
-      portainer.tar
-      coredns.tar
-      traefik.tar
-      gitea.tar
-      nexus.tar
-      coreos.qcow
-      alpine.qcow
-    bootstrap builds apline-nfs.qcow
-    (Switch to airgapped network now)
+### Key Components
 
-2. Create NFS VM
-  if proxmox cannot reach nfs (i.e. no nfs server exists yet and we need to create one):
-    if not airgapped:
-      bootstrap downloads alpine.qcow
-      bootstrap (i.e. ansible controller) builds apline-nfs.qcow with guestfs/virt-customize on the Ansible controller (see nfs_server/tasks/main.yml)
-    Upload to proxmox: alpine-nfs.qcow.iso
-    proxmox creates nfs vm
-    configure nfs vm with ip, password, and dir structure with qga
-    mount nfs to proxmox
+| Component | Description |
+|-----------|-------------|
+| **Bootstrap** | The Ansible controller machine running `site.yml` |
+| **Proxmox** | Virtualization host with API access |
+| **NFS VM** | Alpine Linux VM providing NFS storage to Proxmox and InfraVM |
+| **InfraVM** | Fedora CoreOS VM running all containers (Portainer, CoreDNS, Traefik, etc.) |
 
-3. Create InfraVM
-  set ignition fw_cfg to include nfs mount
-  if airgapped:
-    bootstrap uploads to proxmox coreos.qcow.iso
-  else:
-    proxmox downloads coreos.qcow.iso using the proxmox api download iso command
-    if bootstrap (i.e. ansible controller we run sophon from) cannot reach nfs (ergo it will require portainer vm to run cloudflared):
-      proxmox downloads https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 as cloudflared.iso to the nfs:/export/iso
-      set ignition fw_cfg to include cloudflared config
-      set ansible delegate_to to InfraVM via cloudflared address instead of vm internal address
-  instruct proxmox to create and boot InfraVM
+### Key Variables
 
-4. Load Container Images
-  if airgapped:
-    Bootsrap uploads to nfs:
-      portainer.tar
-      coredns.tar
-      traefik.tar
-      gitea.tar
-      nexus.tar
-  InfraVM loops through each .tar file
-  if .tar file exists on nfs:
-    executes a podman load for the .tar file
-  else:
-    conducts a podman pull
-    uploads the .tar file to nfs
+| Variable | Source | Purpose |
+|----------|--------|---------|
+| `proxmox_host` | CLI/prompt | Proxmox API endpoint |
+| `proxmox_password` | CLI/prompt/env | Proxmox authentication |
+| `domain_name` | CLI/prompt | Base domain for services |
+| `airgapped_mode` | CLI (default: false) | Enable air-gapped workflow |
+| `cloudflared_tunnel_token` | Env `CLOUDFLARED_TUNNEL_TOKEN` | If set, enables cloudflared on InfraVM |
+| `infravm_ansible_host` | Auto (default: `infravm.{{ domain_name }}`) | SSH target for InfraVM |
+| `nfs_server_ip` | Auto-discovered | NFS server address |
+| `infravm_ip` | Auto-discovered | InfraVM internal IP |
 
-5. Install Portainer Container
-  install portainer as a service on InfraVM
-    set portainer admin password
-    optional skip if not present: if nfs:/export/backups/current/portainer/portainer_data.tgz exists then conduct restore. this is a step in the portainer gui that we will need to reverse engineer to obtain the equivilent rest api for.
+### NFS Directory Structure
 
-6. Deploy CoreDNS to same InfraVM via our portainer-stacks playbook
+```
+/export/
+├── template/
+│   └── iso/                    # Proxmox ISO storage (cloudflared, VM images)
+│       ├── fedora-coreos-*.qcow2.iso
+│       └── cloudflared-linux-amd64.iso  # Only when cloudflared needed
+└── containers/                 # Container image tarballs
+    ├── portainer-ce.tar
+    ├── coredns.tar
+    ├── traefik.tar
+    └── ...
+```
 
-7. Deploy Traefik
+### Deployment Workflow
 
-8. Deploy Gitea
+#### Step 1: Prepare Airgap (Optional)
 
-9. Deploy Sonatype Nexus Repository
+**Condition:** Only when `airgapped_mode=true`
 
-10. workflow will include details about openldap, keycloak, homepage, nextcloud, n8n, guacamole, kopia, ect in the future.
+Bootstrap downloads all artifacts for offline deployment:
+- Container images: `portainer-ce.tar`, `coredns.tar`, `traefik.tar`, `gitea.tar`, `nexus.tar`
+- VM images: `fedora-coreos-*.qcow2`, `alpine-virt-*.qcow2`
+- Builds `alpine-nfs.qcow2` with NFS packages pre-installed
+
+After download, switch to the air-gapped network.
+
+#### Step 2: Create NFS VM
+
+**Condition:** Proxmox storage `sophon-nfs` does not exist
+
+1. **Download Alpine image** (if not airgapped): Bootstrap downloads `alpine-virt-*.qcow2`
+2. **Build NFS image**: Bootstrap uses `virt-customize` to inject NFS packages into Alpine image
+3. **Upload to Proxmox**: Upload `alpine-nfs.qcow2` as `alpine-nfs.qcow2.iso` to Proxmox local storage
+4. **Create VM**: Proxmox creates NFS VM from uploaded image
+5. **Configure via QGA**: Set root password, network (static IP), create directory structure:
+   - `/export/template/iso`
+   - `/export/containers`
+6. **Add Proxmox storage**: Register NFS export as Proxmox storage `sophon-nfs`
+
+#### Step 3: Check Bootstrap Connectivity
+
+**Purpose:** Determine if Bootstrap can directly access the NFS/InfraVM network
+
+1. **Attempt NFS mount**: Bootstrap tries `mount -t nfs {{ nfs_server_ip }}:/export /tmp/nfs_test`
+2. **Set facts:**
+   - `nfs_reachable=true` → Bootstrap can reach NFS directly, no cloudflared needed
+   - `nfs_reachable=false` AND `cloudflared_tunnel_token` is set → Download cloudflared to NFS
+
+**Cloudflared download** (when needed):
+```
+POST /api2/json/nodes/{node}/storage/sophon-nfs/download-url
+  url: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+  filename: cloudflared-linux-amd64.iso
+```
+
+#### Step 4: Create InfraVM
+
+1. **Download CoreOS image**:
+   - Airgapped: Bootstrap uploads `fedora-coreos-*.qcow2.iso` to Proxmox
+   - Online: Proxmox downloads via `download-url` API
+2. **Generate Ignition config** with:
+   - Static IP configuration
+   - SSH public key (`coreos_base_ssh_public_key`)
+   - NFS mount at `/mnt/nfs` → `{{ nfs_server_ip }}:/export`
+   - Conditional cloudflared service (when `cloudflared_tunnel_token` is set):
+     - Copies `/mnt/nfs/template/iso/cloudflared-linux-amd64.iso` to `/usr/local/bin/cloudflared`
+     - Runs `cloudflared tunnel run` with token
+3. **Create VM**: Proxmox creates InfraVM with Ignition passed via `fw_cfg`
+4. **Set Ansible target**: `infravm_ansible_host` defaults to `infravm.{{ domain_name }}`
+   (resolves via cloudflared tunnel when `cloudflared_tunnel_token` is set)
+
+#### Step 5: Load Container Images
+
+**Execution:** Via SSH to `{{ infravm_ansible_host }}`
+
+For each image in `infravm_container_images`:
+1. **Check NFS cache**: Does `/mnt/nfs/containers/{{ image_basename }}.tar` exist?
+2. **If cached**: `podman load -i /mnt/nfs/containers/{{ image_basename }}.tar`
+3. **If not cached**:
+   - `podman pull {{ image }}`
+   - `podman save -o /mnt/nfs/containers/{{ image_basename }}.tar {{ image }}`
+
+Container image list:
+- `docker.io/portainer/portainer-ce:2.27.1`
+- `docker.io/coredns/coredns:1.12.0`
+- `docker.io/traefik:v3.2`
+- `docker.io/gitea/gitea:1.21`
+- `docker.io/sonatype/nexus3:3.72.0`
+
+#### Step 6: Install Portainer
+
+**Execution:** Via SSH to InfraVM
+
+1. Create Portainer systemd service running `podman run portainer/portainer-ce`
+2. Wait for Portainer API at `https://{{ infravm_ip }}:9443`
+3. Initialize admin user with `portainer_admin_password`
+4. *(Future)* Restore from backup if `/mnt/nfs/backups/current/portainer/portainer_data.tgz` exists
+
+#### Step 7: Deploy CoreDNS
+
+Deploy via Portainer Stacks API:
+- Compose file with CoreDNS configuration
+- DNS zone for `{{ domain_name }}`
+
+#### Step 8: Deploy Traefik
+
+Deploy via Portainer Stacks API:
+- Reverse proxy configuration
+- HTTPS certificates via Let's Encrypt or self-signed
+
+#### Step 9: Deploy Gitea
+
+Deploy via Portainer Stacks API:
+- Git server with SSO integration (future)
+
+#### Step 10: Deploy Nexus Repository
+
+Deploy via Portainer Stacks API:
+- Docker registry proxy
+- RPM/Maven repository proxy
+
+#### Future Steps
+
+Additional services to be integrated:
+- OpenLDAP (directory service)
+- Keycloak (SSO/identity)
+- Homepage (dashboard)
+- Nextcloud (file sync)
+- n8n (workflow automation)
+- Guacamole (remote desktop)
+- Kopia (backup)
 
 ## Quick Start
 
@@ -167,7 +258,7 @@ ansible-playbook site.yml \
 | `prestage.yml` | Air-gapped Phase 1 - downloads artifacts |
 | `nfs-upload.yml` | Air-gapped Phase 2 - uploads to NFS |
 | `deploy.yml` | Deployment only (skips prestaging) |
-| `bastion.yml` | Bastion VM only (CoreOS-based) |
+
 | `nfs-content.yml` | NFS content population only |
 
 ## Common Options
@@ -194,11 +285,10 @@ sophon/
 ├── roles/
 │   ├── proxmox/          # Proxmox API interactions
 │   ├── coreos_base/      # Shared CoreOS VM provisioning (fw_cfg ignition)
-│   ├── portainer/        # Portainer VM (depends on coreos_base)
-│   ├── bastion/          # CoreOS bastion VM with Cloudflared (depends on coreos_base)
+│   ├── infravm/          # InfraVM (CoreOS VM running all containers)
 │   ├── nfs_server/       # Custom Alpine NFS server (lazy-built qcow2)
-│   ├── nfs_content/      # NFS artifact management
-│   ├── connectivity_check/ # SSH reachability testing
+│   ├── nfs_content/      # NFS artifact management (airgap prestaging only)
+│   ├── connectivity_check/ # NFS mount reachability testing
 │   ├── qga_remote_exec/  # QGA-based remote execution
 │   ├── portainer_stack/  # Stack deployment API
 │   ├── traefik/          # Reverse proxy
@@ -300,7 +390,7 @@ kopia_enabled: true
 The `site.yml` playbook deploys services in dependency order:
 
 1. **nfs_server** - NFS storage VM (if needed)
-2. **portainer** - Portainer VM (CoreOS via coreos_base)
+2. **infravm** - InfraVM (CoreOS via coreos_base, runs Portainer + all containers)
 3. **coredns** - DNS server
 4. **traefik** - Reverse proxy
 5. **homepage** - Dashboard
@@ -383,33 +473,25 @@ nfs_docker_images_path: "/exports/nexus/docker-proxy"
 nfs_rpm_packages_path: "/exports/nexus/yum-proxy"
 ```
 
-## Bastion VM & Remote Access
+## Remote Access via Cloudflared
 
-When the Ansible controller cannot directly reach the Portainer VM, the workflow
-automatically deploys a CoreOS-based bastion VM on Proxmox (using the shared coreos_base role).
+When the Ansible controller cannot directly reach the InfraVM network, cloudflared
+provides tunnel access. This is automatically detected and configured.
 
-### Access Methods (in priority order)
+### How It Works
 
-1. **Cloudflared Tunnel** - If `CLOUDFLARED_TUNNEL_TOKEN` is set
-   - Bastion configures Cloudflared daemon
-   - Ansible uses ProxyJump through tunnel
+1. Bootstrap attempts to mount NFS from the target network
+2. If mount fails AND `CLOUDFLARED_TUNNEL_TOKEN` is set:
+   - Proxmox downloads cloudflared binary to NFS storage
+   - InfraVM Ignition config includes cloudflared service
+   - InfraVM runs cloudflared tunnel on boot
+3. Ansible connects to `infravm.{{ domain_name }}` via the tunnel
 
-2. **Direct SSH** - If bastion is reachable
-   - Ansible uses SSH ProxyJump through bastion
-
-3. **QGA Remote Execution** - Last resort
-   - Uploads sophon.tgz via Proxmox QGA file-write API
-   - Executes ansible-playbook via QGA exec API
-   - Environment variables passed as base64-encoded block
-
-### Manual Bastion Deployment
+### Usage
 
 ```bash
-# Without Cloudflared
-ansible-playbook bastion.yml
-
-# With Cloudflared
-CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook bastion.yml
+export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
+ansible-playbook site.yml
 ```
 
 ## Testing

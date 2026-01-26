@@ -412,7 +412,6 @@
 
             # Create NFS export directories for content storage
             mkdir -p /export/template/iso
-            mkdir -p /export/rpm
             mkdir -p /export/containers
             chmod -R 755 /export
         status_code: [200]

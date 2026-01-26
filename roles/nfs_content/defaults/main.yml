@@ -1,13 +1,16 @@
 ---
 # =============================================================================
-# NFS Content Role - Download and/or Upload Artifacts
+# NFS Content Role - Air-Gapped Prestaging
 # =============================================================================
-# Prepares NFS shares with VM images, RPMs, and container images for CoreOS.
+# This role is used ONLY for air-gapped deployments to prestage artifacts
+# before switching to the disconnected network.
+#
+# In online mode, InfraVM pulls container images directly via podman.
 #
 # MODES:
-#   download_and_upload - Downloads artifacts AND uploads to NFS (online mode)
-#   upload_only         - Uploads from prestage dir to NFS (air-gapped phase 2)
-#   download_only       - Downloads to local staging only (air-gapped phase 1)
+#   download_only - Downloads container images to local staging (prestage.yml)
+#   upload_only   - Uploads prestaged containers to NFS (nfs-upload.yml)
+#   skip          - Skip entirely (online mode in site.yml)
 
 # Enable/disable this role
 nfs_content_enabled: true
@@ -15,20 +18,16 @@ nfs_content_enabled: true
 # =============================================================================
 # Operation Mode
 # =============================================================================
-# download_and_upload: Full online workflow - download from internet, upload to NFS
-# upload_only: Air-gapped phase 2 - upload prestaged files to NFS
-# download_only: Air-gapped phase 1 - just download (same as prestage role)
-nfs_content_mode: "download_and_upload"
+# download_only: Air-gapped Phase 1 - download containers to local staging
+# upload_only: Air-gapped Phase 2 - upload prestaged containers to NFS
+# skip: Online mode - InfraVM pulls directly, no prestaging needed
+nfs_content_mode: "skip"
 
 # =============================================================================
 # NFS Server Configuration
 # =============================================================================
-# NFS storage name in Proxmox (files are uploaded via Proxmox API)
+# NFS storage name in Proxmox
 nfs_content_storage_name: "{{ nfs_server_proxmox_storage_name | default('sophon-nfs') }}"
-
-# NFS paths (relative to /mnt/pve/{storage}/ on Proxmox)
-# VM images go to template/iso/ (Proxmox standard for ISO content)
-# Other files go to custom directories created on the NFS mount
 
 # =============================================================================
 # Source Directory (for upload_only mode)
@@ -37,32 +36,25 @@ nfs_content_storage_name: "{{ nfs_server_proxmox_storage_name | default('sophon-
 nfs_content_source_dir: "{{ prestage_local_dir | default('/tmp/sophon_prestage') }}"
 
 # =============================================================================
-# Local Staging Directory (for download modes)
+# Local Staging Directory (for download_only mode)
 # =============================================================================
-nfs_content_local_staging_dir: "/tmp/sophon_nfs_content"
+nfs_content_local_staging_dir: "/tmp/sophon_prestage"
 
 # =============================================================================
-# CoreOS Image
+# Container Images (for air-gapped prestaging)
 # =============================================================================
-nfs_content_coreos_enabled: true
-nfs_content_coreos_url: "{{ coreos_qcow2_url | default('https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz') }}"
-
-# =============================================================================
-# RPM Packages (direct URLs for qemu-guest-agent)
-# =============================================================================
-# Direct download URLs - no dnf/podman dependency resolution needed
-nfs_content_rpm_urls:
-  - "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os/Packages/q/qemu-guest-agent-9.1.2-1.fc43.x86_64.rpm"
-  - "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os/Packages/l/liburing-2.9-2.fc43.x86_64.rpm"
-
-# =============================================================================
-# Container Images
-# =============================================================================
-# Filenames derived automatically: docker.io/foo/bar:1.0 -> bar.tar
+# These are downloaded via skopeo and saved as tarballs
 nfs_content_container_images:
   - "docker.io/portainer/portainer-ce:2.27.1"
   - "docker.io/coredns/coredns:1.12.0"
   - "docker.io/traefik:v3.2"
+  - "docker.io/gitea/gitea:1.21"
+  - "docker.io/sonatype/nexus3:3.72.0"
   - "docker.io/osixia/openldap:1.5.0"
   - "docker.io/osixia/phpldapadmin:0.9.0"
-  - "docker.io/sonatype/nexus3:3.72.0"
+
+# =============================================================================
+# CoreOS Image (for air-gapped prestaging)
+# =============================================================================
+nfs_content_coreos_enabled: true
+nfs_content_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"
