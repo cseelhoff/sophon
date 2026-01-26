@@ -239,6 +239,7 @@
                 range(2, 255) | map('string') | map('regex_replace', '^(.*)$', _network_base ~ '.\1')
                 | reject('in', _used_ips)
                 | reject('eq', _gateway)
+                | reject('eq', proxmox_host)
                 | list
               }}
 

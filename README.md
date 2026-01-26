@@ -4,78 +4,70 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 
 ## Architecture Overview
 
-```
-┌────────────────────────────────────────────────────────┐
-│                   DEPLOYMENT MODES                     │
-├──────────────────────┬─────────────────────────────────┤
-│     ONLINE MODE      │        AIR-GAPPED MODE          │
-│  (Internet Access)   │    (Disconnected Network)       │
-└──────────┬───────────┴─────────────┬───────────────────┘
-           │                         │
-           │                   ┌─────▼─────────┐
-           │                   │ prestage.yml  │ Phase 1
-           │                   │ (on internet) │ Download
-           │                   └─────┬─────────┘
-           │                         │
-           │                   ══════╪══════ NETWORK SWITCHOVER
-           └───────────┬─────────────┘
-                       ▼
-           ┌───────────────────────┐  EXISTS  ┌──────────────┐
-           │  NFS Storage in       ├─────────>│  Skip NFS    │
-           │  Proxmox?             │          │  Deployment  │
-           └───────────┬───────────┘          └──────┬───────┘
-                       │ NO                          │
-                       ▼                             │
-           ┌──────────────────────────┐              │
-           │  Is NFS server           │              │
-           │  connectable on Proxmox  │─────────┐    │
-           └───────────┬──────────────┘         │    │
-                       │  NO                    │    │
-           ┌───────────────────────┐            │    │
-           │  Deploy NFS Server    │ Alpine VM  │    │
-           │  on Proxmox           │ 100GB disk │    │
-           └───────────┬───────────┘            │    │
-                       │                        │    │
-                       ▼                        │    │
-           ┌───────────────────────┐            │    │
-           │  Add NFS Storage to   │            │    │
-           │  Proxmox              │<───────────┘    │
-           └───────────┬───────────┘                 │
-                       │                             │
-                       └─────────────┬───────────────┘
-                                     ▼
-                       ┌───────────────────────┐
-                       │  Populate NFS with    │
-                       │  images, RPMs, tars   │
-                       │  via proxmox api nfs  │
-                       │  mountpoint           │
-                       └───────────┬───────────┘
-                                   ▼
-                       ┌───────────────────────┐
-                       │   Deploy CoreOS VM    │
-                       └───────────┬───────────┘
-                                   ▼
-                       ┌───────────────────────┐  YES   ┌──────────────┐
-                       │  CoreOS Reachable?    ├───────>│  Continue to │
-                       └───────────┬───────────┘        │  Portainer   │
-                                   │ NO                 └──────────────┘
-                                   ▼                            ▲
-                       ┌───────────────────────┐                │
-                       │  Deploy Bastion VM    │                │
-                       │  (+Cloudflared?)      │                │
-                       └───────────┬───────────┘                │
-                                   ▼                            │
-                       ┌───────────────────────┐  YES           │
-                       │ SSH Reachable?        ├────────────────┤
-                       │ (direct/cloudflared)  │ (ProxyJump)    │
-                       └───────────┬───────────┘                │
-                                   │ NO                         │
-                                   ▼                            │
-                       ┌───────────────────────┐                │
-                       │  QGA Remote Exec      ├────────────────┘
-                       │  (via Proxmox API)    │
-                       └───────────────────────┘
-```
+1. Prepare Airgap
+  if airgapped(primary toggle (-e airgapped_mode=true):
+    bootstrap downloads:
+      portainer.tar
+      coredns.tar
+      traefik.tar
+      gitea.tar
+      nexus.tar
+      coreos.qcow
+      alpine.qcow
+    bootstrap builds apline-nfs.qcow
+    (Switch to airgapped network now)
+
+2. Create NFS VM
+  if proxmox cannot reach nfs (i.e. no nfs server exists yet and we need to create one):
+    if not airgapped:
+      bootstrap downloads alpine.qcow
+      bootstrap (i.e. ansible controller) builds apline-nfs.qcow with guestfs/virt-customize on the Ansible controller (see nfs_server/tasks/main.yml)
+    Upload to proxmox: alpine-nfs.qcow.iso
+    proxmox creates nfs vm
+    configure nfs vm with ip, password, and dir structure with qga
+    mount nfs to proxmox
+
+3. Create InfraVM
+  set ignition fw_cfg to include nfs mount
+  if airgapped:
+    bootstrap uploads to proxmox coreos.qcow.iso
+  else:
+    proxmox downloads coreos.qcow.iso using the proxmox api download iso command
+    if bootstrap (i.e. ansible controller we run sophon from) cannot reach nfs (ergo it will require portainer vm to run cloudflared):
+      proxmox downloads https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 as cloudflared.iso to the nfs:/export/iso
+      set ignition fw_cfg to include cloudflared config
+      set ansible delegate_to to InfraVM via cloudflared address instead of vm internal address
+  instruct proxmox to create and boot InfraVM
+
+4. Load Container Images
+  if airgapped:
+    Bootsrap uploads to nfs:
+      portainer.tar
+      coredns.tar
+      traefik.tar
+      gitea.tar
+      nexus.tar
+  InfraVM loops through each .tar file
+  if .tar file exists on nfs:
+    executes a podman load for the .tar file
+  else:
+    conducts a podman pull
+    uploads the .tar file to nfs
+
+5. Install Portainer Container
+  install portainer as a service on InfraVM
+    set portainer admin password
+    optional skip if not present: if nfs:/export/backups/current/portainer/portainer_data.tgz exists then conduct restore. this is a step in the portainer gui that we will need to reverse engineer to obtain the equivilent rest api for.
+
+6. Deploy CoreDNS to same InfraVM via our portainer-stacks playbook
+
+7. Deploy Traefik
+
+8. Deploy Gitea
+
+9. Deploy Sonatype Nexus Repository
+
+10. workflow will include details about openldap, keycloak, homepage, nextcloud, n8n, guacamole, kopia, ect in the future.
 
 ## Quick Start
 

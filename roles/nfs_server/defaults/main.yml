@@ -33,6 +33,10 @@ nfs_server_data_disk_size: "100G" # NFS storage disk (/dev/vdb, thin provisioned
 # DNS server for NFS VM
 nfs_server_dns: "1.1.1.1"
 
+# Root password for NFS VM (defaults to proxmox_password if not set)
+# Can be overridden with -e nfs_server_root_password=<password>
+# nfs_server_root_password: "{{ proxmox_password }}"
+
 # =============================================================================
 # Alpine Image Build Configuration
 # =============================================================================

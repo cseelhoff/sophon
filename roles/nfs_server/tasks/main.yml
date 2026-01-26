@@ -69,29 +69,25 @@
   when: existing_nfs_server is not none
 
 # -----------------------------------------------------------------------------
-# NFS Connectivity Check (Online Mode Only)
+# NFS Connectivity Check (via Proxmox storage API)
 # -----------------------------------------------------------------------------
-- name: Check NFS connectivity
-  when:
-    - existing_nfs_server is none
-    - not (airgapped_mode | default(false))
-  block:
-    - name: Test if NFS server is already reachable
-      ansible.builtin.command:
-        cmd: "showmount -e {{ nfs_server_ip }}"
-      register: nfs_check
-      failed_when: false
-      changed_when: false
-      delegate_to: localhost
+- name: Check if NFS storage already exists and is online in Proxmox
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/storage"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: storage_check
 
-    - name: Set NFS reachable fact
-      ansible.builtin.set_fact:
-        nfs_already_reachable: "{{ nfs_check.rc == 0 }}"
+- name: Set NFS reachable fact
+  ansible.builtin.set_fact:
+    nfs_already_reachable: "{{ storage_check.json.data | selectattr('storage', 'eq', nfs_server_proxmox_storage_name) | selectattr('server', 'eq', nfs_server_ip) | list | length > 0 }}"
 
-    - name: Skip deployment if NFS already reachable
-      ansible.builtin.debug:
-        msg: "NFS server at {{ nfs_server_ip }} is already reachable. Skipping VM deployment."
-      when: nfs_already_reachable | default(false)
+- name: Skip deployment if NFS already reachable
+  ansible.builtin.debug:
+    msg: "NFS storage '{{ nfs_server_proxmox_storage_name }}' at {{ nfs_server_ip }} already configured in Proxmox. Skipping VM deployment."
+  when: nfs_already_reachable | default(false)
 
 # -----------------------------------------------------------------------------
 # Alpine Image Build/Check (only if VM doesn't exist)
@@ -323,12 +319,22 @@
     nfs_server_vmid: "{{ existing_nfs_server.vmid if existing_nfs_server is not none else vm_create.vmid }}"
   when: not (nfs_already_reachable | default(false))
 
-- name: Configure static IP via QEMU guest agent
-  when:
-    - existing_nfs_server is none
-    - not (nfs_already_reachable | default(false))
+# -----------------------------------------------------------------------------
+# Start VM and Configure (applies to both new and existing VMs not yet reachable)
+# -----------------------------------------------------------------------------
+- name: Start and configure NFS VM
+  when: not (nfs_already_reachable | default(false))
   block:
-    - name: Start NFS Server VM
+    - name: Check VM status
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ nfs_server_vmid }}/status/current"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: vm_status
+
+    - name: Start NFS Server VM if not running
       community.proxmox.proxmox_kvm:
         api_host: "{{ proxmox_host }}"
         api_port: "{{ proxmox_port }}"
@@ -337,8 +343,9 @@
         node: "{{ proxmox_node }}"
         vmid: "{{ nfs_server_vmid }}"
         state: started
+      when: vm_status.json.data.status != 'running'
 
-    - name: Wait for VM to boot and qemu-guest-agent to respond
+    - name: Wait for VM guest agent to respond
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ nfs_server_vmid }}/agent/ping"
         method: POST
@@ -353,7 +360,24 @@
       delay: 10
       failed_when: false
 
-    - name: Configure static IP via guest agent
+    - name: Set root password via guest agent
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ nfs_server_vmid }}/agent/exec"
+        method: POST
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+          CSRFPreventionToken: "{{ proxmox_csrf }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        body_format: form-urlencoded
+        body:
+          command: "/bin/sh"
+          input-data: "echo 'root:{{ nfs_server_root_password | default(proxmox_password) }}' | chpasswd"
+        status_code: [200]
+      register: password_config
+      retries: 5
+      delay: 5
+
+    - name: Configure static IP, DNS, and NFS directories via guest agent
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ nfs_server_vmid }}/agent/exec"
         method: POST
@@ -365,6 +389,7 @@
         body:
           command: "/bin/sh"
           input-data: |
+            # Write config for persistence across reboots
             cat > /etc/network/interfaces <<'EOF'
             auto lo
             iface lo inet loopback
@@ -375,21 +400,25 @@
               netmask {{ proxmox_netmask }}
               gateway {{ proxmox_gateway }}
             EOF
-            rc-service networking restart
+
+            # Configure DNS
+            echo "nameserver {{ nfs_server_dns }}" > /etc/resolv.conf
+
+            # Apply IP immediately using ip command (modern approach)
+            ip addr flush dev eth0
+            ip addr add {{ nfs_server_ip }}/{{ proxmox_cidr }} dev eth0
+            ip link set eth0 up
+            ip route add default via {{ proxmox_gateway }} dev eth0 2>/dev/null || true
+
+            # Create NFS export directories for content storage
+            mkdir -p /export/template/iso
+            mkdir -p /export/rpm
+            mkdir -p /export/containers
+            chmod -R 755 /export
         status_code: [200]
       register: network_config
       retries: 5
       delay: 5
-
-    - name: Wait for network to stabilize
-      ansible.builtin.pause:
-        seconds: 10
-        prompt: "Waiting for network reconfiguration..."
-
-    - name: Wait for NFS service to be ready
-      ansible.builtin.pause:
-        seconds: 20
-        prompt: "Waiting for NFS service to initialize..."
 
 # -----------------------------------------------------------------------------
 # Add NFS Storage to Proxmox
@@ -410,7 +439,7 @@
       ansible.builtin.set_fact:
         nfs_storage_exists: "{{ existing_storage.json.data | selectattr('storage', 'eq', nfs_server_proxmox_storage_name) | list | length > 0 }}"
 
-    - name: Add NFS storage to Proxmox
+    - name: Add NFS storage to Proxmox (retries until NFS is online)
       when: not nfs_storage_exists
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/storage"
@@ -428,6 +457,9 @@
           content: "{{ nfs_server_proxmox_content_types }}"
         status_code: [200, 201]
       register: add_storage_result
+      until: add_storage_result.status in [200, 201]
+      retries: 30
+      delay: 10
 
     - name: Display NFS storage creation result
       ansible.builtin.debug:
