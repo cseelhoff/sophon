@@ -308,6 +308,10 @@
           Cloudflared:      {{ 'ENABLED' if cloudflared_tunnel_token != '' else 'DISABLED' }}
           ═══════════════════════════════════════════════════════════════════
 
+    - name: Set global SSH connection facts
+      ansible.builtin.set_fact:
+        infravm_ansible_host: "{{ 'infra.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
+
 # =============================================================================
 # Step 2: NFS Server Detection and Deployment
 # =============================================================================

@@ -34,7 +34,7 @@
     cmd: >
       ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no
       -i {{ infravm_ssh_private_key }}
-      {{ infravm_ansible_user }}@{{ infravm_ansible_host }}
+      {{ infravm_username }}@{{ infravm_ansible_host }}
       echo "SSH connection established"
   delegate_to: localhost
   register: ssh_wait
@@ -55,7 +55,7 @@
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
-    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: nfs_debug
   ignore_errors: true
@@ -73,7 +73,7 @@
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
-    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
 # =============================================================================
@@ -119,7 +119,7 @@
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
         ansible_connection: ssh
-        ansible_user: "{{ infravm_ansible_user }}"
+        ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
     - name: Display container loading summary
@@ -183,7 +183,7 @@
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
-    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: portainer_start
   changed_when: "'STARTED' in portainer_start.stdout"
@@ -217,7 +217,7 @@
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
-    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: portainer_debug
   ignore_errors: true
@@ -236,7 +236,7 @@
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
-    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
 - name: Initialize Portainer admin user
@@ -249,7 +249,7 @@
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
-    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
 - name: Set portainer init status
@@ -270,8 +270,8 @@
 
       SSH Access:
         Host: {{ infravm_ansible_host }}
-        User: {{ infravm_ansible_user }}
-        Command: ssh {{ infravm_ansible_user }}@{{ infravm_ansible_host }}
+        User: {{ infravm_username }}
+        Command: ssh {{ infravm_username }}@{{ infravm_ansible_host }}
 
       Portainer:
         URL: https://{{ infravm_ansible_host }}:{{ portainer_port }}

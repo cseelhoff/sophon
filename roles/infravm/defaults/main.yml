@@ -21,34 +21,22 @@ infravm_disk_size: "32G"
 infravm_cidr: "24"
 
 # User Configuration
-infravm_username: "admin"
-# Default password hash for 'admin' user (password: changeme)
+infravm_username: "core"
+# Default password hash for 'core' user (password: changeme)
 # Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
 infravm_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDoimDMM9wuIY4efuYmvRcqA"
 
-# SSH public key for admin user (required for Ansible access)
+# SSH public key for core user (required for Ansible access)
 infravm_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
 
 # Butane template location
 infravm_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.j2"
 
 # =============================================================================
-# Ansible Connection Settings
-# =============================================================================
-# Ansible host for SSH connections (defaults to cloudflared tunnel name if token set)
-infravm_ansible_host: "{{ 'infra.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
-
-# SSH user for Ansible connections
-infravm_ansible_user: "{{ infravm_username }}"
-
-# SSH private key for Ansible connections
-infravm_ssh_private_key: "~/.ssh/id_rsa"
-
-# =============================================================================
 # Cloudflared Settings (optional - enables tunnel access)
 # =============================================================================
-# Tunnel token from environment variable CLOUDFLARED_TUNNEL_TOKEN
-cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+# Tunnel token for Cloudflared access to InfraVM
+cloudflared_tunnel_token: ""
 
 # =============================================================================
 # NFS Settings
@@ -57,22 +45,22 @@ cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | defaul
 infravm_nfs_mount_options: "ro,noatime,vers=4.1"
 
 # =============================================================================
+# Portainer Application Settings
+# =============================================================================
+portainer_image_tag: "2.27.1"
+portainer_port: 9443
+
+# =============================================================================
 # Container Images (loaded via SSH from Ansible controller)
 # =============================================================================
 # List of container images to load on InfraVM
 # These are cached on NFS at /export/containers/<basename>.tar
 infravm_container_images:
-  - "docker.io/portainer/portainer-ce:2.27.1"
+  - "docker.io/portainer/portainer-ce:{{ portainer_image_tag }}"
   - "docker.io/coredns/coredns:1.12.0"
   - "docker.io/traefik:v3.2"
   - "docker.io/gitea/gitea:1.21"
   - "docker.io/sonatype/nexus3:3.72.0"
-
-# =============================================================================
-# Portainer Application Settings
-# =============================================================================
-portainer_image_tag: "2.27.1"
-portainer_port: 9443
 
 # =============================================================================
 # CoreOS Image

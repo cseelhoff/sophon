@@ -1,0 +1,26 @@
+---
+# =============================================================================
+# Global Defaults for Sophon Infrastructure
+# =============================================================================
+# These variables are available to all plays and roles.
+# Override with -e on command line or in host_vars/group_vars.
+
+# =============================================================================
+# InfraVM SSH Connection Settings
+# =============================================================================
+infravm_username: "core"
+infravm_ssh_private_key: "~/.ssh/id_rsa"
+
+# =============================================================================
+# Portainer Settings
+# =============================================================================
+portainer_port: 9443
+
+# =============================================================================
+# Proxmox Connection Defaults
+# =============================================================================
+proxmox_port: 8006
+proxmox_user: "root@pam"
+proxmox_node: "pve"
+proxmox_validate_certs: false
+proxmox_vnet: "vmbr0"

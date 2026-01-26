@@ -36,9 +36,9 @@ InfraVM is a CoreOS-based VM that:
 | `infravm_ip` | (required) | Static IP address |
 | `infravm_gateway` | (required) | Network gateway |
 | `infravm_cidr` | `24` | Network CIDR |
-| `infravm_username` | `admin` | VM user name |
+| `infravm_username` | `core` | VM user name |
 | `infravm_password_hash` | (default hash) | Password hash for user |
-| `infravm_ssh_public_key` | `~/.ssh/id_rsa.pub` | SSH public key for admin user |
+| `infravm_ssh_public_key` | `~/.ssh/id_rsa.pub` | SSH public key for core user |
 
 ### Portainer Settings
 

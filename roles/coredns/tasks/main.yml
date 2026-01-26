@@ -5,6 +5,34 @@
 - name: Deploy CoreDNS
   when: coredns_enabled | default(true)
   block:
+    - name: Create CoreDNS config volume and populate Corefile
+      ansible.builtin.raw: |
+        # Create volume if not exists
+        podman volume create coredns_config 2>/dev/null || true
+
+        # Get volume mount point
+        VOLPATH=$(podman volume inspect coredns_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
+
+        # Write Corefile to volume
+        cat > "${VOLPATH}/Corefile" << 'COREFILE'
+        . {
+            forward . {{ coredns_forward_dns }}
+            log
+            errors
+            cache 30
+            reload
+        }
+        COREFILE
+
+        chmod 644 "${VOLPATH}/Corefile"
+        echo "Corefile created at ${VOLPATH}/Corefile"
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_username }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      changed_when: true
+
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
@@ -20,10 +48,13 @@
               restart: unless-stopped
               network_mode: host
               volumes:
-                - /etc/coredns/Corefile:/Corefile:ro
+                - coredns_config:/config:ro
               command:
                 - -conf
-                - /Corefile
+                - /config/Corefile
+          volumes:
+            coredns_config:
+              external: true
 
     - name: Wait for CoreDNS to be ready
       ansible.builtin.wait_for:
@@ -38,7 +69,7 @@
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
         ansible_connection: ssh
-        ansible_user: "{{ infravm_ansible_user }}"
+        ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
       register: dns_test
       changed_when: false
