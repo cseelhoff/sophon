@@ -29,6 +29,21 @@
 #     timeout: 300
 #   delegate_to: localhost
 
+- name: Wait for SSH connectivity (tunnel may take time to establish)
+  ansible.builtin.command:
+    cmd: >
+      ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no
+      -i {{ infravm_ssh_private_key }}
+      {{ infravm_ansible_user }}@{{ infravm_ansible_host }}
+      echo "SSH connection established"
+  delegate_to: localhost
+  register: ssh_wait
+  until: ssh_wait.rc == 0
+  retries: 30
+  delay: 3
+  changed_when: false
+  ignore_errors: false
+
 - name: Debug NFS mount status on InfraVM
   ansible.builtin.raw: |
     echo "=== Mount status ==="
@@ -147,12 +162,13 @@
     # Create portainer data volume if not exists
     sudo podman volume create portainer_data 2>/dev/null || true
 
-    # Run the container (socket needs rw access, not ro)
+    # Run the container with :z label for SELinux socket access
     sudo podman run -d \
       --name portainer \
       --restart always \
+      --privileged \
       -p {{ portainer_port }}:9443 \
-      -v /run/podman/podman.sock:/var/run/docker.sock \
+      -v /run/podman/podman.sock:/var/run/docker.sock:z \
       -v portainer_data:/data \
       docker.io/portainer/portainer-ce:{{ portainer_image_tag }}
 
