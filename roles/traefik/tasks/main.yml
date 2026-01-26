@@ -10,7 +10,6 @@
       vars:
         portainer_stack_name: "traefik"
         portainer_stack_compose_content: |
-          version: '3'
           services:
             traefik:
               image: docker.io/library/traefik:{{ traefik_image_tag }}
@@ -36,11 +35,22 @@
             traefik_data:
 
     - name: Wait for Traefik to be ready
-      ansible.builtin.wait_for:
-        host: "{{ infravm_ip }}"
-        port: "{{ traefik_port_http }}"
-        timeout: 60
-      delegate_to: localhost
+      ansible.builtin.raw: |
+        for i in $(seq 1 30); do
+          if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:80 2>/dev/null | grep -qE '(200|404|301|302)'; then
+            echo "Traefik ready"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "Traefik not ready after 60s"
+        exit 1
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_username }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      changed_when: false
 
     - name: Display Traefik status
       ansible.builtin.debug:

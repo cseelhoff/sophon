@@ -7,14 +7,14 @@
   block:
     - name: Create CoreDNS config volume and populate Corefile
       ansible.builtin.raw: |
-        # Create volume if not exists
-        podman volume create coredns_config 2>/dev/null || true
+        # Create volume in system namespace (where Portainer/root podman runs)
+        sudo podman volume create coredns_config 2>/dev/null || true
 
         # Get volume mount point
-        VOLPATH=$(podman volume inspect coredns_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
+        VOLPATH=$(sudo podman volume inspect coredns_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
 
         # Write Corefile to volume
-        cat > "${VOLPATH}/Corefile" << 'COREFILE'
+        sudo tee "${VOLPATH}/Corefile" > /dev/null << 'COREFILE'
         . {
             forward . {{ coredns_forward_dns }}
             log
@@ -24,8 +24,20 @@
         }
         COREFILE
 
-        chmod 644 "${VOLPATH}/Corefile"
+        sudo chmod 644 "${VOLPATH}/Corefile"
         echo "Corefile created at ${VOLPATH}/Corefile"
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_username }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      changed_when: true
+
+    - name: Disable systemd-resolved stub listener for CoreDNS
+      ansible.builtin.raw: |
+        sudo mkdir -p /etc/systemd/resolved.conf.d
+        echo -e '[Resolve]\nDNSStubListener=no' | sudo tee /etc/systemd/resolved.conf.d/nostub.conf > /dev/null
+        sudo systemctl restart systemd-resolved
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
         ansible_connection: ssh
@@ -39,7 +51,6 @@
       vars:
         portainer_stack_name: "coredns"
         portainer_stack_compose_content: |
-          version: '3'
           services:
             coredns:
               image: docker.io/{{ coredns_image_name }}:{{ coredns_image_tag }}
@@ -56,24 +67,23 @@
             coredns_config:
               external: true
 
-    - name: Wait for CoreDNS to be ready
-      ansible.builtin.wait_for:
-        host: "{{ infravm_ip }}"
-        port: "{{ coredns_dns_port }}"
-        timeout: 60
-      delegate_to: localhost
-
-    - name: Test DNS resolution via CoreDNS
+    - name: Wait for CoreDNS and test DNS resolution
       ansible.builtin.raw: |
-        nslookup google.com 127.0.0.1 || dig @127.0.0.1 google.com
+        for i in $(seq 1 30); do
+          if nslookup google.com 127.0.0.1 2>/dev/null || dig @127.0.0.1 google.com +short 2>/dev/null | grep -q .; then
+            echo "CoreDNS ready - DNS resolution successful"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "CoreDNS not ready after 60s"
+        exit 1
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
         ansible_connection: ssh
         ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      register: dns_test
       changed_when: false
-      failed_when: dns_test.rc != 0
 
     - name: Display CoreDNS status
       ansible.builtin.debug:

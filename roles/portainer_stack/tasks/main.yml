@@ -103,6 +103,20 @@
   register: portainer_stack_deploy_result
   when: portainer_stack_existing is none
 
+- name: Debug stack deploy response
+  ansible.builtin.debug:
+    var: portainer_stack_deploy_result.stdout
+  when: portainer_stack_deploy_result is defined and portainer_stack_deploy_result.stdout is defined
+
+- name: Fail if stack deployment failed
+  ansible.builtin.fail:
+    msg: "Stack deployment failed: {{ portainer_stack_deploy_result.stdout }}"
+  when:
+    - portainer_stack_deploy_result is defined
+    - portainer_stack_deploy_result.stdout is defined
+    - "'message' in portainer_stack_deploy_result.stdout"
+    - "'failed' in portainer_stack_deploy_result.stdout"
+
 - name: Update existing stack
   ansible.builtin.raw: |
     curl -sk -X PUT "https://{{ infravm_ip }}:{{ portainer_port }}/api/stacks/{{ portainer_stack_existing.Id }}?endpointId={{ portainer_stack_endpoint_id }}" \
