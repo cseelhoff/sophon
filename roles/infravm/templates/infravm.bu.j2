@@ -15,12 +15,37 @@ storage:
   directories:
     - path: /var/mnt/nfs
       mode: 0755
+    # Enable lingering for core user (for rootless podman services)
+    - path: /var/lib/systemd/linger
+      mode: 0755
 
   files:
     - path: /etc/hostname
       mode: 0644
       contents:
         inline: {{ infravm_vm_name }}
+
+    # Allow unprivileged users to bind to privileged ports (for rootless podman)
+    - path: /etc/sysctl.d/99-unprivileged-ports.conf
+      mode: 0644
+      contents:
+        inline: |
+          # Allow rootless containers to bind to privileged ports (e.g., port 53 for CoreDNS)
+          net.ipv4.ip_unprivileged_port_start=0
+
+    # Enable lingering for core user
+    - path: /var/lib/systemd/linger/{{ infravm_username }}
+      mode: 0644
+      contents:
+        inline: ""
+
+    # Disable systemd-resolved stub listener so CoreDNS can bind port 53
+    - path: /etc/systemd/resolved.conf.d/nostub.conf
+      mode: 0644
+      contents:
+        inline: |
+          [Resolve]
+          DNSStubListener=no
 
     - path: /etc/NetworkManager/system-connections/wired.nmconnection
       mode: 0600

@@ -82,36 +82,23 @@
 - name: Load container images on InfraVM
   block:
     - name: Check and load each container image
-      ansible.builtin.raw: |
-        IMAGE="{{ item }}"
-        # Extract basename: docker.io/portainer/portainer-ce:2.27.1 -> portainer-ce
-        BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
-        TARFILE="/var/mnt/nfs/containers/${BASENAME}.tar"
-
-        # Check if image already loaded
+      ansible.builtin.raw: >-
+        IMAGE="{{ item }}";
+        BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||');
+        TARFILE="/var/mnt/nfs/containers/${BASENAME}.tar";
         if podman image exists "$IMAGE" 2>/dev/null; then
-          echo "ALREADY_LOADED"
-          exit 0
-        fi
-
-        # Try to load from NFS cache
+          echo "ALREADY_LOADED"; exit 0;
+        fi;
         if [ -f "$TARFILE" ]; then
-          podman load -i "$TARFILE"
-          echo "LOADED_FROM_NFS"
-          exit 0
-        fi
-
-        # Pull from registry and save to NFS
-        podman pull "$IMAGE"
-
-        # Save to NFS for future use (NFS needs to be rw for this)
-        # Check if NFS is writable
+          podman load -i "$TARFILE"; echo "LOADED_FROM_NFS"; exit 0;
+        fi;
+        podman pull "$IMAGE";
         if touch /var/mnt/nfs/containers/.write_test 2>/dev/null; then
-          rm -f /var/mnt/nfs/containers/.write_test
-          podman save -o "$TARFILE" "$IMAGE"
-          echo "PULLED_AND_CACHED"
+          rm -f /var/mnt/nfs/containers/.write_test;
+          podman save -o "$TARFILE" "$IMAGE";
+          echo "PULLED_AND_CACHED";
         else
-          echo "PULLED_NO_CACHE"
+          echo "PULLED_NO_CACHE";
         fi
       loop: "{{ infravm_container_images }}"
       register: container_load_results
@@ -131,53 +118,60 @@
           {% endfor %}
 
 # =============================================================================
-# Start Portainer Container
+# Start Portainer Container (Rootless)
 # =============================================================================
-- name: Create and start Portainer container with systemd service
+- name: Create and start Portainer container with systemd user service
   ansible.builtin.raw: |
-    # Check if portainer service already exists and is running
-    if systemctl is-active portainer.service >/dev/null 2>&1; then
+    # Clean up any old root-level portainer first
+    sudo systemctl stop portainer.service 2>/dev/null || true
+    sudo systemctl disable portainer.service 2>/dev/null || true
+    sudo podman rm -f portainer 2>/dev/null || true
+
+    # Check if portainer user service already exists and is running
+    if systemctl --user is-active portainer.service >/dev/null 2>&1; then
       echo "ALREADY_RUNNING"
       exit 0
     fi
 
-    # Enable and start podman API service (creates /run/podman/podman.sock)
-    sudo systemctl enable --now podman.service
+    # Enable lingering so user services persist after logout
+    loginctl enable-linger $(whoami)
+
+    # Enable and start podman socket for rootless podman
+    systemctl --user enable --now podman.socket
 
     # Wait for socket to appear
+    SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
     for i in 1 2 3 4 5; do
-      [ -S /run/podman/podman.sock ] && break
+      [ -S "$SOCKET_PATH" ] && break
       sleep 1
     done
 
-    # Ensure socket is readable by all (for container access)
-    sudo chmod 666 /run/podman/podman.sock
-
     # Remove existing container if present
-    sudo podman rm -f portainer 2>/dev/null || true
+    podman rm -f portainer 2>/dev/null || true
 
     # Unmask service if previously masked
-    sudo systemctl unmask portainer.service 2>/dev/null || true
+    systemctl --user unmask portainer.service 2>/dev/null || true
 
     # Create portainer data volume if not exists
-    sudo podman volume create portainer_data 2>/dev/null || true
+    podman volume create portainer_data 2>/dev/null || true
 
-    # Run the container with :z label for SELinux socket access
-    sudo podman run -d \
+    # Run the container with SELinux label disabled for socket access
+    podman run -d \
       --name portainer \
       --restart always \
-      --privileged \
+      --security-opt label=disable \
       -p {{ portainer_port }}:9443 \
-      -v /run/podman/podman.sock:/var/run/docker.sock:z \
-      -v portainer_data:/data \
+      -v "$SOCKET_PATH":/var/run/docker.sock \
+      -v portainer_data:/data:Z \
       docker.io/portainer/portainer-ce:{{ portainer_image_tag }}
 
-    # Generate systemd unit file from running container
-    sudo podman generate systemd --name portainer --new | sudo tee /etc/systemd/system/portainer.service > /dev/null
+    # Generate systemd user unit file from running container
+    mkdir -p ~/.config/systemd/user
+    podman generate systemd --name portainer --new > ~/.config/systemd/user/portainer.service
 
-    # Reload systemd and enable the service (already running from podman run)
-    sudo systemctl daemon-reload
-    sudo systemctl enable portainer.service
+    # Reload systemd user daemon and enable the service
+    systemctl --user daemon-reload
+    systemctl --user enable portainer.service
 
     echo "STARTED"
   delegate_to: "{{ infravm_ansible_host }}"

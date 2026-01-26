@@ -7,14 +7,14 @@
   block:
     - name: Create CoreDNS config volume and populate Corefile
       ansible.builtin.raw: |
-        # Create volume in system namespace (where Portainer/root podman runs)
-        sudo podman volume create coredns_config 2>/dev/null || true
+        # Create volume in user namespace (rootless podman)
+        podman volume create coredns_config 2>/dev/null || true
 
         # Get volume mount point
-        VOLPATH=$(sudo podman volume inspect coredns_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
+        VOLPATH=$(podman volume inspect coredns_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
 
         # Write Corefile to volume
-        sudo tee "${VOLPATH}/Corefile" > /dev/null << 'COREFILE'
+        tee "${VOLPATH}/Corefile" > /dev/null << 'COREFILE'
         . {
             forward . {{ coredns_forward_dns }}
             log
@@ -24,7 +24,7 @@
         }
         COREFILE
 
-        sudo chmod 644 "${VOLPATH}/Corefile"
+        chmod 644 "${VOLPATH}/Corefile"
         echo "Corefile created at ${VOLPATH}/Corefile"
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
@@ -33,17 +33,29 @@
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
       changed_when: true
 
-    - name: Disable systemd-resolved stub listener for CoreDNS
+    - name: Ensure systemd-resolved stub listener is disabled for CoreDNS
       ansible.builtin.raw: |
-        sudo mkdir -p /etc/systemd/resolved.conf.d
-        echo -e '[Resolve]\nDNSStubListener=no' | sudo tee /etc/systemd/resolved.conf.d/nostub.conf > /dev/null
-        sudo systemctl restart systemd-resolved
+        # Check if stub listener is already disabled (set in Ignition)
+        if grep -q 'DNSStubListener=no' /etc/systemd/resolved.conf.d/nostub.conf 2>/dev/null; then
+          # Restart resolved if not already restarted since boot
+          if ss -tlnup | grep -q '127.0.0.53:53'; then
+            sudo systemctl restart systemd-resolved
+          fi
+          echo "OK"
+        else
+          # Fallback: create config if not present from Ignition
+          sudo mkdir -p /etc/systemd/resolved.conf.d
+          echo -e '[Resolve]\nDNSStubListener=no' | sudo tee /etc/systemd/resolved.conf.d/nostub.conf > /dev/null
+          sudo systemctl restart systemd-resolved
+          echo "CONFIGURED"
+        fi
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
         ansible_connection: ssh
         ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      changed_when: true
+      changed_when: "'CONFIGURED' in result.stdout"
+      register: result
 
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:

@@ -58,7 +58,7 @@ portainer_port: 9443
 infravm_container_images:
   - "docker.io/portainer/portainer-ce:{{ portainer_image_tag }}"
   - "docker.io/coredns/coredns:1.12.0"
-  - "docker.io/traefik:v3.2"
+  - "docker.io/library/traefik:v3.2"
   - "docker.io/gitea/gitea:1.21"
   - "docker.io/sonatype/nexus3:3.72.0"
 
