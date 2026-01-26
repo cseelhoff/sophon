@@ -1,0 +1,28 @@
+version: '3'
+
+services:
+  dns-sync:
+    image: {{ dns_sync_image_name }}:{{ dns_sync_image_tag }}
+    container_name: dns-sync
+    restart: unless-stopped
+    volumes:
+      - /var/run/podman/podman.sock:/var/run/docker.sock:ro
+      - /opt/dns_sync:/app:ro
+      - {{ dns_sync_zones_dir }}:/zones:rw
+    environment:
+      - TRAEFIK_API={{ dns_sync_traefik_api }}
+      - ZONE={{ dns_sync_zone }}
+      - ZONE_FILE=/zones/{{ dns_sync_zone_file }}
+      - CNAME_TARGET={{ dns_sync_cname_target }}
+      - TRAEFIK_IP={{ dns_sync_traefik_ip }}
+      - DEBOUNCE_SECONDS={{ dns_sync_debounce_seconds }}
+      - SOA_NS={{ dns_sync_soa_ns }}
+      - SOA_ADMIN={{ dns_sync_soa_admin }}
+      - TTL={{ dns_sync_ttl }}
+    command: sh -c "pip install --quiet -r /app/requirements.txt && python /app/sync.py"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

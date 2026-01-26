@@ -1,0 +1,6 @@
+---
+- name: Deploy CoreDNS
+  hosts: coreos
+  gather_facts: true
+  roles:
+    - coredns

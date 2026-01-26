@@ -1,0 +1,41 @@
+api:
+  dashboard: true
+  insecure: {{ traefik_api_insecure | default(false) | lower }}
+
+log:
+  level: {{ traefik_log_level }}
+
+entryPoints:
+  http:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: https
+          scheme: https
+  https:
+    address: ":443"
+
+serversTransport:
+  insecureSkipVerify: {{ traefik_insecure_skip_verify | lower }}
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: proxy
+  file:
+    filename: /config.yml
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "{{ traefik_acme_email }}"
+      storage: /data/acme.json
+      caServer: "{{ traefik_acme_server }}"
+      dnsChallenge:
+        provider: {{ traefik_dns_provider }}
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"

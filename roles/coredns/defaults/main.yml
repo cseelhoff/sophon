@@ -1,0 +1,21 @@
+---
+# Enable/disable this role
+coredns_enabled: true
+
+coredns_image_name: "coredns/coredns"
+coredns_image_tag: "1.12.0"
+
+# CoreDNS configuration
+coredns_dns_port: 53
+coredns_config_dir: "/opt/coredns"
+
+# DNS forwarding settings
+coredns_forward_dns: "8.8.8.8 8.8.4.4"
+
+# Portainer connection (for stack deployment)
+portainer_port: 9443
+
+# Local zones (synced by dns_sync sidecar)
+# coredns_local_zones:
+#   - name: "homelab.local"
+#     file: "homelab.local.zone"

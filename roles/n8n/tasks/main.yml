@@ -1,0 +1,63 @@
+---
+# Deploy n8n Workflow Automation
+
+- name: Deploy n8n
+  when: n8n_enabled is true
+  block:
+    - name: Set deployment variables
+      ansible.builtin.set_fact:
+        n8n_validate_certs: false
+        n8n_file_server_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Check if n8n image exists
+      ansible.builtin.raw: podman images | grep -q "n8n[ ]*{{ n8n_image_tag }}"
+      delegate_to: "{{ coreos_ip }}"
+      register: n8n_image_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Download and load n8n image from HTTP file server
+      ansible.builtin.raw: |
+        cd /tmp &&
+        curl -o n8n.tar http://{{ n8n_file_server_ip }}:{{ http_file_server_port }}/n8n.tar &&
+        podman load -i n8n.tar &&
+        rm -f n8n.tar
+      delegate_to: "{{ coreos_ip }}"
+      when: n8n_image_exists.rc != 0
+
+    - name: Create n8n directories
+      ansible.builtin.raw: |
+        mkdir -p {{ n8n_data_dir }}/data
+        chown -R 1000:1000 {{ n8n_data_dir }}/data
+      delegate_to: "{{ coreos_ip }}"
+      become: true
+
+    - name: Generate docker-compose content in base64
+      ansible.builtin.set_fact:
+        n8n_compose_base64: "{{ lookup('template', 'templates/docker-compose.yml.j2') | b64encode }}"
+
+    - name: Initialize n8n environment variables
+      ansible.builtin.set_fact:
+        n8n_portainer_env_vars:
+          - name: N8N_ENCRYPTION_KEY
+            value: "{{ n8n_encryption_key | default('') }}"
+
+    - name: Add basic auth environment variables when enabled
+      ansible.builtin.set_fact:
+        n8n_portainer_env_vars: "{{ n8n_portainer_env_vars + basic_auth_env_vars }}"
+      vars:
+        basic_auth_env_vars:
+          - name: N8N_BASIC_AUTH_USER
+            value: "{{ n8n_basic_auth_user | default('admin') }}"
+          - name: N8N_BASIC_AUTH_PASSWORD
+            value: "{{ n8n_basic_auth_password | default('admin') }}"
+      when: n8n_basic_auth_enabled | default(false)
+
+    - name: Deploy n8n stack using portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "n8n"
+        portainer_stack_compose_content: "{{ n8n_compose_base64 | b64decode }}"
+        portainer_stack_env_vars: "{{ n8n_portainer_env_vars }}"

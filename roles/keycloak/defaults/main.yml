@@ -1,0 +1,65 @@
+---
+# Keycloak configuration
+keycloak_enabled: false  # TODO: Rewrite to use portainer_stack
+keycloak_image_name: "quay.io/keycloak/keycloak"
+keycloak_image_tag: "26.0"
+
+# Directories
+keycloak_data_dir: "/opt/keycloak"
+
+# Network
+keycloak_port: 8180
+
+# Domain
+keycloak_hostname: "auth"
+keycloak_domain: "{{ traefik_domain | default('example.local') }}"
+
+# Admin credentials (set via vault in production)
+# keycloak_admin_user: "admin"
+# keycloak_admin_password: ""
+
+# Database - using built-in H2 for simplicity
+# For production, use PostgreSQL
+keycloak_db_type: "dev-file"
+
+# LDAP integration
+keycloak_ldap_enabled: false
+# keycloak_ldap_url: "ldap://openldap:389"
+# keycloak_ldap_bind_dn: "cn=admin,{{ openldap_base_dn }}"
+# keycloak_ldap_bind_password: ""
+
+# Proxy settings for running behind Traefik
+keycloak_proxy_mode: "edge"
+
+# Realm configuration
+keycloak_realm: "sophon"
+keycloak_realm_display_name: "Sophon SSO"
+
+# OIDC Clients (auto-provisioned)
+keycloak_clients:
+  - client_id: gitea
+    name: "Gitea"
+    redirect_uris:
+      - "https://git.{{ domain_name }}/*"
+    enabled: "{{ gitea_enabled | default(false) }}"
+  - client_id: nextcloud
+    name: "Nextcloud"
+    redirect_uris:
+      - "https://cloud.{{ domain_name }}/*"
+    enabled: "{{ nextcloud_enabled | default(false) }}"
+  - client_id: guacamole
+    name: "Guacamole"
+    redirect_uris:
+      - "https://remote.{{ domain_name }}/*"
+    public_client: true
+    enabled: "{{ guacamole_enabled | default(false) }}"
+  - client_id: n8n
+    name: "n8n"
+    redirect_uris:
+      - "https://n8n.{{ domain_name }}/*"
+    enabled: "{{ n8n_enabled | default(false) }}"
+  - client_id: portainer
+    name: "Portainer"
+    redirect_uris:
+      - "https://portainer.{{ domain_name }}/*"
+    enabled: "{{ portainer_enabled | default(false) }}"

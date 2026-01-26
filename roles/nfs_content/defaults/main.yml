@@ -1,0 +1,60 @@
+---
+# =============================================================================
+# NFS Content Role - Air-Gapped Prestaging
+# =============================================================================
+# This role is used ONLY for air-gapped deployments to prestage artifacts
+# before switching to the disconnected network.
+#
+# In online mode, InfraVM pulls container images directly via podman.
+#
+# MODES:
+#   download_only - Downloads container images to local staging (prestage.yml)
+#   upload_only   - Uploads prestaged containers to NFS (nfs-upload.yml)
+#   skip          - Skip entirely (online mode in site.yml)
+
+# Enable/disable this role
+nfs_content_enabled: true
+
+# =============================================================================
+# Operation Mode
+# =============================================================================
+# download_only: Air-gapped Phase 1 - download containers to local staging
+# upload_only: Air-gapped Phase 2 - upload prestaged containers to NFS
+# skip: Online mode - InfraVM pulls directly, no prestaging needed
+nfs_content_mode: "skip"
+
+# =============================================================================
+# NFS Server Configuration
+# =============================================================================
+# NFS storage name in Proxmox
+nfs_content_storage_name: "{{ nfs_server_proxmox_storage_name | default('sophon-nfs') }}"
+
+# =============================================================================
+# Source Directory (for upload_only mode)
+# =============================================================================
+# Points to prestage directory when uploading prestaged artifacts
+nfs_content_source_dir: "{{ prestage_local_dir | default('/tmp/sophon_prestage') }}"
+
+# =============================================================================
+# Local Staging Directory (for download_only mode)
+# =============================================================================
+nfs_content_local_staging_dir: "/tmp/sophon_prestage"
+
+# =============================================================================
+# Container Images (for air-gapped prestaging)
+# =============================================================================
+# These are downloaded via skopeo and saved as tarballs
+nfs_content_container_images:
+  - "docker.io/portainer/portainer-ce:2.27.1"
+  - "docker.io/coredns/coredns:1.12.0"
+  - "docker.io/traefik:v3.2"
+  - "docker.io/gitea/gitea:1.21"
+  - "docker.io/sonatype/nexus3:3.72.0"
+  - "docker.io/osixia/openldap:1.5.0"
+  - "docker.io/osixia/phpldapadmin:0.9.0"
+
+# =============================================================================
+# CoreOS Image (for air-gapped prestaging)
+# =============================================================================
+nfs_content_coreos_enabled: true
+nfs_content_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"

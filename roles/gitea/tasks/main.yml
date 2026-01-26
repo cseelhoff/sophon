@@ -1,0 +1,8 @@
+---
+# Deploy Gitea Git Server
+# TODO: Rewrite to use portainer_stack approach (no delegate_to)
+
+- name: Skip gitea deployment (disabled)
+  ansible.builtin.debug:
+    msg: "Gitea role is disabled (gitea_enabled=false)"
+  when: not (gitea_enabled | default(false))

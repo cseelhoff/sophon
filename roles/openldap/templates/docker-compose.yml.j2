@@ -1,0 +1,72 @@
+version: '3'
+
+services:
+  openldap:
+    image: {{ openldap_image_name }}:{{ openldap_image_tag }}
+    container_name: openldap
+    restart: unless-stopped
+    hostname: ldap
+    domainname: {{ openldap_domain }}
+    environment:
+      - LDAP_LOG_LEVEL={{ openldap_log_level }}
+      - LDAP_ORGANISATION={{ openldap_organisation }}
+      - LDAP_DOMAIN={{ openldap_domain }}
+      - LDAP_ADMIN_PASSWORD=${LDAP_ADMIN_PASSWORD}
+      - LDAP_CONFIG_PASSWORD=${LDAP_CONFIG_PASSWORD}
+      - LDAP_READONLY_USER=false
+      - LDAP_RFC2307BIS_SCHEMA=false
+      - LDAP_BACKEND=mdb
+      - LDAP_TLS={{ openldap_tls_enabled | lower }}
+      - LDAP_TLS_ENFORCE={{ openldap_tls_enforce | lower }}
+      - LDAP_REPLICATION=false
+      - KEEP_EXISTING_CONFIG=false
+      - LDAP_REMOVE_CONFIG_AFTER_SETUP=true
+    tty: true
+    stdin_open: true
+    volumes:
+      - {{ openldap_data_dir }}/database:/var/lib/ldap
+      - {{ openldap_data_dir }}/config:/etc/ldap/slapd.d
+      - {{ openldap_data_dir }}/certs:/container/service/slapd/assets/certs
+    ports:
+      - "{{ openldap_port_ldap }}:389"
+      - "{{ openldap_port_ldaps }}:636"
+    networks:
+      - ldap
+      - proxy
+    labels:
+      - "homepage.group=Infrastructure"
+      - "homepage.name=OpenLDAP"
+      - "homepage.icon=openldap"
+      - "homepage.description=Directory Service"
+
+  phpldapadmin:
+    image: {{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
+    container_name: phpldapadmin
+    restart: unless-stopped
+    environment:
+      - PHPLDAPADMIN_LDAP_HOSTS=openldap
+      - PHPLDAPADMIN_HTTPS=false
+    ports:
+      - "{{ openldap_port_admin }}:80"
+    depends_on:
+      - openldap
+    networks:
+      - ldap
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ldapadmin.entrypoints=https"
+      - "traefik.http.routers.ldapadmin.rule=Host(`ldap.{{ openldap_domain }}`)"
+      - "traefik.http.routers.ldapadmin.tls=true"
+      - "traefik.http.services.ldapadmin.loadbalancer.server.port=80"
+      - "homepage.group=Infrastructure"
+      - "homepage.name=phpLDAPadmin"
+      - "homepage.icon=phpldapadmin"
+      - "homepage.href=https://ldap.{{ openldap_domain }}"
+      - "homepage.description=LDAP Admin UI"
+
+networks:
+  ldap:
+    driver: bridge
+  proxy:
+    external: true

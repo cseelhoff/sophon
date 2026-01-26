@@ -1,0 +1,25 @@
+---
+# Molecule test - syntax validation only
+
+platforms: []
+
+scenario:
+  test_sequence:
+    - syntax
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        # Portainer API connection
+        portainer_url: "https://localhost:9443"
+        portainer_api_key: "test-api-key"
+
+        # Stack configuration
+        stack_name: "test-stack"
+        docker_compose_content_decoded: |
+          version: '3'
+          services:
+            test:
+              image: alpine
+              command: sleep infinity
+        stack_env_vars: []

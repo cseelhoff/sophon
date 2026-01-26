@@ -1,0 +1,46 @@
+---
+# Deploy CoreDNS via Portainer stack
+# Image is pre-loaded at boot from ISO
+
+- name: Deploy CoreDNS
+  when: coredns_enabled | default(true)
+  block:
+    - name: Deploy CoreDNS stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "coredns"
+        portainer_stack_compose_content: |
+          version: '3'
+          services:
+            coredns:
+              image: docker.io/{{ coredns_image_name }}:{{ coredns_image_tag }}
+              pull_policy: never
+              container_name: coredns
+              restart: unless-stopped
+              network_mode: host
+              volumes:
+                - /etc/coredns/Corefile:/Corefile:ro
+              command:
+                - -conf
+                - /Corefile
+
+    - name: Wait for CoreDNS to be ready
+      ansible.builtin.wait_for:
+        host: "{{ coreos_ip }}"
+        port: "{{ coredns_dns_port }}"
+        timeout: 60
+
+    - name: Test DNS resolution via CoreDNS
+      ansible.builtin.shell:
+        cmd: "python3 -c \"import socket; print(socket.gethostbyname_ex('google.com'))\""
+      environment:
+        PYTHONDONTWRITEBYTECODE: "1"
+      register: dns_test
+      changed_when: false
+      failed_when: dns_test.rc != 0
+
+    - name: Display CoreDNS status
+      ansible.builtin.debug:
+        msg: "CoreDNS ready at {{ coreos_ip }}:{{ coredns_dns_port }}"

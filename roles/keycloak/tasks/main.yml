@@ -1,0 +1,8 @@
+---
+# Deploy Keycloak Identity Provider
+# TODO: Rewrite to use portainer_stack approach (no delegate_to)
+
+- name: Skip keycloak deployment (disabled)
+  ansible.builtin.debug:
+    msg: "Keycloak role is disabled (keycloak_enabled=false)"
+  when: not (keycloak_enabled | default(false))

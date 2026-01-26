@@ -1,0 +1,47 @@
+---
+# Deploy Traefik via Portainer stack
+
+- name: Deploy Traefik
+  when: traefik_enabled | default(true)
+  block:
+    - name: Deploy Traefik stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
+        portainer_stack_name: "traefik"
+        portainer_stack_compose_content: |
+          version: '3'
+          services:
+            traefik:
+              image: docker.io/library/traefik:{{ traefik_image_tag }}
+              pull_policy: never
+              container_name: traefik
+              restart: unless-stopped
+              network_mode: host
+              volumes:
+                - /etc/traefik:/etc/traefik:ro
+                - traefik_data:/data
+                - /run/podman/podman.sock:/var/run/docker.sock:ro
+              command:
+                - --api.dashboard=true
+                - --api.insecure=true
+                - --entrypoints.web.address=:80
+                - --entrypoints.websecure.address=:443
+                - --providers.docker=true
+                - --providers.docker.exposedbydefault=false
+                - --providers.file.directory=/etc/traefik
+                - --providers.file.watch=true
+                - --log.level={{ traefik_log_level }}
+          volumes:
+            traefik_data:
+
+    - name: Wait for Traefik to be ready
+      ansible.builtin.wait_for:
+        host: "{{ coreos_ip }}"
+        port: "{{ traefik_port_http }}"
+        timeout: 60
+
+    - name: Display Traefik status
+      ansible.builtin.debug:
+        msg: "Traefik ready at http://{{ coreos_ip }}:{{ traefik_port_ui }} (dashboard)"

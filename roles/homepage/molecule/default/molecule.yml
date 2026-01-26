@@ -1,0 +1,14 @@
+---
+# Molecule test - syntax validation only
+
+platforms: []
+
+scenario:
+  test_sequence:
+    - syntax
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        homepage_enabled: true
+        homepage_data_dir: "/tmp/homepage"

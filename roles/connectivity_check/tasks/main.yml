@@ -1,0 +1,100 @@
+---
+# =============================================================================
+# Connectivity Check Role - Tests NFS reachability from Bootstrap
+# =============================================================================
+# Determines if Bootstrap can directly access the NFS server network.
+# If not, and cloudflared_tunnel_token is set, cloudflared will be used.
+
+- name: Skip connectivity check if disabled
+  ansible.builtin.meta: end_play
+  when: not (connectivity_check_enabled | default(true))
+
+- name: Validate NFS server IP is set
+  ansible.builtin.fail:
+    msg: "connectivity_check_nfs_server must be set (typically nfs_server_ip)"
+  when: connectivity_check_nfs_server | length == 0
+
+# -----------------------------------------------------------------------------
+# NFS Mount Test
+# -----------------------------------------------------------------------------
+- name: Create temporary mount point
+  ansible.builtin.file:
+    path: "{{ connectivity_check_nfs_mount_point }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+
+- name: Test NFS mount from Bootstrap
+  ansible.builtin.shell:
+    cmd: |
+      # Try to mount NFS with timeout
+      timeout {{ connectivity_check_nfs_timeout }} mount -t nfs \
+        -o ro,nolock,timeo=30,retrans=1 \
+        {{ connectivity_check_nfs_server }}:{{ connectivity_check_nfs_export }} \
+        {{ connectivity_check_nfs_mount_point }} 2>/dev/null
+      
+      if [ $? -eq 0 ]; then
+        # Mount succeeded, unmount and report success
+        umount {{ connectivity_check_nfs_mount_point }} 2>/dev/null || true
+        echo "NFS_REACHABLE"
+        exit 0
+      else
+        echo "NFS_UNREACHABLE"
+        exit 1
+      fi
+  register: nfs_mount_result
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+
+- name: Set NFS reachability fact
+  ansible.builtin.set_fact:
+    nfs_reachable: "{{ nfs_mount_result.rc == 0 }}"
+
+- name: Cleanup temporary mount point
+  ansible.builtin.file:
+    path: "{{ connectivity_check_nfs_mount_point }}"
+    state: absent
+  delegate_to: localhost
+  failed_when: false
+
+# -----------------------------------------------------------------------------
+# Cloudflared Decision
+# -----------------------------------------------------------------------------
+- name: Set cloudflared enabled fact
+  ansible.builtin.set_fact:
+    cloudflared_enabled: "{{ (not nfs_reachable) and (cloudflared_tunnel_token | default('') != '') }}"
+
+- name: Display connectivity summary
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════
+      Bootstrap Connectivity Check
+      ═══════════════════════════════════════════════════════════
+      NFS Server:       {{ connectivity_check_nfs_server }}
+      NFS Reachable:    {{ nfs_reachable }}
+      ───────────────────────────────────────────────────────────
+      Cloudflared Token Set: {{ 'Yes' if cloudflared_tunnel_token | default('') != '' else 'No' }}
+      Cloudflared Enabled:   {{ cloudflared_enabled }}
+      ═══════════════════════════════════════════════════════════
+
+- name: Fail if NFS unreachable and no cloudflared token
+  ansible.builtin.fail:
+    msg: |
+      ═══════════════════════════════════════════════════════════
+      ERROR: Cannot reach NFS server and no cloudflared token set
+      ═══════════════════════════════════════════════════════════
+      
+      Bootstrap cannot mount NFS at {{ connectivity_check_nfs_server }}:{{ connectivity_check_nfs_export }}
+      
+      Options:
+      1. Ensure network connectivity to {{ connectivity_check_nfs_server }}
+      2. Set CLOUDFLARED_TUNNEL_TOKEN environment variable for tunnel access:
+         
+         export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
+         ansible-playbook site.yml
+      
+      ═══════════════════════════════════════════════════════════
+  when:
+    - not nfs_reachable
+    - cloudflared_tunnel_token | default('') == ''

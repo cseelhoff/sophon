@@ -1,0 +1,76 @@
+---
+# =============================================================================
+# InfraVM Role - CoreOS VM running all containers
+# =============================================================================
+# This role creates a CoreOS VM and deploys Portainer + all services.
+# Depends on: coreos_base role (via meta/main.yml)
+
+# Enable/disable this role
+infravm_enabled: true
+
+# =============================================================================
+# VM Configuration (passed to coreos_base)
+# =============================================================================
+coreos_base_vm_name: "sophon-infravm"
+coreos_base_cores: 2
+coreos_base_memory: 4096
+coreos_base_disk_size: "32G"
+
+# Network (required - auto-discovered or prompted if not set)
+# coreos_base_ip: "10.0.1.10"
+# coreos_base_gateway: "10.0.1.1"
+coreos_base_cidr: "24"
+
+# User Configuration
+coreos_base_username: "admin"
+# Default password hash for 'admin' user (password: changeme)
+# Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
+coreos_base_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDoimDMM9wuIY4efuYmvRcqA"
+
+# SSH public key for admin user (required for Ansible access)
+coreos_base_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
+
+# Butane template location (for coreos_base)
+coreos_base_butane_template: "{{ role_path }}/templates/infravm.bu.j2"
+
+# =============================================================================
+# Ansible Connection Settings
+# =============================================================================
+# Ansible host for SSH connections (defaults to cloudflared tunnel name if token set)
+infravm_ansible_host: "{{ 'infravm.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else coreos_base_ip }}"
+
+# SSH user for Ansible connections
+infravm_ansible_user: "{{ coreos_base_username }}"
+
+# SSH private key for Ansible connections
+infravm_ssh_private_key: "~/.ssh/id_rsa"
+
+# =============================================================================
+# Cloudflared Settings (optional - enables tunnel access)
+# =============================================================================
+# Tunnel token from environment variable CLOUDFLARED_TUNNEL_TOKEN
+cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+
+# =============================================================================
+# NFS Settings
+# =============================================================================
+# NFS mount options for InfraVM
+infravm_nfs_mount_options: "ro,noatime,vers=4.1"
+
+# =============================================================================
+# Container Images (loaded via SSH from Ansible controller)
+# =============================================================================
+# List of container images to load on InfraVM
+# These are cached on NFS at /export/containers/<basename>.tar
+infravm_container_images:
+  - "docker.io/portainer/portainer-ce:2.27.1"
+  - "docker.io/coredns/coredns:1.12.0"
+  - "docker.io/traefik:v3.2"
+  - "docker.io/gitea/gitea:1.21"
+  - "docker.io/sonatype/nexus3:3.72.0"
+
+# =============================================================================
+# Portainer Application Settings
+# =============================================================================
+portainer_image_tag: "2.27.1"
+portainer_port: 9443

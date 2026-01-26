@@ -1,0 +1,168 @@
+---
+# =============================================================================
+# QGA Remote Execution Role
+# =============================================================================
+# Uses QEMU Guest Agent to execute Ansible playbooks on a VM when SSH is unavailable
+
+- name: Skip QGA remote exec if disabled
+  ansible.builtin.meta: end_play
+  when: not (qga_remote_exec_enabled | default(true))
+
+- name: Validate required variables
+  ansible.builtin.fail:
+    msg: "{{ item.name }} must be set for QGA remote execution"
+  when: item.value | length == 0
+  loop:
+    - { name: "qga_remote_exec_vmid", value: "{{ qga_remote_exec_vmid | default('') }}" }
+    - { name: "proxmox_ticket", value: "{{ proxmox_ticket | default('') }}" }
+
+# -----------------------------------------------------------------------------
+# Package Entire Sophon Project
+# -----------------------------------------------------------------------------
+- name: Create tarball of entire sophon project
+  ansible.builtin.command:
+    cmd: "tar -czf /tmp/{{ qga_remote_exec_package_name }} -C {{ qga_remote_exec_sophon_path }}/.. {{ qga_remote_exec_sophon_path | basename }}"
+  changed_when: true
+
+- name: Read tarball and base64 encode
+  ansible.builtin.slurp:
+    src: "/tmp/{{ qga_remote_exec_package_name }}"
+  register: package_contents
+
+# -----------------------------------------------------------------------------
+# Prepare Environment Block
+# -----------------------------------------------------------------------------
+- name: Build environment variable string
+  ansible.builtin.set_fact:
+    env_block: |
+      {% for key, value in qga_remote_exec_env_vars.items() %}
+      export {{ key }}='{{ value }}'
+      {% endfor %}
+
+- name: Base64 encode environment block
+  ansible.builtin.set_fact:
+    env_block_b64: "{{ env_block | b64encode }}"
+
+# -----------------------------------------------------------------------------
+# QGA File Write - Upload Package to VM
+# -----------------------------------------------------------------------------
+- name: Upload sophon package to VM via QGA file-write
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/file-write"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    body_format: json
+    body:
+      file: "/tmp/{{ qga_remote_exec_package_name }}"
+      content: "{{ package_contents.content }}"
+    validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+    timeout: "{{ qga_remote_exec_file_write_timeout }}"
+  register: file_write_result
+
+- name: Display file write result
+  ansible.builtin.debug:
+    msg: "Package uploaded to VM {{ qga_remote_exec_vmid }}: /tmp/{{ qga_remote_exec_package_name }}"
+
+# -----------------------------------------------------------------------------
+# QGA Exec - Extract and Run Ansible
+# -----------------------------------------------------------------------------
+- name: Build extraction and execution script
+  ansible.builtin.set_fact:
+    exec_script: |
+      #!/bin/bash
+      set -e
+      
+      # Decode and apply environment variables
+      echo "{{ env_block_b64 }}" | base64 -d > /tmp/sophon_env.sh
+      source /tmp/sophon_env.sh
+      
+      # Create target directory
+      mkdir -p {{ qga_remote_exec_remote_path }}
+      
+      # Extract sophon package
+      cd /tmp
+      tar -xzf {{ qga_remote_exec_package_name }}
+      cp -r sophon/* {{ qga_remote_exec_remote_path }}/
+      
+      # Run ansible-playbook
+      cd {{ qga_remote_exec_remote_path }}
+      ansible-playbook -i {{ qga_remote_exec_inventory }} {{ qga_remote_exec_playbook }} \
+        -e "deployment_mode=qga_remote" \
+        -e "skip_bastion_deployment=true" \
+        2>&1 | tee /tmp/sophon_ansible.log
+      
+      echo "SOPHON_EXEC_COMPLETE"
+
+- name: Base64 encode execution script
+  ansible.builtin.set_fact:
+    exec_script_b64: "{{ exec_script | b64encode }}"
+
+- name: Upload execution script via QGA file-write
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/file-write"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    body_format: json
+    body:
+      file: "/tmp/sophon_exec.sh"
+      content: "{{ exec_script_b64 }}"
+    validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+    timeout: 60
+
+- name: Execute script on VM via QGA exec
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/exec"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    body_format: json
+    body:
+      command: "bash"
+      input-data: "{{ exec_script }}"
+    validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+    timeout: "{{ qga_remote_exec_exec_timeout }}"
+  register: exec_result
+
+- name: Display execution result
+  ansible.builtin.debug:
+    msg: |
+      QGA Remote Execution initiated on VM {{ qga_remote_exec_vmid }}
+      Check /tmp/sophon_ansible.log on the VM for progress
+
+# -----------------------------------------------------------------------------
+# Wait for Completion (Poll exec-status)
+# -----------------------------------------------------------------------------
+- name: Get execution PID
+  ansible.builtin.set_fact:
+    exec_pid: "{{ exec_result.json.data.pid }}"
+  when: exec_result.json.data.pid is defined
+
+- name: Poll for execution completion
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/exec-status?pid={{ exec_pid }}"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+  register: exec_status
+  until: exec_status.json.data.exited | default(false)
+  retries: 180
+  delay: 10
+  when: exec_pid is defined
+
+- name: Display final execution status
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════
+      QGA Remote Execution Complete
+      ═══════════════════════════════════════════════════════════
+      VM ID:        {{ qga_remote_exec_vmid }}
+      Exit Code:    {{ exec_status.json.data.exitcode | default('unknown') }}
+      Status:       {{ 'SUCCESS' if (exec_status.json.data.exitcode | default(1)) == 0 else 'FAILED' }}
+      ═══════════════════════════════════════════════════════════
+  when: exec_status is defined

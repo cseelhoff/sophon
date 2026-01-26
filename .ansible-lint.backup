@@ -1,0 +1,19 @@
+---
+# Ansible-lint configuration for Sophon
+# See: https://ansible-lint.readthedocs.io/
+
+skip_list:
+  - risky-file-permissions  # We use raw module for CoreOS
+  - name[missing]           # Some tasks don't need names
+  - no-changed-when         # raw module doesn't support changed_when well
+  - command-instead-of-module  # We use raw for CoreOS compatibility
+
+warn_list:
+  - experimental            # Warn on experimental rules
+  - role-name              # Role naming conventions
+
+# Offline mode for air-gapped environments
+offline: false
+
+# Use progressive mode for gradual adoption
+progressive: true

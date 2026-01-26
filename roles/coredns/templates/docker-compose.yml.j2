@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  coredns:
+    image: {{ coredns_image_name }}:{{ coredns_image_tag }}
+    container_name: coredns
+    restart: unless-stopped
+    ports:
+      - "{{ coredns_dns_port }}:53/udp"
+      - "{{ coredns_dns_port }}:53/tcp"
+    volumes:
+      - {{ coredns_config_dir }}/Corefile:/Corefile:ro
+      - {{ coredns_config_dir }}/zones:/zones:rw
+    networks:
+      - dns
+
+networks:
+  dns:
+    driver: bridge

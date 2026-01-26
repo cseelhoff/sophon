@@ -1,0 +1,157 @@
+---
+# =============================================================================
+# InfraVM Role Tasks
+# =============================================================================
+# The CoreOS VM is created by the coreos_base dependency (see meta/main.yml).
+# This role:
+#   1. Waits for InfraVM to boot and NFS to mount
+#   2. Loads container images via SSH (from NFS cache or pull from registry)
+#   3. Waits for Portainer and initializes admin password via API
+
+# =============================================================================
+# Wait for VM to be ready
+# =============================================================================
+- name: Wait for InfraVM SSH to be ready
+  ansible.builtin.wait_for:
+    host: "{{ infravm_ansible_host }}"
+    port: 22
+    delay: 10
+    timeout: 300
+  delegate_to: localhost
+
+- name: Wait for NFS mount on InfraVM
+  ansible.builtin.shell:
+    cmd: mountpoint -q /mnt/nfs
+  register: nfs_mount_check
+  until: nfs_mount_check.rc == 0
+  retries: 30
+  delay: 5
+  delegate_to: "{{ infravm_ansible_host }}"
+  remote_user: "{{ infravm_ansible_user }}"
+  vars:
+    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+
+# =============================================================================
+# Load Container Images via SSH
+# =============================================================================
+- name: Load container images on InfraVM
+  block:
+    - name: Check and load each container image
+      ansible.builtin.shell:
+        cmd: |
+          IMAGE="{{ item }}"
+          # Extract basename: docker.io/portainer/portainer-ce:2.27.1 -> portainer-ce
+          BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
+          TARFILE="/mnt/nfs/containers/${BASENAME}.tar"
+          
+          # Check if image already loaded
+          if podman image exists "$IMAGE" 2>/dev/null; then
+            echo "ALREADY_LOADED"
+            exit 0
+          fi
+          
+          # Try to load from NFS cache
+          if [ -f "$TARFILE" ]; then
+            podman load -i "$TARFILE"
+            echo "LOADED_FROM_NFS"
+            exit 0
+          fi
+          
+          # Pull from registry and save to NFS
+          podman pull "$IMAGE"
+          
+          # Save to NFS for future use (NFS needs to be rw for this)
+          # Check if NFS is writable
+          if touch /mnt/nfs/containers/.write_test 2>/dev/null; then
+            rm -f /mnt/nfs/containers/.write_test
+            podman save -o "$TARFILE" "$IMAGE"
+            echo "PULLED_AND_CACHED"
+          else
+            echo "PULLED_NO_CACHE"
+          fi
+      loop: "{{ infravm_container_images }}"
+      register: container_load_results
+      changed_when: "'LOADED_FROM_NFS' in container_load_results.stdout or 'PULLED' in container_load_results.stdout"
+      delegate_to: "{{ infravm_ansible_host }}"
+      remote_user: "{{ infravm_ansible_user }}"
+      vars:
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+
+    - name: Display container loading summary
+      ansible.builtin.debug:
+        msg: |
+          Container Image Loading Summary:
+          {% for result in container_load_results.results %}
+          - {{ result.item }}: {{ result.stdout | default('unknown') }}
+          {% endfor %}
+
+# =============================================================================
+# Initialize Portainer
+# =============================================================================
+- name: Generate Portainer admin password
+  ansible.builtin.set_fact:
+    portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+  when: portainer_admin_password is not defined
+
+- name: Validate Portainer password meets requirements
+  ansible.builtin.assert:
+    that:
+      - portainer_admin_password | length >= 12
+    fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
+
+- name: Wait for Portainer API to be ready
+  ansible.builtin.uri:
+    url: "https://{{ coreos_base_ip }}:{{ portainer_port }}/api/status"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: portainer_status
+  until: portainer_status.status == 200
+  retries: 60
+  delay: 3
+  delegate_to: localhost
+
+- name: Initialize Portainer admin user
+  ansible.builtin.uri:
+    url: "https://{{ coreos_base_ip }}:{{ portainer_port }}/api/users/admin/init"
+    method: POST
+    validate_certs: false
+    body_format: json
+    body:
+      Username: admin
+      Password: "{{ portainer_admin_password }}"
+    status_code: [200, 409]
+  register: portainer_init
+  delegate_to: localhost
+
+- name: Warn if admin already exists and password was auto-generated
+  ansible.builtin.debug:
+    msg: "WARNING: Admin already exists. If auth fails, set -e portainer_admin_password=<existing_password>"
+  when: portainer_init.status == 409
+
+- name: Display InfraVM access info
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      InfraVM Deployed Successfully
+      ═══════════════════════════════════════════════════════════════════
+      
+      SSH Access:
+        Host: {{ infravm_ansible_host }}
+        User: {{ infravm_ansible_user }}
+        Command: ssh {{ infravm_ansible_user }}@{{ infravm_ansible_host }}
+      
+      Portainer:
+        URL: https://{{ coreos_base_ip }}:{{ portainer_port }}
+        Version: {{ portainer_status.json.Version }}
+        Username: admin
+        Password: {{ portainer_admin_password }}
+        {{ '(existing admin - password unchanged)' if portainer_init.status == 409 else '' }}
+      
+      NFS Mount: /mnt/nfs -> {{ nfs_server_ip }}:/export
+      VM ID: {{ coreos_base_vmid }}
+      {% if cloudflared_tunnel_token | default('') != '' %}
+      Cloudflared: Tunnel active (token configured)
+      {% endif %}
+      
+      ═══════════════════════════════════════════════════════════════════

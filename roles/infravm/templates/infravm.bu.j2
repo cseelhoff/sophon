@@ -1,0 +1,189 @@
+variant: fcos
+version: 1.5.0
+
+passwd:
+  users:
+    - name: {{ coreos_base_username }}
+      password_hash: {{ coreos_base_password_hash }}
+      ssh_authorized_keys:
+        - {{ coreos_base_ssh_public_key }}
+      groups:
+        - sudo
+        - wheel
+
+storage:
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: {{ coreos_base_vm_name }}
+
+    - path: /etc/NetworkManager/system-connections/wired.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id=Wired connection 1
+          type=ethernet
+          match-device=type:ethernet
+
+          [ipv4]
+          address1={{ coreos_base_ip }}/{{ coreos_base_cidr }},{{ coreos_base_gateway }}
+          dns={{ coreos_base_gateway }};8.8.8.8;
+          method=manual
+
+    # Disable systemd-resolved DNS stub listener to free port 53 for CoreDNS
+    - path: /etc/systemd/resolved.conf.d/no-stub.conf
+      mode: 0644
+      contents:
+        inline: |
+          [Resolve]
+          DNSStubListener=no
+
+    # CoreDNS configuration
+    - path: /etc/coredns/Corefile
+      mode: 0644
+      contents:
+        inline: |
+          . {
+              forward . 8.8.8.8 8.8.4.4
+              log
+              errors
+              cache 30
+          }
+
+    # Traefik dynamic configuration
+    - path: /etc/traefik/dynamic.yml
+      mode: 0644
+      contents:
+        inline: |
+          # Dynamic configuration for Traefik
+          # Add routers and services here
+
+{% if cloudflared_tunnel_token | default('') != '' %}
+    # Script to setup cloudflared from NFS
+    - path: /usr/local/bin/setup-cloudflared.sh
+      mode: 0755
+      contents:
+        inline: |
+          #!/bin/bash
+          set -e
+          
+          NFS_MOUNT="/mnt/nfs"
+          CLOUDFLARED_SRC="$NFS_MOUNT/template/iso/cloudflared-linux-amd64.iso"
+          CLOUDFLARED_DST="/usr/local/bin/cloudflared"
+          
+          # Wait for NFS mount
+          for i in {1..60}; do
+            if mountpoint -q "$NFS_MOUNT"; then
+              break
+            fi
+            echo "Waiting for NFS mount..."
+            sleep 2
+          done
+          
+          if ! mountpoint -q "$NFS_MOUNT"; then
+            echo "ERROR: NFS mount not available"
+            exit 1
+          fi
+          
+          # Copy cloudflared binary (remove .iso suffix workaround)
+          if [ -f "$CLOUDFLARED_SRC" ]; then
+            cp "$CLOUDFLARED_SRC" "$CLOUDFLARED_DST"
+            chmod +x "$CLOUDFLARED_DST"
+            echo "Cloudflared installed successfully"
+          else
+            echo "ERROR: Cloudflared not found at $CLOUDFLARED_SRC"
+            exit 1
+          fi
+{% endif %}
+
+systemd:
+  units:
+    # NFS mount for container images and cloudflared
+    - name: mnt-nfs.mount
+      enabled: true
+      contents: |
+        [Unit]
+        Description=NFS mount for Sophon artifacts
+        After=network-online.target
+        Wants=network-online.target
+
+        [Mount]
+        What={{ nfs_server_ip }}:/export
+        Where=/mnt/nfs
+        Type=nfs4
+        Options={{ infravm_nfs_mount_options | default('ro,noatime,vers=4.1') }}
+
+        [Install]
+        WantedBy=multi-user.target
+
+{% if cloudflared_tunnel_token | default('') != '' %}
+    # Setup cloudflared binary from NFS
+    - name: setup-cloudflared.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Setup cloudflared from NFS
+        After=mnt-nfs.mount network-online.target
+        Requires=mnt-nfs.mount
+        Wants=network-online.target
+        ConditionPathExists=!/usr/local/bin/cloudflared
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/local/bin/setup-cloudflared.sh
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # Cloudflared tunnel service
+    - name: cloudflared.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Cloudflared Tunnel
+        After=setup-cloudflared.service network-online.target
+        Requires=setup-cloudflared.service
+        Wants=network-online.target
+
+        [Service]
+        Type=simple
+        Restart=always
+        RestartSec=10
+        ExecStart=/usr/local/bin/cloudflared tunnel run --token {{ cloudflared_tunnel_token }}
+
+        [Install]
+        WantedBy=multi-user.target
+{% endif %}
+
+    # Portainer container service
+    - name: portainer.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Portainer Container Management
+        After=mnt-nfs.mount network-online.target podman.socket
+        Wants=network-online.target mnt-nfs.mount
+        Requires=podman.socket
+
+        [Service]
+        Type=simple
+        Restart=always
+        RestartSec=10
+        ExecStartPre=-/usr/bin/podman rm -f portainer
+        ExecStartPre=-/usr/bin/podman volume create portainer_data
+        ExecStart=/usr/bin/podman run --rm --name portainer --privileged \
+          -p {{ portainer_port | default(9443) }}:9443 \
+          -v /run/podman/podman.sock:/var/run/docker.sock \
+          -v portainer_data:/data \
+          docker.io/portainer/portainer-ce:{{ portainer_image_tag | default('2.27.1') }}
+        ExecStop=/usr/bin/podman stop portainer
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # Enable podman socket for Portainer
+    - name: podman.socket
+      enabled: true

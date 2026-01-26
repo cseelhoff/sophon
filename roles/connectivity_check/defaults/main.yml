@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# Connectivity Check Role
+# =============================================================================
+# Tests if Bootstrap (Ansible controller) can reach the NFS server network.
+# Determines if cloudflared tunnel is needed for InfraVM access.
+
+# Enable/disable this role
+connectivity_check_enabled: true
+
+# =============================================================================
+# NFS Mount Test Settings
+# =============================================================================
+# NFS server IP to test connectivity
+connectivity_check_nfs_server: "{{ nfs_server_ip | default('') }}"
+
+# NFS export path to mount
+connectivity_check_nfs_export: "/export"
+
+# Temporary mount point for testing
+connectivity_check_nfs_mount_point: "/tmp/sophon_nfs_test"
+
+# Mount timeout in seconds
+connectivity_check_nfs_timeout: 10
+
+# =============================================================================
+# Cloudflared Settings
+# =============================================================================
+# Tunnel token (from environment variable)
+cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+
+# URL to download cloudflared binary
+cloudflared_download_url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+
+# =============================================================================
+# Output Facts
+# =============================================================================
+# After this role runs, the following facts will be set:
+# - nfs_reachable: true/false (can Bootstrap mount NFS?)
+# - cloudflared_enabled: true/false (is cloudflared token set AND NFS unreachable?)

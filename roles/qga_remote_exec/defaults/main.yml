@@ -1,0 +1,56 @@
+---
+# =============================================================================
+# QGA Remote Execution Role
+# =============================================================================
+# Uses QEMU Guest Agent to execute Ansible playbooks on a VM when SSH is unavailable
+# This is the last-resort method when neither Cloudflared nor direct SSH work.
+
+# Enable/disable this role
+qga_remote_exec_enabled: true
+
+# =============================================================================
+# Target VM Configuration
+# =============================================================================
+# The VM to execute commands on (typically bastion)
+qga_remote_exec_vmid: "{{ bastion_vmid | default('') }}"
+qga_remote_exec_node: "{{ proxmox_node | default('pve') }}"
+
+# =============================================================================
+# Sophon Package Configuration
+# =============================================================================
+# Local path to the sophon project root
+qga_remote_exec_sophon_path: "{{ playbook_dir }}"
+
+# Package filename (entire sophon project is tarred)
+qga_remote_exec_package_name: "sophon.tgz"
+
+# =============================================================================
+# Remote Execution Settings
+# =============================================================================
+# Where to extract sophon on the target VM
+qga_remote_exec_remote_path: "/home/{{ bastion_username | default('ansible') }}/sophon"
+
+# Inventory file to use on remote execution
+qga_remote_exec_inventory: "inventories/production/inventory.yml"
+
+# Playbook to execute after extraction
+qga_remote_exec_playbook: "site.yml"
+
+# =============================================================================
+# Environment Variables (Base64 Encoded)
+# =============================================================================
+# These will be passed to the remote ansible-playbook execution
+# Format: key=value pairs that get base64 encoded
+qga_remote_exec_env_vars:
+  PROXMOX_API_PASSWORD: "{{ proxmox_password | default('') }}"
+  PORTAINER_ADMIN_PASSWORD: "{{ portainer_admin_password | default('') }}"
+  # Add other sensitive variables as needed
+
+# =============================================================================
+# Timeouts
+# =============================================================================
+# Timeout for file write operation (seconds)
+qga_remote_exec_file_write_timeout: 300
+
+# Timeout for command execution (seconds)
+qga_remote_exec_exec_timeout: 1800

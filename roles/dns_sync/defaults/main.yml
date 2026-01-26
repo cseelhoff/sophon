@@ -1,0 +1,31 @@
+---
+# Enable/disable this role
+dns_sync_enabled: false  # TODO: Rewrite to use portainer_stack
+
+# Container image
+dns_sync_image_name: "python"
+dns_sync_image_tag: "3.12-slim"
+
+# Zone configuration
+dns_sync_zone: "{{ homelab_domain | default('homelab.local') }}"
+dns_sync_zone_file: "{{ dns_sync_zone }}.zone"
+
+# Traefik API endpoint (internal Docker network)
+dns_sync_traefik_api: "http://traefik:8080/api/http/routers"
+
+# CNAME target for all dynamic records (Traefik ingress)
+dns_sync_cname_target: "traefik.{{ dns_sync_zone }}"
+
+# Static A record for the zone apex and traefik itself
+dns_sync_traefik_ip: "{{ coreos_ip | default('10.0.1.10') }}"
+
+# Debounce delay (seconds) after Docker event before querying Traefik
+dns_sync_debounce_seconds: 3
+
+# Shared zones directory (must match coredns role)
+dns_sync_zones_dir: "/opt/coredns/zones"
+
+# SOA record settings
+dns_sync_soa_ns: "ns1.{{ dns_sync_zone }}"
+dns_sync_soa_admin: "admin.{{ dns_sync_zone }}"
+dns_sync_ttl: 60

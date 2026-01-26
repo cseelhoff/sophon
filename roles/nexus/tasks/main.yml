@@ -1,0 +1,225 @@
+---
+# Deploy Nexus Repository Manager via Portainer Stack
+
+- name: Skip nexus deployment (disabled)
+  ansible.builtin.debug:
+    msg: "Nexus role is disabled (nexus_enabled=false)"
+  when: not (nexus_enabled | default(false))
+
+- name: Deploy Nexus
+  when: nexus_enabled | default(false)
+  block:
+    - name: Deploy Nexus stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port | default(9443) }}"
+        portainer_stack_name: "nexus"
+        portainer_stack_compose_content: |
+          services:
+            nexus:
+              image: docker.io/{{ nexus_image_name }}:{{ nexus_image_tag }}
+              pull_policy: never
+              container_name: nexus
+              restart: unless-stopped
+              user: "200"
+              network_mode: host
+              volumes:
+                - nexus_data:/nexus-data
+              environment:
+                - INSTALL4J_ADD_VM_PARAMS=-Xms512m -Xmx{{ nexus_memory }} -XX:MaxDirectMemorySize=1g
+
+          volumes:
+            nexus_data:
+
+    - name: Wait for Nexus to be ready
+      ansible.builtin.uri:
+        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/status"
+        method: GET
+        status_code: 200
+        validate_certs: false
+      register: nexus_status
+      until: nexus_status.status == 200
+      retries: 60
+      delay: 10
+
+    - name: Display Nexus status
+      ansible.builtin.debug:
+        msg: "Nexus ready at http://{{ coreos_ip }}:{{ nexus_port }}, Docker registry at {{ coreos_ip }}:{{ nexus_docker_registry_port }}"
+
+    # Repository provisioning (optional)
+    - name: Provision Nexus repositories
+      when: nexus_provision_repos | default(false) and nexus_admin_password is defined
+      block:
+        - name: Set active security realms
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/security/realms/active"
+            method: PUT
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            body_format: json
+            body: "{{ nexus_active_realms }}"
+            headers:
+              Content-Type: "application/json"
+            status_code: 204
+            validate_certs: false
+
+        - name: Get existing repositories
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories"
+            method: GET
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            validate_certs: false
+          register: nexus_existing_repos
+
+        - name: Create docker-hosted repository
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/hosted"
+            method: POST
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "docker-hosted"
+              online: true
+              storage:
+                blobStoreName: "default"
+                strictContentTypeValidation: true
+                writePolicy: "ALLOW"
+              docker:
+                v1Enabled: false
+                forceBasicAuth: false
+            status_code: [201, 400]
+            validate_certs: false
+          when: "'docker-hosted' not in (nexus_existing_repos.json | map(attribute='name') | list)"
+
+        - name: Create docker-proxy repository (Docker Hub)
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+            method: POST
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "docker-proxy"
+              online: true
+              storage:
+                blobStoreName: "default"
+                strictContentTypeValidation: true
+              proxy:
+                remoteUrl: "https://registry-1.docker.io"
+                contentMaxAge: 1440
+                metadataMaxAge: 1440
+              negativeCache:
+                enabled: true
+                timeToLive: 1440
+              httpClient:
+                blocked: false
+                autoBlock: false
+              docker:
+                v1Enabled: false
+                forceBasicAuth: false
+              dockerProxy:
+                indexType: "HUB"
+            status_code: [201, 400]
+            validate_certs: false
+          when: "'docker-proxy' not in (nexus_existing_repos.json | map(attribute='name') | list)"
+
+        - name: Create ghcr-proxy repository
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+            method: POST
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "ghcr-proxy"
+              online: true
+              storage:
+                blobStoreName: "default"
+                strictContentTypeValidation: true
+              proxy:
+                remoteUrl: "https://ghcr.io"
+                contentMaxAge: 1440
+                metadataMaxAge: 1440
+              negativeCache:
+                enabled: true
+                timeToLive: 1440
+              httpClient:
+                blocked: false
+                autoBlock: false
+              docker:
+                v1Enabled: false
+                forceBasicAuth: false
+              dockerProxy:
+                indexType: "REGISTRY"
+            status_code: [201, 400]
+            validate_certs: false
+          when: "'ghcr-proxy' not in (nexus_existing_repos.json | map(attribute='name') | list)"
+
+        - name: Create quay-proxy repository
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+            method: POST
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "quay-proxy"
+              online: true
+              storage:
+                blobStoreName: "default"
+                strictContentTypeValidation: true
+              proxy:
+                remoteUrl: "https://quay.io"
+                contentMaxAge: 1440
+                metadataMaxAge: 1440
+              negativeCache:
+                enabled: true
+                timeToLive: 1440
+              httpClient:
+                blocked: false
+                autoBlock: false
+              docker:
+                v1Enabled: false
+                forceBasicAuth: false
+              dockerProxy:
+                indexType: "REGISTRY"
+            status_code: [201, 400]
+            validate_certs: false
+          when: "'quay-proxy' not in (nexus_existing_repos.json | map(attribute='name') | list)"
+
+        - name: Create docker-group repository
+          ansible.builtin.uri:
+            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
+            method: POST
+            user: "{{ nexus_admin_user }}"
+            password: "{{ nexus_admin_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "docker-group"
+              online: true
+              storage:
+                blobStoreName: "default"
+                strictContentTypeValidation: true
+              group:
+                memberNames:
+                  - "docker-hosted"
+                  - "docker-proxy"
+                  - "ghcr-proxy"
+                  - "quay-proxy"
+              docker:
+                v1Enabled: false
+                forceBasicAuth: false
+                httpPort: "{{ nexus_docker_registry_port }}"
+            status_code: [201, 400]
+            validate_certs: false
+          when: "'docker-group' not in (nexus_existing_repos.json | map(attribute='name') | list)"

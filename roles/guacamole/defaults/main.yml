@@ -1,0 +1,33 @@
+---
+# Guacamole configuration
+guacamole_enabled: false  # TODO: Rewrite to use portainer_stack
+guacamole_image_name: "guacamole/guacamole"
+guacamole_image_tag: "1.5.5"
+guacamole_guacd_image_name: "guacamole/guacd"
+guacamole_guacd_image_tag: "1.5.5"
+
+# Database
+guacamole_db_image_name: "postgres"
+guacamole_db_image_tag: "16-alpine"
+
+# Directories
+guacamole_data_dir: "/opt/guacamole"
+
+# Network
+guacamole_port: 8090
+
+# Domain
+guacamole_hostname: "remote"
+guacamole_domain: "{{ traefik_domain | default('example.local') }}"
+
+# Database credentials (set via vault in production)
+guacamole_db_name: "guacamole"
+guacamole_db_user: "guacamole"
+# guacamole_db_password: ""
+
+# Keycloak OIDC integration
+guacamole_oidc_enabled: false
+# guacamole_oidc_client_id: "guacamole"
+# guacamole_oidc_client_secret: "{{ vault_keycloak_guacamole_client_secret }}"
+# guacamole_oidc_issuer_url: "https://keycloak.{{ domain_name }}/realms/{{ keycloak_realm }}"
+# guacamole_oidc_redirect_uri: "https://{{ guacamole_hostname }}.{{ guacamole_domain }}/"

@@ -1,0 +1,57 @@
+---
+# =============================================================================
+# CoreOS Base Role - Shared CoreOS VM Creation
+# =============================================================================
+# This role creates a CoreOS VM on Proxmox with Ignition configuration.
+# It is designed to be included by other roles (infravm) that
+# provide their own Butane templates via coreos_base_butane_template.
+
+# =============================================================================
+# VM Configuration (set by calling role)
+# =============================================================================
+coreos_base_vm_name: "coreos-vm"
+coreos_base_cores: 2
+coreos_base_memory: 2048
+coreos_base_disk_size: "16G"
+# Optional second disk (set non-empty for NFS data disk, etc)
+coreos_base_data_disk_size: ""
+
+# =============================================================================
+# User Configuration (set by calling role)
+# =============================================================================
+coreos_base_username: "admin"
+# Default password hash for 'admin' user (password: changeme)
+# Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
+coreos_base_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDoimDMM9wuIY4efuYmvRcqA"
+
+# =============================================================================
+# Network Configuration (set by calling role)
+# =============================================================================
+# coreos_base_ip: "10.0.1.10"      # Required
+# coreos_base_gateway: "10.0.1.1"  # Required
+coreos_base_cidr: "24"
+
+# =============================================================================
+# Butane Template (REQUIRED - must be set by calling role)
+# =============================================================================
+# Absolute path or role-relative path to the Butane template file (.bu.j2)
+# Example: "{{ role_path }}/templates/portainer.bu.j2"
+# coreos_base_butane_template: ""
+
+# =============================================================================
+# CoreOS Image
+# =============================================================================
+coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"
+coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
+coreos_qcow2_img_filename: "{{ coreos_qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
+coreos_qcow2_iso_filename: "{{ coreos_qcow2_img_filename }}.iso"
+
+# Proxmox storage for the CoreOS image
+coreos_image_storage: "local"
+coreos_image_storage_path: "/var/lib/vz/template/iso"
+
+# =============================================================================
+# Local Cache/Download Directories
+# =============================================================================
+coreos_local_cache_dir: "/tmp/sophon_cache"
+coreos_local_download_dir: "/tmp/sophon_images"

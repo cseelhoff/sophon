@@ -1,0 +1,29 @@
+---
+- Infrastructure:
+    - Portainer:
+        icon: portainer
+        href: https://{{ coreos_ip }}:{{ portainer_port }}
+        description: Container Management
+        widget:
+          type: portainer
+          url: https://{{ coreos_ip }}:{{ portainer_port }}
+          env: 1
+          # key: "{{`{{HOMEPAGE_VAR_PORTAINER_KEY}}`}}"
+
+    - Traefik:
+        icon: traefik
+        href: https://traefik.{{ traefik_domain | default('example.local') }}
+        description: Reverse Proxy
+        widget:
+          type: traefik
+          url: http://{{ coreos_ip }}:{{ traefik_port_ui | default(8080) }}
+
+- Services:
+    - Gitea:
+        icon: gitea
+        href: https://git.{{ traefik_domain | default('example.local') }}
+        description: Git Server
+
+    - CoreDNS:
+        icon: coredns
+        description: DNS Server

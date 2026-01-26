@@ -1,0 +1,23 @@
+---
+- greeting:
+    text_size: xl
+    text: {{ homepage_title }}
+
+- search:
+    provider: duckduckgo
+    focus: true
+    target: _blank
+
+- resources:
+    cpu: true
+    memory: true
+    disk: /
+    uptime: true
+    refresh: 3000
+
+- datetime:
+    text_size: xl
+    format:
+      dateStyle: long
+      timeStyle: short
+      hour12: false
