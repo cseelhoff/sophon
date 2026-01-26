@@ -15,48 +15,27 @@
   when: connectivity_check_nfs_server | length == 0
 
 # -----------------------------------------------------------------------------
-# NFS Mount Test
+# NFS Connectivity Test (showmount - verifies NFS exports without root)
 # -----------------------------------------------------------------------------
-- name: Create temporary mount point
-  ansible.builtin.file:
-    path: "{{ connectivity_check_nfs_mount_point }}"
-    state: directory
-    mode: "0755"
-  delegate_to: localhost
-
-- name: Test NFS mount from Bootstrap
+- name: Test NFS connectivity via showmount
   ansible.builtin.shell:
     cmd: |
-      # Try to mount NFS with timeout
-      timeout {{ connectivity_check_nfs_timeout }} mount -t nfs \
-        -o ro,nolock,timeo=30,retrans=1 \
-        {{ connectivity_check_nfs_server }}:{{ connectivity_check_nfs_export }} \
-        {{ connectivity_check_nfs_mount_point }} 2>/dev/null
-      
-      if [ $? -eq 0 ]; then
-        # Mount succeeded, unmount and report success
-        umount {{ connectivity_check_nfs_mount_point }} 2>/dev/null || true
+      # Use showmount to query NFS exports (doesn't require root)
+      if showmount -e {{ connectivity_check_nfs_server }} 2>/dev/null | grep -q "{{ connectivity_check_nfs_export }}"; then
         echo "NFS_REACHABLE"
         exit 0
       else
         echo "NFS_UNREACHABLE"
         exit 1
       fi
-  register: nfs_mount_result
+  register: nfs_check_result
   failed_when: false
   changed_when: false
   delegate_to: localhost
 
 - name: Set NFS reachability fact
   ansible.builtin.set_fact:
-    nfs_reachable: "{{ nfs_mount_result.rc == 0 }}"
-
-- name: Cleanup temporary mount point
-  ansible.builtin.file:
-    path: "{{ connectivity_check_nfs_mount_point }}"
-    state: absent
-  delegate_to: localhost
-  failed_when: false
+    nfs_reachable: "{{ nfs_check_result.rc == 0 }}"
 
 # -----------------------------------------------------------------------------
 # Cloudflared Decision

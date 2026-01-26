@@ -34,6 +34,7 @@
             libguestfs-with-appliance  # Build VM images without root (guestfish)
             proot     # User-space chroot/root emulation via ptrace (works with musl)
             unixtools.xxd # Hex dump utility for debugging
+            nfs-utils # NFS mount utilities (mount.nfs helper)
           ];
 
           shellHook = ''

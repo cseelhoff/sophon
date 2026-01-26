@@ -31,7 +31,8 @@ coreos_base_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDo
 coreos_base_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
 
 # Butane template location (for coreos_base)
-coreos_base_butane_template: "{{ role_path }}/templates/infravm.bu.j2"
+# Note: Use playbook_dir instead of role_path because coreos_base runs as dependency
+coreos_base_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.j2"
 
 # =============================================================================
 # Ansible Connection Settings

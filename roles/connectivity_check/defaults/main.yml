@@ -9,19 +9,13 @@
 connectivity_check_enabled: true
 
 # =============================================================================
-# NFS Mount Test Settings
+# NFS Connectivity Test Settings
 # =============================================================================
 # NFS server IP to test connectivity
 connectivity_check_nfs_server: "{{ nfs_server_ip | default('') }}"
 
-# NFS export path to mount
+# NFS export path to verify (checked via showmount -e)
 connectivity_check_nfs_export: "/export"
-
-# Temporary mount point for testing
-connectivity_check_nfs_mount_point: "/tmp/sophon_nfs_test"
-
-# Mount timeout in seconds
-connectivity_check_nfs_timeout: 10
 
 # =============================================================================
 # Cloudflared Settings

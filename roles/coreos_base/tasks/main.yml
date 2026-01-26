@@ -280,21 +280,6 @@
     vmid: "{{ coreos_base_vmid }}"
     state: started
 
-- name: Wait for VM to boot and qemu-guest-agent to respond
-  ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ coreos_base_vmid }}/agent/ping"
-    method: POST
-    headers:
-      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-      CSRFPreventionToken: "{{ proxmox_csrf }}"
-    validate_certs: "{{ proxmox_validate_certs }}"
-    status_code: [200, 500]
-  register: agent_ping
-  until: agent_ping.status == 200
-  retries: 60
-  delay: 10
-  failed_when: false
-
 - name: Display CoreOS VM summary
   ansible.builtin.debug:
     msg: |
@@ -306,6 +291,5 @@
       VMID: {{ coreos_base_vmid }}
       IP: {{ coreos_base_ip }}
       Status: {{ 'Created new VM' if coreos_base_vm_created else 'Using existing VM' }}
-      Guest Agent: {{ 'Responding' if agent_ping.status == 200 else 'Not responding (may still be booting)' }}
       
       ═══════════════════════════════════════════════════════════════════
