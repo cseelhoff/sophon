@@ -308,12 +308,19 @@ def execute_command(api_host, api_port, api_user, node, command,
         
         # Process terminal output
         start_time = time.time()
+        command_sent_time = None
+        consecutive_timeouts = 0
+        max_consecutive_timeouts = 15  # Allow 15 x 2s = 30s of silence for slow commands
+        
         while time.time() - start_time < timeout:
             try:
                 ws.settimeout(2.0)
                 msg = ws.recv()
                 if not msg:
                     continue
+                
+                # Reset timeout counter when we get data
+                consecutive_timeouts = 0
                     
                 if isinstance(msg, bytes):
                     msg = msg.decode('utf-8', errors='replace')
@@ -354,31 +361,37 @@ def execute_command(api_host, api_port, api_user, node, command,
                     byte_len = len(cmd_data.encode('utf-8'))
                     ws.send(f'0:{byte_len}:{cmd_data}')
                     command_sent = True
+                    command_sent_time = time.time()
                     continue
                 
                 # After sending command, wait for prompt to return (command done)
                 if command_sent and has_prompt(msg):
-                    # Drain any remaining output
-                    time.sleep(0.2)
-                    try:
-                        ws.settimeout(0.3)
-                        while True:
-                            extra = ws.recv()
-                            if extra:
-                                if isinstance(extra, bytes):
-                                    extra = extra.decode('utf-8', errors='replace')
-                                output_buffer.append(extra)
-                            else:
-                                break
-                    except:
-                        pass
-                    break
+                    # Make sure we're not matching the echoed command line
+                    # Wait for prompt that appears after some time has passed
+                    if command_sent_time and (time.time() - command_sent_time) > 0.5:
+                        # Drain any remaining output
+                        time.sleep(0.2)
+                        try:
+                            ws.settimeout(0.3)
+                            while True:
+                                extra = ws.recv()
+                                if extra:
+                                    if isinstance(extra, bytes):
+                                        extra = extra.decode('utf-8', errors='replace')
+                                    output_buffer.append(extra)
+                                else:
+                                    break
+                        except:
+                            pass
+                        break
                     
             except websocket.WebSocketTimeoutException:
+                consecutive_timeouts += 1
                 # On timeout, send Enter to wake up the terminal if waiting for login
                 if not logged_in and login_stage == 'waiting':
                     ws.send('0:1:\r')
-                elif command_sent:
+                elif command_sent and consecutive_timeouts >= max_consecutive_timeouts:
+                    # Only give up after many consecutive timeouts
                     break
                 continue
             except Exception:

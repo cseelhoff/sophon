@@ -11,7 +11,7 @@
 
     - name: Check if kopia image exists
       ansible.builtin.raw: podman images | grep -q "kopia/kopia[ ]*{{ kopia_image_tag }}"
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       register: kopia_image_exists
       failed_when: false
       changed_when: false
@@ -22,7 +22,7 @@
         curl -o kopia.tar http://{{ kopia_file_server_ip }}:{{ http_file_server_port }}/kopia.tar &&
         podman load -i kopia.tar &&
         rm -f kopia.tar
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       when: kopia_image_exists.rc != 0
 
     - name: Create kopia directories
@@ -31,7 +31,7 @@
         mkdir -p {{ kopia_cache_dir }}
         mkdir -p {{ kopia_logs_dir }}
         mkdir -p {{ kopia_repository_path }}
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       become: true
 
     - name: Generate docker-compose content in base64
@@ -42,7 +42,6 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
         portainer_stack_name: "kopia"
         portainer_stack_compose_content: "{{ kopia_compose_base64 | b64decode }}"
         portainer_stack_env_vars: "{{ kopia_env_vars | default([]) }}"

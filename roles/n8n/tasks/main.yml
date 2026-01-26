@@ -11,7 +11,7 @@
 
     - name: Check if n8n image exists
       ansible.builtin.raw: podman images | grep -q "n8n[ ]*{{ n8n_image_tag }}"
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       register: n8n_image_exists
       failed_when: false
       changed_when: false
@@ -22,14 +22,14 @@
         curl -o n8n.tar http://{{ n8n_file_server_ip }}:{{ http_file_server_port }}/n8n.tar &&
         podman load -i n8n.tar &&
         rm -f n8n.tar
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       when: n8n_image_exists.rc != 0
 
     - name: Create n8n directories
       ansible.builtin.raw: |
         mkdir -p {{ n8n_data_dir }}/data
         chown -R 1000:1000 {{ n8n_data_dir }}/data
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       become: true
 
     - name: Generate docker-compose content in base64
@@ -57,7 +57,6 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
         portainer_stack_name: "n8n"
         portainer_stack_compose_content: "{{ n8n_compose_base64 | b64decode }}"
         portainer_stack_env_vars: "{{ n8n_portainer_env_vars }}"

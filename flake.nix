@@ -10,31 +10,67 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        lib = nixpkgs.lib;
 
-        # Ansible with required collections
         ansibleEnv = pkgs.ansible.overrideAttrs (old: {
           propagatedBuildInputs = (old.propagatedBuildInputs or []) ++ [
             pkgs.python3Packages.proxmoxer
           ];
         });
+
+        fuseNfs = pkgs.stdenv.mkDerivation rec {
+          pname = "fuse-nfs";
+          version = "unstable-2025-02-25";
+
+          src = pkgs.fetchFromGitHub {
+            owner = "sahlberg";
+            repo = "fuse-nfs";
+            rev = "75827244f1615be20da880cbc68665416131088d";
+            sha256 = "sha256-QmsC0FLbSHko9Pfe6Nk2p1xyViUbqY6lCiGgn1J1KeA=";
+          };
+
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            autoconf
+            automake
+            libtool
+            m4
+            libxslt
+            fuse.dev      # Critical: provides fuse.h and pkg-config info
+            libnfs        # Provides headers and .pc file (no separate .dev output)
+          ];
+
+          buildInputs = with pkgs; [
+            fuse          # Runtime library (libfuse.so.2)
+            libnfs
+          ];
+
+          preConfigure = "./setup.sh";
+        };
       in
       {
+        packages.fuseNfs = fuseNfs;
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             ansibleEnv
             ansible-lint
             python3Packages.proxmoxer
-            python3Packages.requests        # Required by proxmoxer
-            python3Packages.websocket-client  # Required by proxmox_shell module
+            python3Packages.requests
+            python3Packages.websocket-client
             apacheHttpd
-            butane    # Convert Butane YAML to Ignition JSON
-            skopeo    # Download container images for NFS content prep
-            dnf5      # Download RPM packages with dependency resolution
-            qemu      # qemu-img for building Alpine NFS qcow2 images
-            libguestfs-with-appliance  # Build VM images without root (guestfish)
-            proot     # User-space chroot/root emulation via ptrace (works with musl)
-            unixtools.xxd # Hex dump utility for debugging
-            nfs-utils # NFS mount utilities (mount.nfs helper)
+            butane
+            skopeo
+            dnf5
+            qemu
+            libguestfs-with-appliance
+            proot
+            unixtools.xxd
+            nfs-utils
+            fuse          # Provides fusermount + runtime libfuse2
+            libnfs
+            fuseNfs
+            cloudflared
           ];
 
           shellHook = ''
@@ -43,6 +79,9 @@
               echo "Installing Ansible collections..."
               ansible-galaxy collection install community.proxmox community.general community.docker ansible.posix --force
             fi
+
+            echo "fuse-nfs is available at $(which fuse-nfs)"
+            echo "To unmount: fusermount -u ~/nfs   (or fusermount -z -u ~/nfs if busy)"
           '';
         };
       });

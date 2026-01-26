@@ -3,45 +3,43 @@
 # InfraVM Role - CoreOS VM running all containers
 # =============================================================================
 # This role creates a CoreOS VM and deploys Portainer + all services.
-# Depends on: coreos_base role (via meta/main.yml)
 
 # Enable/disable this role
 infravm_enabled: true
 
 # =============================================================================
-# VM Configuration (passed to coreos_base)
+# VM Configuration
 # =============================================================================
-coreos_base_vm_name: "sophon-infravm"
-coreos_base_cores: 2
-coreos_base_memory: 4096
-coreos_base_disk_size: "32G"
+infravm_vm_name: "sophon-infravm"
+infravm_cores: 2
+infravm_memory: 4096
+infravm_disk_size: "32G"
 
 # Network (required - auto-discovered or prompted if not set)
-# coreos_base_ip: "10.0.1.10"
-# coreos_base_gateway: "10.0.1.1"
-coreos_base_cidr: "24"
+# infravm_ip: "10.0.1.10"
+# infravm_gateway: "10.0.1.1"
+infravm_cidr: "24"
 
 # User Configuration
-coreos_base_username: "admin"
+infravm_username: "admin"
 # Default password hash for 'admin' user (password: changeme)
 # Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
-coreos_base_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDoimDMM9wuIY4efuYmvRcqA"
+infravm_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDoimDMM9wuIY4efuYmvRcqA"
 
 # SSH public key for admin user (required for Ansible access)
-coreos_base_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
+infravm_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
 
-# Butane template location (for coreos_base)
-# Note: Use playbook_dir instead of role_path because coreos_base runs as dependency
-coreos_base_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.j2"
+# Butane template location
+infravm_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.j2"
 
 # =============================================================================
 # Ansible Connection Settings
 # =============================================================================
 # Ansible host for SSH connections (defaults to cloudflared tunnel name if token set)
-infravm_ansible_host: "{{ 'infravm.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else coreos_base_ip }}"
+infravm_ansible_host: "{{ 'infra.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
 
 # SSH user for Ansible connections
-infravm_ansible_user: "{{ coreos_base_username }}"
+infravm_ansible_user: "{{ infravm_username }}"
 
 # SSH private key for Ansible connections
 infravm_ssh_private_key: "~/.ssh/id_rsa"
@@ -75,3 +73,21 @@ infravm_container_images:
 # =============================================================================
 portainer_image_tag: "2.27.1"
 portainer_port: 9443
+
+# =============================================================================
+# CoreOS Image
+# =============================================================================
+coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"
+coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
+coreos_qcow2_img_filename: "{{ coreos_qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
+coreos_qcow2_iso_filename: "{{ coreos_qcow2_img_filename }}.iso"
+
+# Proxmox storage for the CoreOS image
+coreos_image_storage: "local"
+coreos_image_storage_path: "/var/lib/vz/template/iso"
+
+# =============================================================================
+# Local Cache/Download Directories
+# =============================================================================
+coreos_local_cache_dir: "/tmp/sophon_cache"
+coreos_local_download_dir: "/tmp/sophon_images"

@@ -15,13 +15,20 @@
   when: connectivity_check_nfs_server | length == 0
 
 # -----------------------------------------------------------------------------
-# NFS Connectivity Test (showmount - verifies NFS exports without root)
+# NFS Connectivity Test (actual mount test)
 # -----------------------------------------------------------------------------
-- name: Test NFS connectivity via showmount
+- name: Create temporary mount point
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: nfs_test_
+  register: nfs_temp_mount
+  delegate_to: localhost
+
+- name: Test NFS mount
   ansible.builtin.shell:
     cmd: |
-      # Use showmount to query NFS exports (doesn't require root)
-      if showmount -e {{ connectivity_check_nfs_server }} 2>/dev/null | grep -q "{{ connectivity_check_nfs_export }}"; then
+      # Try to mount NFS share using fuse-nfs (no root required)
+      if fuse-nfs -n nfs://{{ connectivity_check_nfs_server }}{{ connectivity_check_nfs_export }} {{ nfs_temp_mount.path }} 2>/dev/null; then
         echo "NFS_REACHABLE"
         exit 0
       else
@@ -68,10 +75,30 @@
       
       Options:
       1. Ensure network connectivity to {{ connectivity_check_nfs_server }}
-      2. Set CLOUDFLARED_TUNNEL_TOKEN environment variable for tunnel access:
+      2. Provide cloudflared tunnel token for tunnel access:
          
-         export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
-         ansible-playbook site.yml
+         ansible-playbook site.yml -e cloudflared_tunnel_token="your-tunnel-token"
+      
+      ───────────────────────────────────────────────────────────
+      How to get a Cloudflare Tunnel token (requires free account):
+      ───────────────────────────────────────────────────────────
+      1. Log in at https://dash.cloudflare.com (create free account if needed)
+      2. Open Zero Trust dashboard: https://one.dash.cloudflare.com
+      3. Go to Networks > Tunnels in the left menu
+      4. Click "Create a tunnel"
+      5. Select "Cloudflared" as connector type, click Next
+      6. Name your tunnel (e.g., "ssh-tunnel"), click "Save tunnel"
+      7. Find the token in the install command (starts with "eyJ...")
+      8. Copy the full token string
+      9. Configure public hostname to match your infravm_ansible_host:
+         - Click "Add a public hostname"
+         - Subdomain: enter the hostname part (e.g., "infra" for infra.example.com)
+         - Domain: select your domain from the dropdown
+         - Service Type: SSH
+         - URL: localhost:22
+         - Click "Save hostname"
+      
+      Your current infravm_ansible_host is set to: {{ infravm_ansible_host | default('(not set)') }}
       
       ═══════════════════════════════════════════════════════════
   when:

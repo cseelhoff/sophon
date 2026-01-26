@@ -11,7 +11,7 @@
 
     - name: Check if Guacamole image exists
       ansible.builtin.raw: podman images | grep -q "guacamole/guacamole[ ]*{{ guacamole_image_tag }}"
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       register: guacamole_image_exists
       failed_when: false
       changed_when: false
@@ -24,7 +24,7 @@
         curl -o guacd.tar http://{{ guacamole_file_server_ip }}:{{ http_file_server_port }}/guacd.tar &&
         podman load -i guacd.tar &&
         rm -f guacamole.tar guacd.tar
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       when: guacamole_image_exists.rc != 0
 
     - name: Create Guacamole directories
@@ -33,12 +33,12 @@
         mkdir -p {{ guacamole_data_dir }}/db
         mkdir -p {{ guacamole_data_dir }}/drive
         mkdir -p {{ guacamole_data_dir }}/record
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       become: true
 
     - name: Check if init script exists
       ansible.builtin.raw: test -f {{ guacamole_data_dir }}/init/initdb.sql && echo "exists"
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       register: guacamole_initdb_exists
       failed_when: false
       changed_when: false
@@ -47,7 +47,7 @@
       ansible.builtin.raw: |
         podman run --rm {{ guacamole_image_name }}:{{ guacamole_image_tag }} \
           /opt/guacamole/bin/initdb.sh --postgresql > {{ guacamole_data_dir }}/init/initdb.sql
-      delegate_to: "{{ coreos_ip }}"
+      delegate_to: "{{ infravm_ip }}"
       become: true
       when: "'exists' not in guacamole_initdb_exists.stdout"
 
@@ -59,7 +59,6 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
         portainer_stack_name: "guacamole"
         portainer_stack_compose_content: "{{ guacamole_compose_base64 | b64decode }}"
         portainer_stack_env_vars:

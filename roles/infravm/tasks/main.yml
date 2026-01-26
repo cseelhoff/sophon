@@ -2,33 +2,63 @@
 # =============================================================================
 # InfraVM Role Tasks
 # =============================================================================
-# The CoreOS VM is created by the coreos_base dependency (see meta/main.yml).
 # This role:
-#   1. Waits for InfraVM to boot and NFS to mount
-#   2. Loads container images via SSH (from NFS cache or pull from registry)
-#   3. Waits for Portainer and initializes admin password via API
+#   1. Creates the CoreOS VM on Proxmox with Ignition configuration
+#   2. Waits for InfraVM to boot and NFS to mount
+#   3. Loads container images via SSH (from NFS cache or pull from registry)
+#   4. Waits for Portainer and initializes admin password via API
 
 # =============================================================================
-# Wait for VM to be ready
+# Step 1: Create the CoreOS VM
 # =============================================================================
-- name: Wait for InfraVM SSH to be ready
-  ansible.builtin.wait_for:
-    host: "{{ infravm_ansible_host }}"
-    port: 22
-    delay: 10
-    timeout: 300
-  delegate_to: localhost
+- name: Create InfraVM
+  ansible.builtin.include_tasks: create_vm.yml
+
+# =============================================================================
+# Step 2: Wait for VM to be ready
+# =============================================================================
+- name: Debug SSH connection target
+  ansible.builtin.debug:
+    msg: "Waiting for SSH on host: {{ infravm_ansible_host }}, port: 22"
+
+# - name: Wait for InfraVM SSH to be ready
+#   ansible.builtin.wait_for:
+#     host: "{{ infravm_ansible_host }}"
+#     port: 22
+#     delay: 10
+#     timeout: 300
+#   delegate_to: localhost
+
+- name: Debug NFS mount status on InfraVM
+  ansible.builtin.raw: |
+    echo "=== Mount status ==="
+    mount | grep nfs || echo "No NFS mounts found"
+    echo "=== systemctl status var-mnt-nfs.mount ==="
+    systemctl status var-mnt-nfs.mount --no-pager 2>&1 || true
+    echo "=== journalctl for mount ==="
+    journalctl -u var-mnt-nfs.mount --no-pager -n 20 2>&1 || true
+  delegate_to: "{{ infravm_ansible_host }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  register: nfs_debug
+  ignore_errors: true
+
+- name: Show NFS debug output
+  ansible.builtin.debug:
+    var: nfs_debug.stdout
 
 - name: Wait for NFS mount on InfraVM
-  ansible.builtin.shell:
-    cmd: mountpoint -q /mnt/nfs
+  ansible.builtin.raw: mountpoint -q /var/mnt/nfs
   register: nfs_mount_check
   until: nfs_mount_check.rc == 0
   retries: 30
   delay: 5
   delegate_to: "{{ infravm_ansible_host }}"
-  remote_user: "{{ infravm_ansible_user }}"
   vars:
+    ansible_connection: ssh
+    ansible_user: "{{ infravm_ansible_user }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
 # =============================================================================
@@ -37,44 +67,44 @@
 - name: Load container images on InfraVM
   block:
     - name: Check and load each container image
-      ansible.builtin.shell:
-        cmd: |
-          IMAGE="{{ item }}"
-          # Extract basename: docker.io/portainer/portainer-ce:2.27.1 -> portainer-ce
-          BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
-          TARFILE="/mnt/nfs/containers/${BASENAME}.tar"
-          
-          # Check if image already loaded
-          if podman image exists "$IMAGE" 2>/dev/null; then
-            echo "ALREADY_LOADED"
-            exit 0
-          fi
-          
-          # Try to load from NFS cache
-          if [ -f "$TARFILE" ]; then
-            podman load -i "$TARFILE"
-            echo "LOADED_FROM_NFS"
-            exit 0
-          fi
-          
-          # Pull from registry and save to NFS
-          podman pull "$IMAGE"
-          
-          # Save to NFS for future use (NFS needs to be rw for this)
-          # Check if NFS is writable
-          if touch /mnt/nfs/containers/.write_test 2>/dev/null; then
-            rm -f /mnt/nfs/containers/.write_test
-            podman save -o "$TARFILE" "$IMAGE"
-            echo "PULLED_AND_CACHED"
-          else
-            echo "PULLED_NO_CACHE"
-          fi
+      ansible.builtin.raw: |
+        IMAGE="{{ item }}"
+        # Extract basename: docker.io/portainer/portainer-ce:2.27.1 -> portainer-ce
+        BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||')
+        TARFILE="/var/mnt/nfs/containers/${BASENAME}.tar"
+
+        # Check if image already loaded
+        if podman image exists "$IMAGE" 2>/dev/null; then
+          echo "ALREADY_LOADED"
+          exit 0
+        fi
+
+        # Try to load from NFS cache
+        if [ -f "$TARFILE" ]; then
+          podman load -i "$TARFILE"
+          echo "LOADED_FROM_NFS"
+          exit 0
+        fi
+
+        # Pull from registry and save to NFS
+        podman pull "$IMAGE"
+
+        # Save to NFS for future use (NFS needs to be rw for this)
+        # Check if NFS is writable
+        if touch /var/mnt/nfs/containers/.write_test 2>/dev/null; then
+          rm -f /var/mnt/nfs/containers/.write_test
+          podman save -o "$TARFILE" "$IMAGE"
+          echo "PULLED_AND_CACHED"
+        else
+          echo "PULLED_NO_CACHE"
+        fi
       loop: "{{ infravm_container_images }}"
       register: container_load_results
       changed_when: "'LOADED_FROM_NFS' in container_load_results.stdout or 'PULLED' in container_load_results.stdout"
       delegate_to: "{{ infravm_ansible_host }}"
-      remote_user: "{{ infravm_ansible_user }}"
       vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_ansible_user }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
     - name: Display container loading summary
@@ -84,6 +114,67 @@
           {% for result in container_load_results.results %}
           - {{ result.item }}: {{ result.stdout | default('unknown') }}
           {% endfor %}
+
+# =============================================================================
+# Start Portainer Container
+# =============================================================================
+- name: Create and start Portainer container with systemd service
+  ansible.builtin.raw: |
+    # Check if portainer service already exists and is running
+    if systemctl is-active portainer.service >/dev/null 2>&1; then
+      echo "ALREADY_RUNNING"
+      exit 0
+    fi
+
+    # Enable and start podman API service (creates /run/podman/podman.sock)
+    sudo systemctl enable --now podman.service
+
+    # Wait for socket to appear
+    for i in 1 2 3 4 5; do
+      [ -S /run/podman/podman.sock ] && break
+      sleep 1
+    done
+
+    # Ensure socket is readable by all (for container access)
+    sudo chmod 666 /run/podman/podman.sock
+
+    # Remove existing container if present
+    sudo podman rm -f portainer 2>/dev/null || true
+
+    # Unmask service if previously masked
+    sudo systemctl unmask portainer.service 2>/dev/null || true
+
+    # Create portainer data volume if not exists
+    sudo podman volume create portainer_data 2>/dev/null || true
+
+    # Run the container (socket needs rw access, not ro)
+    sudo podman run -d \
+      --name portainer \
+      --restart always \
+      -p {{ portainer_port }}:9443 \
+      -v /run/podman/podman.sock:/var/run/docker.sock \
+      -v portainer_data:/data \
+      docker.io/portainer/portainer-ce:{{ portainer_image_tag }}
+
+    # Generate systemd unit file from running container
+    sudo podman generate systemd --name portainer --new | sudo tee /etc/systemd/system/portainer.service > /dev/null
+
+    # Reload systemd and enable the service (already running from podman run)
+    sudo systemctl daemon-reload
+    sudo systemctl enable portainer.service
+
+    echo "STARTED"
+  delegate_to: "{{ infravm_ansible_host }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  register: portainer_start
+  changed_when: "'STARTED' in portainer_start.stdout"
+
+- name: Show Portainer start result
+  ansible.builtin.debug:
+    var: portainer_start.stdout
 
 # =============================================================================
 # Initialize Portainer
@@ -99,35 +190,60 @@
       - portainer_admin_password | length >= 12
     fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
 
+- name: Debug Portainer status on InfraVM
+  ansible.builtin.raw: |
+    echo "=== Podman containers ==="
+    podman ps -a 2>&1 || echo "podman ps failed"
+    echo "=== Listening ports ==="
+    ss -tlnp 2>&1 | grep -E ':(9443|9000)' || echo "No Portainer ports listening"
+    echo "=== Curl test ==="
+    curl -sk -v "https://{{ infravm_ip }}:{{ portainer_port }}/api/status" 2>&1 || echo "curl failed"
+  delegate_to: "{{ infravm_ansible_host }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  register: portainer_debug
+  ignore_errors: true
+
+- name: Show Portainer debug output
+  ansible.builtin.debug:
+    var: portainer_debug.stdout
+
 - name: Wait for Portainer API to be ready
-  ansible.builtin.uri:
-    url: "https://{{ coreos_base_ip }}:{{ portainer_port }}/api/status"
-    method: GET
-    validate_certs: false
-    status_code: 200
+  ansible.builtin.raw: |
+    curl -sk -o /dev/null -w '%{http_code}' "https://{{ infravm_ip }}:{{ portainer_port }}/api/status" | grep -q 200
   register: portainer_status
-  until: portainer_status.status == 200
+  until: portainer_status.rc == 0
   retries: 60
   delay: 3
-  delegate_to: localhost
+  delegate_to: "{{ infravm_ansible_host }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
 - name: Initialize Portainer admin user
-  ansible.builtin.uri:
-    url: "https://{{ coreos_base_ip }}:{{ portainer_port }}/api/users/admin/init"
-    method: POST
-    validate_certs: false
-    body_format: json
-    body:
-      Username: admin
-      Password: "{{ portainer_admin_password }}"
-    status_code: [200, 409]
+  ansible.builtin.raw: |
+    curl -sk -X POST "https://{{ infravm_ip }}:{{ portainer_port }}/api/users/admin/init" \
+      -H "Content-Type: application/json" \
+      -d '{"Username":"admin","Password":"{{ portainer_admin_password }}"}' \
+      -w '\n%{http_code}' | tail -1
   register: portainer_init
-  delegate_to: localhost
+  delegate_to: "{{ infravm_ansible_host }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ infravm_ansible_user }}"
+    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+
+- name: Set portainer init status
+  ansible.builtin.set_fact:
+    portainer_init_status: "{{ portainer_init.stdout | trim }}"
 
 - name: Warn if admin already exists and password was auto-generated
   ansible.builtin.debug:
     msg: "WARNING: Admin already exists. If auth fails, set -e portainer_admin_password=<existing_password>"
-  when: portainer_init.status == 409
+  when: portainer_init_status == '409'
 
 - name: Display InfraVM access info
   ansible.builtin.debug:
@@ -135,23 +251,22 @@
       ═══════════════════════════════════════════════════════════════════
       InfraVM Deployed Successfully
       ═══════════════════════════════════════════════════════════════════
-      
+
       SSH Access:
         Host: {{ infravm_ansible_host }}
         User: {{ infravm_ansible_user }}
         Command: ssh {{ infravm_ansible_user }}@{{ infravm_ansible_host }}
-      
+
       Portainer:
-        URL: https://{{ coreos_base_ip }}:{{ portainer_port }}
-        Version: {{ portainer_status.json.Version }}
+        URL: https://{{ infravm_ansible_host }}:{{ portainer_port }}
         Username: admin
         Password: {{ portainer_admin_password }}
-        {{ '(existing admin - password unchanged)' if portainer_init.status == 409 else '' }}
-      
-      NFS Mount: /mnt/nfs -> {{ nfs_server_ip }}:/export
-      VM ID: {{ coreos_base_vmid }}
+        {{ '(existing admin - password unchanged)' if portainer_init_status == '409' else '' }}
+
+      NFS Mount: /var/mnt/nfs -> {{ nfs_server_ip }}:/export
+      VM ID: {{ infravm_vmid | default('N/A') }}
       {% if cloudflared_tunnel_token | default('') != '' %}
       Cloudflared: Tunnel active (token configured)
       {% endif %}
-      
+
       ═══════════════════════════════════════════════════════════════════

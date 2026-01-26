@@ -21,21 +21,24 @@ InfraVM is a CoreOS-based VM that:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `infravm_enabled` | `true` | Enable/disable this role |
-| `infravm_ansible_host` | `infravm.{{ domain_name }}` (with cloudflared) or `coreos_base_ip` | SSH target for Ansible |
+| `infravm_ansible_host` | `infra.{{ domain_name }}` (with cloudflared) or `infravm_ip` | SSH target for Ansible |
 | `infravm_container_images` | See defaults | List of container images to load |
 | `infravm_nfs_mount_options` | `ro,noatime,vers=4.1` | NFS mount options |
 
-### VM Configuration (passed to coreos_base)
+### VM Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `coreos_base_vm_name` | `sophon-infravm` | VM name in Proxmox |
-| `coreos_base_cores` | `2` | CPU cores |
-| `coreos_base_memory` | `4096` | Memory in MB |
-| `coreos_base_disk_size` | `32G` | Root disk size |
-| `coreos_base_ip` | (required) | Static IP address |
-| `coreos_base_gateway` | (required) | Network gateway |
-| `coreos_base_ssh_public_key` | `~/.ssh/id_rsa.pub` | SSH public key for admin user |
+| `infravm_vm_name` | `sophon-infravm` | VM name in Proxmox |
+| `infravm_cores` | `2` | CPU cores |
+| `infravm_memory` | `4096` | Memory in MB |
+| `infravm_disk_size` | `32G` | Root disk size |
+| `infravm_ip` | (required) | Static IP address |
+| `infravm_gateway` | (required) | Network gateway |
+| `infravm_cidr` | `24` | Network CIDR |
+| `infravm_username` | `admin` | VM user name |
+| `infravm_password_hash` | (default hash) | Password hash for user |
+| `infravm_ssh_public_key` | `~/.ssh/id_rsa.pub` | SSH public key for admin user |
 
 ### Portainer Settings
 
@@ -53,12 +56,11 @@ InfraVM is a CoreOS-based VM that:
 
 ## Dependencies
 
-- `coreos_base` role (included via meta/main.yml)
 - `proxmox` role (for API authentication)
 
 ## Workflow
 
-1. Creates CoreOS VM via `coreos_base` role with:
+1. Creates CoreOS VM on Proxmox with:
    - NFS mount at `/mnt/nfs`
    - Conditional cloudflared service
    - Portainer systemd service
@@ -74,8 +76,8 @@ InfraVM is a CoreOS-based VM that:
 ```yaml
 - hosts: localhost
   vars:
-    coreos_base_ip: "10.1.1.100"
-    coreos_base_gateway: "10.1.1.1"
+    infravm_ip: "10.1.1.100"
+    infravm_gateway: "10.1.1.1"
     nfs_server_ip: "10.1.1.35"
   roles:
     - infravm

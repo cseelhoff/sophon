@@ -1,48 +1,58 @@
 ---
 # DNS Sync Sidecar - syncs Traefik routers to CoreDNS zone file
 
-- name: Create dns_sync directory
-  ansible.builtin.raw: mkdir -p /opt/dns_sync
-  delegate_to: "{{ coreos_ip }}"
-  become: true
+- name: Deploy DNS Sync
   when: dns_sync_enabled | default(true)
+  block:
+    - name: Create dns_sync directory
+      ansible.builtin.raw: sudo mkdir -p /opt/dns_sync
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_ansible_user }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
-- name: Ensure zones directory exists
-  ansible.builtin.raw: mkdir -p {{ dns_sync_zones_dir }}
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-  when: dns_sync_enabled | default(true)
+    - name: Ensure zones directory exists
+      ansible.builtin.raw: sudo mkdir -p {{ dns_sync_zones_dir }}
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_ansible_user }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
-- name: Copy sync script to target
-  ansible.builtin.raw: |
-    cat > /opt/dns_sync/sync.py << 'SYNCSCRIPT'
-    {{ lookup('template', 'sync.py.j2') }}
-    SYNCSCRIPT
-    chmod 644 /opt/dns_sync/sync.py
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-  when: dns_sync_enabled | default(true)
+    - name: Copy sync script to target
+      ansible.builtin.raw: |
+        cat > /tmp/sync.py << 'SYNCSCRIPT'
+        {{ lookup('template', 'sync.py.j2') }}
+        SYNCSCRIPT
+        sudo mv /tmp/sync.py /opt/dns_sync/sync.py
+        sudo chmod 644 /opt/dns_sync/sync.py
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_ansible_user }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
-- name: Copy requirements file
-  ansible.builtin.raw: |
-    cat > /opt/dns_sync/requirements.txt << 'EOF'
-    docker>=7.0.0
-    requests>=2.31.0
-    EOF
-  delegate_to: "{{ coreos_ip }}"
-  become: true
-  when: dns_sync_enabled | default(true)
+    - name: Copy requirements file
+      ansible.builtin.raw: |
+        cat > /tmp/requirements.txt << 'EOF'
+        docker>=7.0.0
+        requests>=2.31.0
+        EOF
+        sudo mv /tmp/requirements.txt /opt/dns_sync/requirements.txt
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_ansible_user }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
 
-- name: Generate docker-compose content
-  ansible.builtin.set_fact:
-    dns_sync_compose_base64: "{{ lookup('template', 'docker-compose.yml.j2') | b64encode }}"
-  when: dns_sync_enabled | default(true)
+    - name: Generate docker-compose content
+      ansible.builtin.set_fact:
+        dns_sync_compose_base64: "{{ lookup('template', 'docker-compose.yml.j2') | b64encode }}"
 
-- name: Deploy dns_sync stack
-  ansible.builtin.include_role:
-    name: portainer_stack
-  vars:
-    portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
-    portainer_stack_name: "dns_sync"
-    portainer_stack_compose_content: "{{ dns_sync_compose_base64 | b64decode }}"
-  when: dns_sync_enabled | default(true)
+    - name: Deploy dns_sync stack
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_name: "dns_sync"
+        portainer_stack_compose_content: "{{ dns_sync_compose_base64 | b64decode }}"

@@ -90,7 +90,7 @@ POST /api2/json/nodes/{node}/storage/sophon-nfs/download-url
    - Online: Proxmox downloads via `download-url` API
 2. **Generate Ignition config** with:
    - Static IP configuration
-   - SSH public key (`coreos_base_ssh_public_key`)
+   - SSH public key (`infravm_ssh_public_key`)
    - NFS mount at `/mnt/nfs` → `{{ nfs_server_ip }}:/export`
    - Conditional cloudflared service (when `cloudflared_tunnel_token` is set):
      - Copies `/mnt/nfs/template/iso/cloudflared-linux-amd64.iso` to `/usr/local/bin/cloudflared`
@@ -284,7 +284,6 @@ sophon/
 ├── bastion.yml           # Bastion VM playbook
 ├── roles/
 │   ├── proxmox/          # Proxmox API interactions
-│   ├── coreos_base/      # Shared CoreOS VM provisioning (fw_cfg ignition)
 │   ├── infravm/          # InfraVM (CoreOS VM running all containers)
 │   ├── nfs_server/       # Custom Alpine NFS server (lazy-built qcow2)
 │   ├── nfs_content/      # NFS artifact management (airgap prestaging only)
@@ -390,7 +389,7 @@ kopia_enabled: true
 The `site.yml` playbook deploys services in dependency order:
 
 1. **nfs_server** - NFS storage VM (if needed)
-2. **infravm** - InfraVM (CoreOS via coreos_base, runs Portainer + all containers)
+2. **infravm** - InfraVM (CoreOS VM running Portainer + all containers)
 3. **coredns** - DNS server
 4. **traefik** - Reverse proxy
 5. **homepage** - Dashboard

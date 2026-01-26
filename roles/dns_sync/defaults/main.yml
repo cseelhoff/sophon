@@ -17,7 +17,7 @@ dns_sync_traefik_api: "http://traefik:8080/api/http/routers"
 dns_sync_cname_target: "traefik.{{ dns_sync_zone }}"
 
 # Static A record for the zone apex and traefik itself
-dns_sync_traefik_ip: "{{ coreos_ip | default('10.0.1.10') }}"
+dns_sync_traefik_ip: "{{ infravm_ip | default('10.0.1.10') }}"
 
 # Debounce delay (seconds) after Docker event before querying Traefik
 dns_sync_debounce_seconds: 3

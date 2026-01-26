@@ -8,7 +8,6 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port }}"
         portainer_stack_name: "traefik"
         portainer_stack_compose_content: |
           version: '3'
@@ -38,10 +37,11 @@
 
     - name: Wait for Traefik to be ready
       ansible.builtin.wait_for:
-        host: "{{ coreos_ip }}"
+        host: "{{ infravm_ip }}"
         port: "{{ traefik_port_http }}"
         timeout: 60
+      delegate_to: localhost
 
     - name: Display Traefik status
       ansible.builtin.debug:
-        msg: "Traefik ready at http://{{ coreos_ip }}:{{ traefik_port_ui }} (dashboard)"
+        msg: "Traefik ready at http://{{ infravm_ip }}:{{ traefik_port_ui }} (dashboard)"

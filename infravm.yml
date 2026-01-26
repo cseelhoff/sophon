@@ -3,7 +3,6 @@
 # InfraVM Deployment
 # =============================================================================
 # Deploys a CoreOS VM with all infrastructure services via the infravm role.
-# The infravm role depends on coreos_base which handles VM creation.
 #
 # Usage:
 #   ansible-playbook infravm.yml -e proxmox_host=10.1.1.2 -e infravm_ip=10.1.1.100

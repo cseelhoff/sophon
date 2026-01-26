@@ -6,5 +6,15 @@ portainer_stack_name: "default_stack"
 portainer_stack_env_vars: []
 portainer_stack_validate_certs: false
 portainer_stack_compose_content: ""
-# URL is typically set by the calling role
-# portainer_stack_url: "https://{{ coreos_ip }}:9443"
+
+# =============================================================================
+# SSH Connection Settings (for curl commands through tunnel)
+# =============================================================================
+# These mirror infravm role's settings - typically set by earlier plays
+# infravm_ip should be set by site.yml's auto-discovery before this role runs
+infravm_ansible_host: "{{ 'infra.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else infravm_ip | default('127.0.0.1') }}"
+infravm_ansible_user: "{{ infravm_username | default('admin') }}"
+infravm_ssh_private_key: "~/.ssh/id_rsa"
+
+# Portainer connection
+portainer_port: 9443

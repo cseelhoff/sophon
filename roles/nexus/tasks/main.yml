@@ -13,7 +13,6 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port | default(9443) }}"
         portainer_stack_name: "nexus"
         portainer_stack_compose_content: |
           services:
@@ -34,7 +33,7 @@
 
     - name: Wait for Nexus to be ready
       ansible.builtin.uri:
-        url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/status"
+        url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/status"
         method: GET
         status_code: 200
         validate_certs: false
@@ -45,7 +44,7 @@
 
     - name: Display Nexus status
       ansible.builtin.debug:
-        msg: "Nexus ready at http://{{ coreos_ip }}:{{ nexus_port }}, Docker registry at {{ coreos_ip }}:{{ nexus_docker_registry_port }}"
+        msg: "Nexus ready at http://{{ infravm_ip }}:{{ nexus_port }}, Docker registry at {{ infravm_ip }}:{{ nexus_docker_registry_port }}"
 
     # Repository provisioning (optional)
     - name: Provision Nexus repositories
@@ -53,7 +52,7 @@
       block:
         - name: Set active security realms
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/security/realms/active"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/security/realms/active"
             method: PUT
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"
@@ -67,7 +66,7 @@
 
         - name: Get existing repositories
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/repositories"
             method: GET
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"
@@ -77,7 +76,7 @@
 
         - name: Create docker-hosted repository
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/hosted"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/hosted"
             method: POST
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"
@@ -99,7 +98,7 @@
 
         - name: Create docker-proxy repository (Docker Hub)
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
             method: POST
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"
@@ -132,7 +131,7 @@
 
         - name: Create ghcr-proxy repository
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
             method: POST
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"
@@ -165,7 +164,7 @@
 
         - name: Create quay-proxy repository
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
             method: POST
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"
@@ -198,7 +197,7 @@
 
         - name: Create docker-group repository
           ansible.builtin.uri:
-            url: "http://{{ coreos_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
+            url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
             method: POST
             user: "{{ nexus_admin_user }}"
             password: "{{ nexus_admin_password }}"

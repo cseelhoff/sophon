@@ -13,7 +13,6 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_url: "https://{{ coreos_ip }}:{{ portainer_port | default(9443) }}"
         portainer_stack_name: "openldap"
         portainer_stack_compose_content: |
           services:
@@ -61,7 +60,7 @@
 
     - name: Wait for OpenLDAP to be ready
       ansible.builtin.uri:
-        url: "http://{{ coreos_ip }}:{{ openldap_port_admin }}"
+        url: "http://{{ infravm_ip }}:{{ openldap_port_admin }}"
         method: GET
         status_code: [200, 302]
         validate_certs: false
@@ -72,4 +71,4 @@
 
     - name: Display OpenLDAP status
       ansible.builtin.debug:
-        msg: "OpenLDAP ready - phpLDAPadmin at http://{{ coreos_ip }}:{{ openldap_port_admin }}, LDAP at {{ coreos_ip }}:{{ openldap_port_ldap }}"
+        msg: "OpenLDAP ready - phpLDAPadmin at http://{{ infravm_ip }}:{{ openldap_port_admin }}, LDAP at {{ infravm_ip }}:{{ openldap_port_ldap }}"

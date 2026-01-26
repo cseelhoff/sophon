@@ -139,7 +139,7 @@
         - infravm_ip == ""
         - _vm_list is defined
 
-    - name: Get InfraVM config for IP
+    - name: Get InfraVM config for MAC address
       ansible.builtin.uri:
         url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ _infravm_vm.node }}/qemu/{{ _infravm_vm.vmid }}/config"
         method: GET
@@ -152,15 +152,13 @@
         - _infravm_vm is defined
         - _infravm_vm.vmid is defined
 
-    - name: Extract InfraVM IP from VM config
+    - name: Extract InfraVM MAC address from VM config
       ansible.builtin.set_fact:
-        infravm_ip: "{{ _infravm_config.json.data.ipconfig0 | regex_search('ip=([0-9.]+)', '\\1') | first }}"
+        _infravm_mac: "{{ _infravm_config.json.data.net0 | regex_search('([0-9A-Fa-f:]{17})') | lower }}"
       when:
         - infravm_ip == ""
         - _infravm_config is defined
-        - _infravm_config.json.data.ipconfig0 is defined
-        - "'ip=' in _infravm_config.json.data.ipconfig0"
-      ignore_errors: true
+        - _infravm_config.json.data.net0 is defined
 
     # -------------------------------------------------------------------------
     # Vnet Configuration for IP Scanning
@@ -193,11 +191,11 @@
     # -------------------------------------------------------------------------
     - name: Scan network for used IPs
       when:
-        - (nfs_server_ip == "") or (infravm_ip == "")
+        - (nfs_server_ip == "") or (infravm_ip == "") or (_infravm_mac is defined)
         - _network_base is defined
         - _network_base != ""
       block:
-        - name: Install arp-scan and discover used IPs on Proxmox
+        - name: Install arp-scan and discover network hosts on Proxmox
           proxmox_shell:
             api_host: "{{ proxmox_host }}"
             api_port: "{{ proxmox_port | default(8006) }}"
@@ -207,12 +205,22 @@
             proxmox_csrf_token: "{{ proxmox_csrf }}"
             validate_certs: "{{ proxmox_validate_certs | default(false) }}"
             timeout: 60
-            command: "apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1; arp-scan -I {{ proxmox_vnet }} -l 2>/dev/null | awk '/^[0-9]+\\./ {print $1}' | sort -V"
+            command: "apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1; arp-scan -I {{ proxmox_vnet }} -l 2>/dev/null | awk '/^[0-9]+\\./ {print $1, tolower($2)}'"
           register: _arp_scan_result
 
-        - name: Parse used IPs from arp-scan
+        - name: Parse ARP scan results (IP and MAC pairs)
           ansible.builtin.set_fact:
-            _used_ips: "{{ _arp_scan_result.stdout | default('') | split('\n') | select('match', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$') | list }}"
+            _arp_entries: "{{ (_arp_scan_result.stdout | default('') | trim).split('\n') | map('trim') | select() | list }}"
+            _used_ips: "{{ (_arp_scan_result.stdout | default('') | trim).split('\n') | map('trim') | select() | map('split', ' ') | map('first') | list }}"
+
+        - name: Find InfraVM IP from MAC address
+          ansible.builtin.set_fact:
+            infravm_ip: "{{ item.split(' ')[0] }}"
+          loop: "{{ _arp_entries }}"
+          when:
+            - infravm_ip == ""
+            - _infravm_mac is defined
+            - _infravm_mac in item
 
         - name: Find available IPs
           ansible.builtin.set_fact:
@@ -221,7 +229,7 @@
                 range(2, 255) | map('string') | map('regex_replace', '^(.*)$', _network_base ~ '.\1')
                 | reject('in', _used_ips)
                 | reject('eq', _gateway)
-                | reject('eq', proxmox_host)
+                | reject('eq', _vnet_config.address | default(''))
                 | list
               }}
 
@@ -234,10 +242,10 @@
 
         - name: Set discovered InfraVM IP
           ansible.builtin.set_fact:
-            infravm_ip: "{{ _available_ips[1] }}"
+            infravm_ip: "{{ _available_ips[0] if nfs_server_ip != '' else _available_ips[1] }}"
           when:
             - infravm_ip == ""
-            - _available_ips | length > 1
+            - _available_ips | length >= 1
 
     # -------------------------------------------------------------------------
     # Final Prompts (if auto-discovery failed)
@@ -433,10 +441,6 @@
   connection: local
   gather_facts: true
   tags: [infravm, infrastructure]
-  vars:
-    # Pass coreos_base variables from discovered values
-    coreos_base_ip: "{{ infravm_ip }}"
-    coreos_base_gateway: "{{ infravm_gateway }}"
   roles:
     - infravm
 

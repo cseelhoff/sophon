@@ -1,35 +1,20 @@
 ---
 # =============================================================================
-# CoreOS Base Role - Shared CoreOS VM Creation
+# InfraVM - Create CoreOS VM on Proxmox
 # =============================================================================
-# Creates a CoreOS VM on Proxmox with Ignition configuration passed via fw_cfg.
-# This role is designed to be included by other roles (infravm) that
-# provide their own Butane templates via coreos_base_butane_template variable.
-#
-# Required Variables:
-#   - coreos_base_vm_name: Name of the VM
-#   - coreos_base_ip: Static IP address
-#   - coreos_base_gateway: Network gateway
-#   - coreos_base_butane_template: Path to Butane template file
-#
-# Output Facts:
-#   - coreos_base_vmid: The VM ID (new or existing)
-#   - coreos_base_vm_created: Boolean, true if VM was newly created
-#   - coreos_base_existing_vm: The existing VM info (if found)
-#
-# Depends on: proxmox role (via meta/main.yml)
+# Creates the CoreOS VM with Ignition configuration passed via fw_cfg.
 
 # -----------------------------------------------------------------------------
 # Validate Required Variables
 # -----------------------------------------------------------------------------
-- name: Validate required coreos_base variables
+- name: Validate required InfraVM variables
   ansible.builtin.assert:
     that:
-      - coreos_base_vm_name is defined
-      - coreos_base_ip is defined
-      - coreos_base_gateway is defined
-      - coreos_base_butane_template is defined
-    fail_msg: "Required variables: coreos_base_vm_name, coreos_base_ip, coreos_base_gateway, coreos_base_butane_template"
+      - infravm_vm_name is defined
+      - infravm_ip is defined
+      - infravm_gateway is defined
+      - infravm_butane_template is defined
+    fail_msg: "Required variables: infravm_vm_name, infravm_ip, infravm_gateway, infravm_butane_template"
 
 # -----------------------------------------------------------------------------
 # VM Existence Check
@@ -45,18 +30,18 @@
 
 - name: Set existing VM fact
   ansible.builtin.set_fact:
-    coreos_base_existing_vm: "{{ existing_vms.json.data | selectattr('name', 'eq', coreos_base_vm_name) | list | first | default(none) }}"
+    infravm_existing_vm: "{{ existing_vms.json.data | selectattr('name', 'eq', infravm_vm_name) | list | first | default(none) }}"
 
 - name: Display existing VM info
   ansible.builtin.debug:
-    msg: "Found existing VM '{{ coreos_base_vm_name }}' with VMID {{ coreos_base_existing_vm.vmid }} - skipping creation"
-  when: coreos_base_existing_vm is not none
+    msg: "Found existing VM '{{ infravm_vm_name }}' with VMID {{ infravm_existing_vm.vmid }} - skipping creation"
+  when: infravm_existing_vm is not none
 
 # -----------------------------------------------------------------------------
 # CoreOS Image and VM Creation (only if VM doesn't exist)
 # -----------------------------------------------------------------------------
 - name: Prepare and create CoreOS VM
-  when: coreos_base_existing_vm is none
+  when: infravm_existing_vm is none
   block:
     # -------------------------------------------------------------------------
     # CoreOS Image: Check if exists on Proxmox
@@ -194,15 +179,15 @@
         state: directory
         mode: "0755"
 
-    - name: Generate Butane config from caller's template
+    - name: Generate Butane config from template
       ansible.builtin.template:
-        src: "{{ coreos_base_butane_template }}"
-        dest: "{{ coreos_local_cache_dir }}/{{ coreos_base_vm_name }}.bu"
+        src: "{{ infravm_butane_template }}"
+        dest: "{{ coreos_local_cache_dir }}/{{ infravm_vm_name }}.bu"
         mode: "0644"
 
     - name: Convert Butane to Ignition JSON
       ansible.builtin.command:
-        cmd: "butane --strict {{ coreos_local_cache_dir }}/{{ coreos_base_vm_name }}.bu"
+        cmd: "butane --strict {{ coreos_local_cache_dir }}/{{ infravm_vm_name }}.bu"
       register: ignition_result
       changed_when: false
 
@@ -228,24 +213,24 @@
     # -------------------------------------------------------------------------
     - name: Build virtio disk configuration
       ansible.builtin.set_fact:
-        coreos_virtio_disks:
-          virtio0: "{{ proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ coreos_base_disk_size }}"
+        infravm_virtio_disks:
+          virtio0: "{{ proxmox_storage }}:0,import-from={{ coreos_image_storage_path }}/{{ coreos_qcow2_img_filename }},size={{ infravm_disk_size }}"
 
     - name: Add data disk if specified
       ansible.builtin.set_fact:
-        coreos_virtio_disks: "{{ coreos_virtio_disks | combine({'virtio1': proxmox_storage ~ ':' ~ (coreos_base_data_disk_size | regex_replace('[Gg]$', ''))}) }}"
-      when: coreos_base_data_disk_size | default('') | length > 0
+        infravm_virtio_disks: "{{ infravm_virtio_disks | combine({'virtio1': proxmox_storage ~ ':' ~ (infravm_data_disk_size | regex_replace('[Gg]$', ''))}) }}"
+      when: infravm_data_disk_size | default('') | length > 0
 
-    - name: Create CoreOS VM on Proxmox
+    - name: Create InfraVM on Proxmox
       community.proxmox.proxmox_kvm:
         api_host: "{{ proxmox_host }}"
         api_port: "{{ proxmox_port }}"
         api_user: "{{ proxmox_user }}"
         api_password: "{{ proxmox_password }}"
         node: "{{ proxmox_node }}"
-        name: "{{ coreos_base_vm_name }}"
-        cores: "{{ coreos_base_cores }}"
-        memory: "{{ coreos_base_memory }}"
+        name: "{{ infravm_vm_name }}"
+        cores: "{{ infravm_cores }}"
+        memory: "{{ infravm_memory }}"
         ostype: "l26"
         onboot: true
         autostart: true
@@ -254,7 +239,7 @@
           net0: "virtio,bridge={{ proxmox_vnet | default('vmbr0') }}"
         state: present
         timeout: 600
-        virtio: "{{ coreos_virtio_disks }}"
+        virtio: "{{ infravm_virtio_disks }}"
         boot: "order=virtio0"
         args: "{{ args_escaped }}"
       register: vm_create
@@ -262,34 +247,34 @@
 # -----------------------------------------------------------------------------
 # Set Output Facts
 # -----------------------------------------------------------------------------
-- name: Set coreos_base output facts
+- name: Set InfraVM output facts
   ansible.builtin.set_fact:
-    coreos_base_vmid: "{{ coreos_base_existing_vm.vmid if coreos_base_existing_vm is not none else vm_create.vmid }}"
-    coreos_base_vm_created: "{{ coreos_base_existing_vm is none }}"
+    infravm_vmid: "{{ infravm_existing_vm.vmid if infravm_existing_vm is not none else vm_create.vmid }}"
+    infravm_vm_created: "{{ infravm_existing_vm is none }}"
 
 # -----------------------------------------------------------------------------
-# Start VM and Wait for Guest Agent
+# Start VM
 # -----------------------------------------------------------------------------
-- name: Start CoreOS VM
+- name: Start InfraVM
   community.proxmox.proxmox_kvm:
     api_host: "{{ proxmox_host }}"
     api_port: "{{ proxmox_port }}"
     api_user: "{{ proxmox_user }}"
     api_password: "{{ proxmox_password }}"
     node: "{{ proxmox_node }}"
-    vmid: "{{ coreos_base_vmid }}"
+    vmid: "{{ infravm_vmid }}"
     state: started
 
-- name: Display CoreOS VM summary
+- name: Display InfraVM creation summary
   ansible.builtin.debug:
     msg: |
       ═══════════════════════════════════════════════════════════════════
-      CoreOS VM {{ 'created' if coreos_base_vm_created else 'found' }}
+      InfraVM {{ 'created' if infravm_vm_created else 'found' }}
       ═══════════════════════════════════════════════════════════════════
       
-      Name: {{ coreos_base_vm_name }}
-      VMID: {{ coreos_base_vmid }}
-      IP: {{ coreos_base_ip }}
-      Status: {{ 'Created new VM' if coreos_base_vm_created else 'Using existing VM' }}
+      Name: {{ infravm_vm_name }}
+      VMID: {{ infravm_vmid }}
+      IP: {{ infravm_ip }}
+      Status: {{ 'Created new VM' if infravm_vm_created else 'Using existing VM' }}
       
       ═══════════════════════════════════════════════════════════════════
