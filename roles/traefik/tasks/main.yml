@@ -4,6 +4,20 @@
 - name: Deploy Traefik
   when: traefik_enabled | default(true)
   block:
+    - name: Create Traefik config volume
+      ansible.builtin.raw: |
+        podman volume create traefik_config 2>/dev/null || true
+        VOLPATH=$(podman volume inspect traefik_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
+        # Create empty dynamic config file if not exists
+        touch "${VOLPATH}/dynamic.yml"
+        echo "Traefik config at ${VOLPATH}"
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_username }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      changed_when: true
+
     - name: Deploy Traefik stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
@@ -17,10 +31,12 @@
               container_name: traefik
               restart: unless-stopped
               network_mode: host
+              security_opt:
+                - label=disable
               volumes:
-                - /etc/traefik:/etc/traefik:ro
+                - traefik_config:/etc/traefik:ro
                 - traefik_data:/data
-                - /run/podman/podman.sock:/var/run/docker.sock:ro
+                - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
               command:
                 - --api.dashboard=true
                 - --api.insecure=true
@@ -32,6 +48,8 @@
                 - --providers.file.watch=true
                 - --log.level={{ traefik_log_level }}
           volumes:
+            traefik_config:
+              external: true
             traefik_data:
 
     - name: Wait for Traefik to be ready

@@ -32,15 +32,22 @@
             nexus_data:
 
     - name: Wait for Nexus to be ready
-      ansible.builtin.uri:
-        url: "http://{{ infravm_ip }}:{{ nexus_port }}/service/rest/v1/status"
-        method: GET
-        status_code: 200
-        validate_certs: false
-      register: nexus_status
-      until: nexus_status.status == 200
-      retries: 60
-      delay: 10
+      ansible.builtin.raw: |
+        for i in $(seq 1 60); do
+          if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:{{ nexus_port }}/service/rest/v1/status 2>/dev/null | grep -q '200'; then
+            echo "Nexus ready"
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "Nexus not ready after 600s"
+        exit 1
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_username }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      changed_when: false
 
     - name: Display Nexus status
       ansible.builtin.debug:
