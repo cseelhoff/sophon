@@ -1,22 +1,6 @@
 http:
   routers:
-    # Example router - uncomment and customize as needed
-    # myapp:
-    #   entryPoints:
-    #     - "https"
-    #   rule: "Host(`myapp.{{ traefik_domain }}`)"
-    #   middlewares:
-    #     - default-headers
-    #   tls: {}
-    #   service: myapp
-
   services:
-    # Example service - uncomment and customize as needed
-    # myapp:
-    #   loadBalancer:
-    #     servers:
-    #       - url: "http://myapp:8080"
-    #     passHostHeader: true
 
   middlewares:
     https-redirectscheme:

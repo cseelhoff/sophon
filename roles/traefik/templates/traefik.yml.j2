@@ -1,10 +1,6 @@
 api:
   dashboard: true
-  insecure: {{ traefik_api_insecure | default(false) | lower }}
-
-log:
-  level: {{ traefik_log_level }}
-
+  debug: true
 entryPoints:
   http:
     address: ":80"
@@ -15,9 +11,8 @@ entryPoints:
           scheme: https
   https:
     address: ":443"
-
 serversTransport:
-  insecureSkipVerify: {{ traefik_insecure_skip_verify | lower }}
+  insecureSkipVerify: true
 
 providers:
   docker:
@@ -29,13 +24,13 @@ providers:
     watch: true
 
 certificatesResolvers:
-  letsencrypt:
+  cloudflare:
     acme:
       email: "{{ traefik_acme_email }}"
       storage: /data/acme.json
       caServer: "{{ traefik_acme_server }}"
       dnsChallenge:
-        provider: {{ traefik_dns_provider }}
+        provider: cloudflare
         resolvers:
           - "1.1.1.1:53"
-          - "8.8.8.8:53"
+          - "1.0.0.1:53"

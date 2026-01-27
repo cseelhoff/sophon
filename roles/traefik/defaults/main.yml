@@ -7,10 +7,6 @@ portainer_port: 9443
 traefik_image_name: "traefik"
 traefik_image_tag: "v3.2"
 
-# Directories
-traefik_config_dir: "/opt/traefik"
-traefik_data_dir: "/opt/traefik/data"
-
 # Network ports
 traefik_port_http: 80
 traefik_port_https: 443
