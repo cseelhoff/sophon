@@ -4,7 +4,7 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 
 ## Architecture Overview
 
-<img src="./sophon.drawio.svg">
+<img src="./sophon.drawio.png">
 
 ### Key Components
 
