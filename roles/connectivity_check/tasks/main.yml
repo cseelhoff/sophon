@@ -70,15 +70,15 @@
       ═══════════════════════════════════════════════════════════
       ERROR: Cannot reach NFS server and no cloudflared token set
       ═══════════════════════════════════════════════════════════
-      
+
       Bootstrap cannot mount NFS at {{ connectivity_check_nfs_server }}:{{ connectivity_check_nfs_export }}
-      
+
       Options:
       1. Ensure network connectivity to {{ connectivity_check_nfs_server }}
       2. Provide cloudflared tunnel token for tunnel access:
-         
+
          ansible-playbook site.yml -e cloudflared_tunnel_token="your-tunnel-token"
-      
+
       ───────────────────────────────────────────────────────────
       How to get a Cloudflare Tunnel token (requires free account):
       ───────────────────────────────────────────────────────────
@@ -97,9 +97,9 @@
          - Service Type: SSH
          - URL: localhost:22
          - Click "Save hostname"
-      
+
       Your current infravm_ansible_host is set to: {{ infravm_ansible_host | default('(not set)') }}
-      
+
       ═══════════════════════════════════════════════════════════
   when:
     - not nfs_reachable

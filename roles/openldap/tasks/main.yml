@@ -59,18 +59,15 @@
             openldap_config:
 
     - name: Wait for OpenLDAP to be ready
-      ansible.builtin.uri:
-        url: "http://{{ infravm_ip }}:{{ openldap_port_admin }}"
-        method: GET
-        status_code: [200, 302]
-        validate_certs: false
+      ansible.builtin.raw: |
+        timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{{ openldap_port_ldap }}'
       delegate_to: "{{ infravm_ansible_host }}"
       vars:
         ansible_connection: ssh
         ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
       register: openldap_health
-      until: openldap_health.status in [200, 302]
+      until: openldap_health.rc == 0
       retries: 30
       delay: 5
 

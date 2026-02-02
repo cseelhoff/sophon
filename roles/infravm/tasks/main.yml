@@ -60,10 +60,6 @@
   register: nfs_debug
   ignore_errors: true
 
-- name: Show NFS debug output
-  ansible.builtin.debug:
-    var: nfs_debug.stdout
-
 - name: Wait for NFS mount on InfraVM
   ansible.builtin.raw: mountpoint -q /var/mnt/nfs
   register: nfs_mount_check
@@ -115,23 +111,18 @@
 # =============================================================================
 # Start Portainer Container (Rootless)
 # =============================================================================
-- name: Create and start Portainer container with systemd user service
+- name: Create and start Portainer container
   ansible.builtin.raw: |
-    # Clean up any old root-level portainer first
-    sudo systemctl stop portainer.service 2>/dev/null || true
-    sudo systemctl disable portainer.service 2>/dev/null || true
-    sudo podman rm -f portainer 2>/dev/null || true
-
-    # Check if portainer user service already exists and is running
-    if systemctl --user is-active portainer.service >/dev/null 2>&1; then
+    # Check if portainer is already running
+    if podman ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^portainer$'; then
       echo "ALREADY_RUNNING"
       exit 0
     fi
 
-    # Enable lingering so user services persist after logout
+    # Enable lingering so containers persist after logout
     loginctl enable-linger $(whoami)
 
-    # Enable and start podman socket for rootless podman
+    # Enable podman socket for rootless podman
     systemctl --user enable --now podman.socket
 
     # Wait for socket to appear
@@ -141,16 +132,13 @@
       sleep 1
     done
 
-    # Remove existing container if present
+    # Remove existing stopped container if present
     podman rm -f portainer 2>/dev/null || true
-
-    # Unmask service if previously masked
-    systemctl --user unmask portainer.service 2>/dev/null || true
 
     # Create portainer data volume if not exists
     podman volume create portainer_data 2>/dev/null || true
 
-    # Run the container with SELinux label disabled for socket access
+    # Run the container with restart policy
     podman run -d \
       --name portainer \
       --restart always \
@@ -159,14 +147,6 @@
       -v "$SOCKET_PATH":/var/run/docker.sock \
       -v portainer_data:/data:Z \
       docker.io/portainer/portainer-ce:{{ portainer_image_tag }}
-
-    # Generate systemd user unit file from running container
-    mkdir -p ~/.config/systemd/user
-    podman generate systemd --name portainer --new > ~/.config/systemd/user/portainer.service
-
-    # Reload systemd user daemon and enable the service
-    systemctl --user daemon-reload
-    systemctl --user enable portainer.service
 
     echo "STARTED"
   delegate_to: "{{ infravm_ansible_host }}"
@@ -194,26 +174,6 @@
     that:
       - portainer_admin_password | length >= 12
     fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
-
-- name: Debug Portainer status on InfraVM
-  ansible.builtin.raw: |
-    echo "=== Podman containers ==="
-    podman ps -a 2>&1 || echo "podman ps failed"
-    echo "=== Listening ports ==="
-    ss -tlnp 2>&1 | grep -E ':(9443|9000)' || echo "No Portainer ports listening"
-    echo "=== Curl test ==="
-    curl -sk -v "https://{{ infravm_ip }}:{{ portainer_port }}/api/status" 2>&1 || echo "curl failed"
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-  register: portainer_debug
-  ignore_errors: true
-
-- name: Show Portainer debug output
-  ansible.builtin.debug:
-    var: portainer_debug.stdout
 
 - name: Wait for Portainer API to be ready
   ansible.builtin.raw: |

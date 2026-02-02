@@ -81,7 +81,7 @@ systemd:
         What={{ nfs_server_ip }}:/export
         Where=/var/mnt/nfs
         Type=nfs4
-        Options={{ infravm_nfs_mount_options | default('ro,noatime,vers=4.1') }}
+        Options={{ infravm_nfs_mount_options | default('rw,noatime,vers=4.1') }}
 
         [Install]
         WantedBy=multi-user.target
