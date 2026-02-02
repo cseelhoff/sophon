@@ -73,26 +73,26 @@
     exec_script: |
       #!/bin/bash
       set -e
-      
+
       # Decode and apply environment variables
       echo "{{ env_block_b64 }}" | base64 -d > /tmp/sophon_env.sh
       source /tmp/sophon_env.sh
-      
+
       # Create target directory
       mkdir -p {{ qga_remote_exec_remote_path }}
-      
+
       # Extract sophon package
       cd /tmp
       tar -xzf {{ qga_remote_exec_package_name }}
       cp -r sophon/* {{ qga_remote_exec_remote_path }}/
-      
+
       # Run ansible-playbook
       cd {{ qga_remote_exec_remote_path }}
       ansible-playbook -i {{ qga_remote_exec_inventory }} {{ qga_remote_exec_playbook }} \
         -e "deployment_mode=qga_remote" \
         -e "skip_bastion_deployment=true" \
         2>&1 | tee /tmp/sophon_ansible.log
-      
+
       echo "SOPHON_EXEC_COMPLETE"
 
 - name: Base64 encode execution script

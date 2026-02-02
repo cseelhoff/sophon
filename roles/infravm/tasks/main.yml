@@ -84,8 +84,10 @@
     - name: Check and load each container image
       ansible.builtin.raw: >-
         IMAGE="{{ item }}";
-        BASENAME=$(echo "$IMAGE" | sed 's|.*/||' | sed 's|:.*||');
-        TARFILE="/var/mnt/nfs/containers/${BASENAME}.tar";
+        IMAGE_NO_TAG=$(echo "$IMAGE" | sed 's|:.*||');
+        ORG_NAME=$(echo "$IMAGE_NO_TAG" | rev | cut -d'/' -f1-2 | rev | tr '/' '-');
+        TAG=$(echo "$IMAGE" | sed 's|.*:||');
+        TARFILE="/var/mnt/nfs/containers/${ORG_NAME}_${TAG}.tar";
         if podman image exists "$IMAGE" 2>/dev/null; then
           echo "ALREADY_LOADED"; exit 0;
         fi;

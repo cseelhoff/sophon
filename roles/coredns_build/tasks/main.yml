@@ -1,0 +1,96 @@
+---
+- name: Check if CoreDNS image already exists
+  stat:
+    path: "{{ coredns_image_output }}"
+  register: coredns_image_stat
+
+- name: Build CoreDNS with dockerdiscovery plugin
+  when: coredns_force_rebuild or not coredns_image_stat.stat.exists
+  block:
+    - name: Create build directory
+      file:
+        path: "{{ coredns_build_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Clone CoreDNS repository
+      git:
+        repo: https://github.com/coredns/coredns.git
+        dest: "{{ coredns_build_dir }}"
+        version: "{{ coredns_version }}"
+        force: yes
+
+    - name: Add dockerdiscovery plugin to plugin.cfg
+      lineinfile:
+        path: "{{ coredns_build_dir }}/plugin.cfg"
+        line: "{{ coredns_dockerdiscovery_plugin }}"
+        insertafter: EOF
+
+    - name: Generate plugin imports
+      command: go generate
+      args:
+        chdir: "{{ coredns_build_dir }}"
+
+    - name: Fetch dockerdiscovery dependency
+      command: go get github.com/kevinjqiu/coredns-dockerdiscovery@latest
+      args:
+        chdir: "{{ coredns_build_dir }}"
+
+    - name: Tidy Go modules
+      command: go mod tidy
+      args:
+        chdir: "{{ coredns_build_dir }}"
+
+    - name: Build CoreDNS binary
+      command: make
+      args:
+        chdir: "{{ coredns_build_dir }}"
+
+    - name: Verify CoreDNS binary
+      command: ./coredns --version
+      args:
+        chdir: "{{ coredns_build_dir }}"
+      register: coredns_version_output
+
+    - name: Display CoreDNS version
+      debug:
+        var: coredns_version_output.stdout
+
+    - name: Create Dockerfile
+      copy:
+        dest: "{{ coredns_build_dir }}/Dockerfile"
+        content: |
+          FROM scratch
+          COPY coredns /coredns
+          EXPOSE 53 53/udp
+          ENTRYPOINT ["/coredns"]
+
+    - name: Build container image with buildah
+      command: buildah bud -t {{ coredns_image_name }}:{{ coredns_image_tag }} .
+      args:
+        chdir: "{{ coredns_build_dir }}"
+
+    - name: Ensure output directory exists
+      file:
+        path: "{{ coredns_image_output | dirname }}"
+        state: directory
+        mode: '0755'
+
+    - name: Export container image to tar
+      command: buildah push {{ coredns_image_name }}:{{ coredns_image_tag }} oci-archive:{{ coredns_image_output }}
+      args:
+        chdir: "{{ coredns_build_dir }}"
+
+    - name: Clean up build directory
+      file:
+        path: "{{ coredns_build_dir }}"
+        state: absent
+
+    - name: Display output location
+      debug:
+        msg: "CoreDNS image exported to {{ coredns_image_output }}"
+
+- name: Skip build (image already exists)
+  when: not coredns_force_rebuild and coredns_image_stat.stat.exists
+  debug:
+    msg: "CoreDNS image already exists at {{ coredns_image_output }}. Set coredns_force_rebuild=true to rebuild."

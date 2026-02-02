@@ -1,0 +1,19 @@
+---
+# CoreDNS version to build
+coredns_version: "v1.12.0"
+
+# Docker discovery plugin
+coredns_dockerdiscovery_plugin: "docker:github.com/kevinjqiu/coredns-dockerdiscovery"
+
+# Build directory
+coredns_build_dir: "/tmp/coredns-build"
+
+# Output image settings
+coredns_image_name: "coredns-dockerdiscovery"
+coredns_image_tag: "latest"
+
+# Output tar file location
+coredns_image_output: "{{ playbook_dir }}/nfs/coredns-dockerdiscovery.tar"
+
+# Whether to force rebuild even if tar already exists
+coredns_force_rebuild: false

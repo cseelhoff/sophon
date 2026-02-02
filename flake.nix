@@ -36,12 +36,12 @@
             libtool
             m4
             libxslt
-            fuse.dev      # Critical: provides fuse.h and pkg-config info
-            libnfs        # Provides headers and .pc file (no separate .dev output)
+            fuse.dev
+            libnfs
           ];
 
           buildInputs = with pkgs; [
-            fuse          # Runtime library (libfuse.so.2)
+            fuse
             libnfs
           ];
 
@@ -49,7 +49,9 @@
         };
       in
       {
-        packages.fuseNfs = fuseNfs;
+        packages = {
+          fuseNfs = fuseNfs;
+        };
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
@@ -67,21 +69,21 @@
             proot
             unixtools.xxd
             nfs-utils
-            fuse          # Provides fusermount + runtime libfuse2
+            fuse
             libnfs
             fuseNfs
             cloudflared
+            gnumake
+            go
+            git
+            cacert
+            buildah
           ];
 
           shellHook = ''
-            # Install Ansible collections if not present
             if [ ! -d "$HOME/.ansible/collections/ansible_collections/community/proxmox" ]; then
-              echo "Installing Ansible collections..."
               ansible-galaxy collection install community.proxmox community.general community.docker ansible.posix --force
             fi
-
-            echo "fuse-nfs is available at $(which fuse-nfs)"
-            echo "To unmount: fusermount -u ~/nfs   (or fusermount -z -u ~/nfs if busy)"
           '';
         };
       });

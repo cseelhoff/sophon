@@ -64,6 +64,11 @@
         method: GET
         status_code: [200, 302]
         validate_certs: false
+      delegate_to: "{{ infravm_ansible_host }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ infravm_username }}"
+        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
       register: openldap_health
       until: openldap_health.status in [200, 302]
       retries: 30

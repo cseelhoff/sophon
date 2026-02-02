@@ -54,8 +54,8 @@
         ansible_connection: ssh
         ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      changed_when: "'CONFIGURED' in result.stdout"
-      register: result
+      changed_when: "'CONFIGURED' in coredns_dnsstub_check.stdout"
+      register: coredns_dnsstub_check
 
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:
