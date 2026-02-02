@@ -33,9 +33,8 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 ```
 /export/
 ├── template/
-│   └── iso/                    # Proxmox ISO storage (cloudflared, VM images)
-│       ├── fedora-coreos-*.qcow2.iso
-│       └── cloudflared-linux-amd64.iso  # Only when cloudflared needed
+│   └── iso/                    # Proxmox ISO storage (VM images)
+│       └── fedora-coreos-*.qcow2.iso
 └── containers/                 # Container image tarballs
     ├── portainer-ce.tar
     ├── coredns.tar
@@ -76,14 +75,7 @@ After download, switch to the air-gapped network.
 1. **Attempt NFS mount**: Bootstrap tries `mount -t nfs {{ nfs_server_ip }}:/export /tmp/nfs_test`
 2. **Set facts:**
    - `nfs_reachable=true` → Bootstrap can reach NFS directly, no cloudflared needed
-   - `nfs_reachable=false` AND `cloudflared_tunnel_token` is set → Download cloudflared to NFS
-
-**Cloudflared download** (when needed):
-```
-POST /api2/json/nodes/{node}/storage/sophon-nfs/download-url
-  url: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-  filename: cloudflared-linux-amd64.iso
-```
+   - `nfs_reachable=false` AND `cloudflared_tunnel_token` is set → Enable cloudflared container on InfraVM
 
 #### Step 4: Create InfraVM
 
@@ -94,9 +86,9 @@ POST /api2/json/nodes/{node}/storage/sophon-nfs/download-url
    - Static IP configuration
    - SSH public key (`infravm_ssh_public_key`)
    - NFS mount at `/mnt/nfs` → `{{ nfs_server_ip }}:/export`
-   - Conditional cloudflared service (when `cloudflared_tunnel_token` is set):
-     - Copies `/mnt/nfs/template/iso/cloudflared-linux-amd64.iso` to `/usr/local/bin/cloudflared`
-     - Runs `cloudflared tunnel run` with token
+   - Conditional cloudflared container service (when `cloudflared_tunnel_token` is set):
+     - Runs `cloudflare/cloudflared:latest` container with `--network host`
+     - Executes `tunnel --no-autoupdate run --token <token>`
 3. **Create VM**: Proxmox creates InfraVM with Ignition passed via `fw_cfg`
 4. **Set Ansible target**: `infravm_ansible_host` defaults to `infravm.{{ domain_name }}`
    (resolves via cloudflared tunnel when `cloudflared_tunnel_token` is set)
@@ -469,9 +461,8 @@ provides tunnel access. This is automatically detected and configured.
 
 1. Bootstrap attempts to mount NFS from the target network
 2. If mount fails AND `CLOUDFLARED_TUNNEL_TOKEN` is set:
-   - Proxmox downloads cloudflared binary to NFS storage
-   - InfraVM Ignition config includes cloudflared service
-   - InfraVM runs cloudflared tunnel on boot
+   - InfraVM Ignition config includes cloudflared container service
+   - InfraVM pulls and runs `cloudflare/cloudflared:latest` container on boot
 3. Ansible connects to `infravm.{{ domain_name }}` via the tunnel
 
 ### Usage

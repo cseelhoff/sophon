@@ -52,6 +52,7 @@ nfs_content_container_images:
   - "docker.io/sonatype/nexus3:3.72.0"
   - "docker.io/osixia/openldap:1.5.0"
   - "docker.io/osixia/phpldapadmin:0.9.0"
+  - "docker.io/cloudflare/cloudflared:latest"  # For optional tunnel access
 
 # =============================================================================
 # CoreOS Image (for air-gapped prestaging)

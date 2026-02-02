@@ -23,8 +23,8 @@ connectivity_check_nfs_export: "/export"
 # Tunnel token (from environment variable)
 cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
 
-# URL to download cloudflared binary
-cloudflared_download_url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+# Cloudflared container image
+cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
 
 # =============================================================================
 # Output Facts

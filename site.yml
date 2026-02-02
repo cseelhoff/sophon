@@ -25,12 +25,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Check/deploy NFS server (if not already in Proxmox)
 # 2. Check Bootstrap connectivity to NFS
-# 3. If NFS unreachable AND cloudflared token set:
-#    - Download cloudflared binary to NFS via Proxmox API
-# 4. Deploy InfraVM (CoreOS with NFS mount + optional cloudflared)
-# 5. Load container images on InfraVM (via SSH)
-# 6. Initialize Portainer
-# 7. Deploy CoreDNS, Traefik, and other services via Portainer Stacks
+# 3. Deploy InfraVM (CoreOS with NFS mount + optional cloudflared container)
+# 4. Load container images on InfraVM (via SSH)
+# 5. Initialize Portainer
+# 6. Deploy CoreDNS, Traefik, and other services via Portainer Stacks
 #
 # AIR-GAPPED WORKFLOW:
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,70 +370,6 @@
         msg: |
           NFS Reachable: {{ nfs_reachable }}
           Cloudflared Enabled: {{ cloudflared_enabled | default(false) }}
-
-# =============================================================================
-# Step 3b: Download Cloudflared to NFS (if needed)
-# =============================================================================
-- name: Download Cloudflared to NFS
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [cloudflared, infrastructure]
-  tasks:
-    - name: Download cloudflared binary via Proxmox API
-      when: cloudflared_enabled | default(false)
-      block:
-        - name: Authenticate with Proxmox
-          ansible.builtin.include_role:
-            name: proxmox
-
-        - name: Check if cloudflared already exists on NFS
-          ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/sophon-nfs/content"
-            method: GET
-            headers:
-              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-          register: nfs_content_check
-          failed_when: false
-
-        - name: Set cloudflared exists fact
-          ansible.builtin.set_fact:
-            cloudflared_on_nfs: "{{ (nfs_content_check.json.data | default([]) | selectattr('volid', 'search', 'cloudflared-linux-amd64.iso') | list | length > 0) if nfs_content_check.status == 200 else false }}"
-
-        - name: Download cloudflared to NFS via Proxmox API
-          when: not cloudflared_on_nfs
-          ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/sophon-nfs/download-url"
-            method: POST
-            headers:
-              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-              CSRFPreventionToken: "{{ proxmox_csrf }}"
-            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-            body_format: form-urlencoded
-            body:
-              url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
-              filename: "cloudflared-linux-amd64.iso"
-              content: "iso"
-          register: cloudflared_download
-
-        - name: Wait for cloudflared download to complete
-          ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/tasks/{{ cloudflared_download.json.data | urlencode }}/status"
-            method: GET
-            headers:
-              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-          register: download_task_status
-          until: download_task_status.json.data.status == 'stopped'
-          retries: 60
-          delay: 5
-          when: cloudflared_download is changed
-
-        - name: Display cloudflared download result
-          ansible.builtin.debug:
-            msg: "Cloudflared binary downloaded to NFS at /export/template/iso/cloudflared-linux-amd64.iso"
-          when: not cloudflared_on_nfs
 
 # =============================================================================
 # Step 4: Deploy InfraVM

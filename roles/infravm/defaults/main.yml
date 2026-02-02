@@ -38,6 +38,9 @@ infravm_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.
 # Tunnel token for Cloudflared access to InfraVM
 cloudflared_tunnel_token: ""
 
+# Container image for cloudflared
+cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
+
 # =============================================================================
 # NFS Settings
 # =============================================================================

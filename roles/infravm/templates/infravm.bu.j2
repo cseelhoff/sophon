@@ -61,37 +61,13 @@ storage:
           dns={{ infravm_gateway }};8.8.8.8;
           method=manual
 
-{% if cloudflared_tunnel_token | default('') != '' %}
-    # Script to setup cloudflared from NFS
-    - path: /usr/local/bin/setup-cloudflared.sh
-      mode: 0755
-      contents:
-        inline: |
-          #!/bin/bash
-          set -e
-          
-          NFS_MOUNT="/var/mnt/nfs"
-          CLOUDFLARED_SRC="$NFS_MOUNT/template/iso/cloudflared-linux-amd64.iso"
-          CLOUDFLARED_DST="/usr/local/bin/cloudflared"
-          
-          # Copy cloudflared binary (remove .iso suffix workaround)
-          if [ -f "$CLOUDFLARED_SRC" ]; then
-            cp "$CLOUDFLARED_SRC" "$CLOUDFLARED_DST"
-            chmod +x "$CLOUDFLARED_DST"
-            echo "Cloudflared installed successfully"
-          else
-            echo "ERROR: Cloudflared not found at $CLOUDFLARED_SRC"
-            exit 1
-          fi
-{% endif %}
-
 systemd:
   units:
     # Enable rpcbind for NFS client
     - name: rpcbind.socket
       enabled: true
 
-    # NFS mount for container images and cloudflared
+    # NFS mount for container images
     - name: var-mnt-nfs.mount
       enabled: true
       contents: |
@@ -111,38 +87,39 @@ systemd:
         WantedBy=multi-user.target
 
 {% if cloudflared_tunnel_token | default('') != '' %}
-    # Setup cloudflared binary from NFS
-    - name: setup-cloudflared.service
+    # Load cloudflared image from NFS or pull from registry (runs once at first boot)
+    - name: load-cloudflared-image.service
       enabled: true
       contents: |
         [Unit]
-        Description=Setup cloudflared from NFS
-        After=var-mnt-nfs.mount
-        Requires=var-mnt-nfs.mount
-        ConditionPathExists=!/usr/local/bin/cloudflared
+        Description=Load cloudflared container image
+        After=var-mnt-nfs.mount network-online.target
+        Wants=var-mnt-nfs.mount network-online.target
 
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart=/usr/local/bin/setup-cloudflared.sh
+        ExecStart=/bin/sh -c 'test -f /var/mnt/nfs/containers/cloudflare-cloudflared_latest.tar && podman load -i /var/mnt/nfs/containers/cloudflare-cloudflared_latest.tar || podman pull {{ cloudflared_image | default("docker.io/cloudflare/cloudflared:latest") }}'
 
         [Install]
         WantedBy=multi-user.target
 
-    # Cloudflared tunnel service
+    # Cloudflared tunnel container service
     - name: cloudflared.service
       enabled: true
       contents: |
         [Unit]
-        Description=Cloudflared Tunnel
-        After=setup-cloudflared.service
-        Requires=setup-cloudflared.service
+        Description=Cloudflared Tunnel Container
+        After=network-online.target load-cloudflared-image.service
+        Wants=network-online.target
 
         [Service]
-        Type=simple
+        TimeoutStartSec=0
+        ExecStartPre=-/usr/bin/podman rm -f cloudflared
+        ExecStart=/usr/bin/podman run --name cloudflared --network host --rm {{ cloudflared_image | default('docker.io/cloudflare/cloudflared:latest') }} tunnel --no-autoupdate run --token {{ cloudflared_tunnel_token }}
+        ExecStop=/usr/bin/podman stop -t 10 cloudflared
         Restart=always
-        RestartSec=10
-        ExecStart=/usr/local/bin/cloudflared tunnel run --token {{ cloudflared_tunnel_token }}
+        RestartSec=5s
 
         [Install]
         WantedBy=multi-user.target
