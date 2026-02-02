@@ -47,9 +47,7 @@ Deploys Keycloak Identity and Access Management with SSO.
 - OIDC/SAML identity provider
 - Auto-provisions SSO clients for:
   - Gitea
-  - Nextcloud
-  - Guacamole
-  - n8n
+  - Nexus
   - Portainer
 - LDAP federation support
 - Realm export template

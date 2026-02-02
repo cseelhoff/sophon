@@ -4,7 +4,8 @@
   NOTE: Client secrets use ${VAR} syntax for Keycloak environment variable substitution.
   For this to work, matching environment variables must be set in docker-compose.yml.j2:
     - ${GITEA_CLIENT_SECRET} requires GITEA_CLIENT_SECRET env var
-    - ${NEXTCLOUD_CLIENT_SECRET} requires NEXTCLOUD_CLIENT_SECRET env var
+    - ${NEXUS_CLIENT_SECRET} requires NEXUS_CLIENT_SECRET env var
+    - ${PORTAINER_CLIENT_SECRET} requires PORTAINER_CLIENT_SECRET env var
     - ${LDAP_BIND_PASSWORD} requires LDAP_BIND_PASSWORD env var
   
   See: https://www.keycloak.org/server/configuration#_using_environment_variables

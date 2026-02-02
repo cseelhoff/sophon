@@ -32,19 +32,12 @@ jobs:
             ["coredns"]="coredns/coredns:1.12.0"
             ["portainer"]="portainer/portainer-ce:2.27.1"
             ["traefik"]="traefik:v3.2"
-            ["homepage"]="ghcr.io/gethomepage/homepage:v0.9.13"
             ["gitea"]="gitea/gitea:1.22"
             ["nexus"]="sonatype/nexus3:3.72.0"
             ["openldap"]="osixia/openldap:1.5.0"
             ["phpldapadmin"]="osixia/phpldapadmin:0.9.0"
             ["keycloak"]="quay.io/keycloak/keycloak:26.0"
-            ["nextcloud"]="nextcloud:29"
             ["postgres"]="postgres:16-alpine"
-            ["n8n"]="docker.n8n.io/n8nio/n8n:1.70.1"
-            ["guacamole"]="guacamole/guacamole:1.5.5"
-            ["guacd"]="guacamole/guacd:1.5.5"
-            ["docker-volume-backup"]="offen/docker-volume-backup:v2.43.0"
-            ["kopia"]="kopia/kopia:0.17"
             ["python"]="python:3.12-slim"
           )
           
@@ -85,10 +78,6 @@ jobs:
               echo "full_name=traefik:v3.2" >> $GITHUB_OUTPUT
               echo "filename=traefik.tar" >> $GITHUB_OUTPUT
               ;;
-            homepage)
-              echo "full_name=ghcr.io/gethomepage/homepage:v0.9.13" >> $GITHUB_OUTPUT
-              echo "filename=homepage.tar" >> $GITHUB_OUTPUT
-              ;;
             gitea)
               echo "full_name=gitea/gitea:1.22" >> $GITHUB_OUTPUT
               echo "filename=gitea.tar" >> $GITHUB_OUTPUT
@@ -109,33 +98,9 @@ jobs:
               echo "full_name=quay.io/keycloak/keycloak:26.0" >> $GITHUB_OUTPUT
               echo "filename=keycloak.tar" >> $GITHUB_OUTPUT
               ;;
-            nextcloud)
-              echo "full_name=nextcloud:29" >> $GITHUB_OUTPUT
-              echo "filename=nextcloud.tar" >> $GITHUB_OUTPUT
-              ;;
             postgres)
               echo "full_name=postgres:16-alpine" >> $GITHUB_OUTPUT
               echo "filename=postgres.tar" >> $GITHUB_OUTPUT
-              ;;
-            n8n)
-              echo "full_name=docker.n8n.io/n8nio/n8n:1.70.1" >> $GITHUB_OUTPUT
-              echo "filename=n8n.tar" >> $GITHUB_OUTPUT
-              ;;
-            guacamole)
-              echo "full_name=guacamole/guacamole:1.5.5" >> $GITHUB_OUTPUT
-              echo "filename=guacamole.tar" >> $GITHUB_OUTPUT
-              ;;
-            guacd)
-              echo "full_name=guacamole/guacd:1.5.5" >> $GITHUB_OUTPUT
-              echo "filename=guacd.tar" >> $GITHUB_OUTPUT
-              ;;
-            docker-volume-backup)
-              echo "full_name=offen/docker-volume-backup:v2.43.0" >> $GITHUB_OUTPUT
-              echo "filename=docker-volume-backup.tar" >> $GITHUB_OUTPUT
-              ;;
-            kopia)
-              echo "full_name=kopia/kopia:0.17" >> $GITHUB_OUTPUT
-              echo "filename=kopia.tar" >> $GITHUB_OUTPUT
               ;;
             python)
               echo "full_name=python:3.12-slim" >> $GITHUB_OUTPUT

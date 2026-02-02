@@ -42,24 +42,13 @@ keycloak_clients:
     redirect_uris:
       - "https://git.{{ domain_name }}/*"
     enabled: "{{ gitea_enabled | default(false) }}"
-  - client_id: nextcloud
-    name: "Nextcloud"
-    redirect_uris:
-      - "https://cloud.{{ domain_name }}/*"
-    enabled: "{{ nextcloud_enabled | default(false) }}"
-  - client_id: guacamole
-    name: "Guacamole"
-    redirect_uris:
-      - "https://remote.{{ domain_name }}/*"
-    public_client: true
-    enabled: "{{ guacamole_enabled | default(false) }}"
-  - client_id: n8n
-    name: "n8n"
-    redirect_uris:
-      - "https://n8n.{{ domain_name }}/*"
-    enabled: "{{ n8n_enabled | default(false) }}"
   - client_id: portainer
     name: "Portainer"
     redirect_uris:
       - "https://portainer.{{ domain_name }}/*"
     enabled: "{{ portainer_enabled | default(false) }}"
+  - client_id: nexus
+    name: "Nexus"
+    redirect_uris:
+      - "https://nexus.{{ domain_name }}/*"
+    enabled: "{{ nexus_enabled | default(false) }}"

@@ -42,15 +42,6 @@
       delegate_to: localhost
       when: coredns_enabled | default(true)
 
-    - name: Check Homepage
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ homepage_port | default(3000) }}"
-        method: GET
-        timeout: "{{ health_check_timeout }}"
-      register: homepage_health
-      failed_when: false
-      when: homepage_enabled | default(true)
-
     - name: Check Gitea
       ansible.builtin.uri:
         url: "http://{{ ansible_host }}:{{ gitea_port_http | default(3001) }}/api/v1/version"
@@ -87,42 +78,6 @@
       failed_when: false
       when: keycloak_enabled | default(true)
 
-    - name: Check Nextcloud
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ nextcloud_port | default(8083) }}/status.php"
-        method: GET
-        timeout: "{{ health_check_timeout }}"
-      register: nextcloud_health
-      failed_when: false
-      when: nextcloud_enabled | default(true)
-
-    - name: Check n8n
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ n8n_port | default(5678) }}/healthz"
-        method: GET
-        timeout: "{{ health_check_timeout }}"
-      register: n8n_health
-      failed_when: false
-      when: n8n_enabled | default(true)
-
-    - name: Check Guacamole
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ guacamole_port | default(8090) }}/guacamole/"
-        method: GET
-        timeout: "{{ health_check_timeout }}"
-      register: guacamole_health
-      failed_when: false
-      when: guacamole_enabled | default(true)
-
-    - name: Check Kopia
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ kopia_port | default(51515) }}"
-        method: GET
-        timeout: "{{ health_check_timeout }}"
-      register: kopia_health
-      failed_when: false
-      when: kopia_enabled | default(true)
-
     - name: Display Health Check Results
       ansible.builtin.debug:
         msg: |
@@ -132,17 +87,12 @@
           ║ Service       │ Status │ Details                             ║
           ╠═══════════════╪════════╪═════════════════════════════════════╣
           ║ Portainer     │ {{ '✅ UP  ' if portainer_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ portainer_port | default(9443) }}{{ ' - ' + (portainer_health.msg | default('')) if portainer_health.status | default(0) != 200 else '' }}
-          ║ Traefik       │ {{ '✅ UP  ' if traefik_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ traefik_port_ui | default(8080) }}
           ║ CoreDNS       │ {{ '✅ UP  ' if coredns_health.rc | default(1) == 0 else '❌ DOWN' }} │ Port 53
-          ║ Homepage      │ {{ '✅ UP  ' if homepage_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ homepage_port | default(3000) }}
-          ║ Gitea         │ {{ '✅ UP  ' if gitea_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ gitea_port_http | default(3001) }}
-          ║ Nexus         │ {{ '✅ UP  ' if nexus_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ nexus_port | default(8081) }}
           ║ OpenLDAP      │ {{ '✅ UP  ' if openldap_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ openldap_port_admin | default(8089) }}
           ║ Keycloak      │ {{ '✅ UP  ' if keycloak_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ keycloak_port | default(8180) }}
-          ║ Nextcloud     │ {{ '✅ UP  ' if nextcloud_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ nextcloud_port | default(8083) }}
-          ║ n8n           │ {{ '✅ UP  ' if n8n_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ n8n_port | default(5678) }}
-          ║ Guacamole     │ {{ '✅ UP  ' if guacamole_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ guacamole_port | default(8090) }}
-          ║ Kopia         │ {{ '✅ UP  ' if kopia_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ kopia_port | default(51515) }}
+          ║ Traefik       │ {{ '✅ UP  ' if traefik_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ traefik_port_ui | default(8080) }}
+          ║ Nexus         │ {{ '✅ UP  ' if nexus_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ nexus_port | default(8081) }}
+          ║ Gitea         │ {{ '✅ UP  ' if gitea_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ gitea_port_http | default(3001) }}
           ╚══════════════════════════════════════════════════════════════╝
 
     - name: Fail if critical services are down

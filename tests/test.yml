@@ -13,24 +13,14 @@ domain_name: "sophon.test"
 traefik_acme_enabled: false
 validate_certs: false
 
-# Use local directories for testing
-backup_local_path: "/tmp/sophon-backup"
-kopia_data_dir: "/tmp/sophon-kopia"
-
-# Enable all services for full integration test
+# Enable all core services for full integration test
 portainer_enabled: true
 coredns_enabled: true
-traefik_enabled: true
-homepage_enabled: true
-gitea_enabled: true
-nexus_enabled: true
 openldap_enabled: true
 keycloak_enabled: true
-nextcloud_enabled: true
-n8n_enabled: true
-guacamole_enabled: true
-backup_enabled: true
-kopia_enabled: true
+traefik_enabled: true
+nexus_enabled: true
+gitea_enabled: true
 
 # Test credentials - generated at runtime for security
 # Uses Ansible's password lookup to generate random passwords
@@ -39,7 +29,4 @@ portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=asci
 openldap_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
 keycloak_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
 gitea_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-nextcloud_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-guacamole_db_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
 nexus_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-kopia_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"

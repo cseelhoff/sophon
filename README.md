@@ -115,9 +115,11 @@ For each image in `infravm_container_images`:
 Container image list:
 - `docker.io/portainer/portainer-ce:2.27.1`
 - `docker.io/coredns/coredns:1.12.0`
+- `docker.io/osixia/openldap:1.5.0`
+- `docker.io/quay.io/keycloak/keycloak:26.0`
 - `docker.io/traefik:v3.2`
-- `docker.io/gitea/gitea:1.21`
 - `docker.io/sonatype/nexus3:3.72.0`
+- `docker.io/gitea/gitea:1.21`
 
 #### Step 6: Install Portainer
 
@@ -153,14 +155,14 @@ Deploy via Portainer Stacks API:
 
 #### Future Steps
 
-Additional services to be integrated:
-- OpenLDAP (directory service)
-- Keycloak (SSO/identity)
-- Homepage (dashboard)
-- Nextcloud (file sync)
-- n8n (workflow automation)
-- Guacamole (remote desktop)
-- Kopia (backup)
+Core services deployed:
+1. CoreDNS (DNS server)
+2. OpenLDAP (directory service)
+3. Keycloak (SSO/identity)
+4. Traefik (reverse proxy)
+5. Portainer (container management)
+6. Nexus (artifact repository)
+7. Gitea (Git server)
 
 ## Quick Start
 
@@ -292,18 +294,13 @@ sophon/
 │   ├── connectivity_check/ # NFS mount reachability testing
 │   ├── qga_remote_exec/  # QGA-based remote execution
 │   ├── portainer_stack/  # Stack deployment API
-│   ├── traefik/          # Reverse proxy
 │   ├── coredns/          # DNS server
-│   ├── homepage/         # Dashboard
-│   ├── gitea/            # Git server
-│   ├── nexus/            # Artifact repository
 │   ├── openldap/         # Directory service
 │   ├── keycloak/         # Identity/SSO
-│   ├── nextcloud/        # File sync
-│   ├── n8n/              # Workflow automation
-│   ├── guacamole/        # Remote desktop gateway
-│   ├── backup/           # Volume backups
-│   └── kopia/            # Filesystem backups
+│   ├── traefik/          # Reverse proxy
+│   ├── dns_sync/         # Syncs Traefik routers to CoreDNS
+│   ├── nexus/            # Artifact repository
+│   └── gitea/            # Git server
 └── tests/
     ├── molecule/         # Test configurations
     └── test.sh           # Molecule test runner
@@ -357,12 +354,6 @@ Keycloak provides single sign-on for all services. To enable:
 # group_vars/all.yml or vault.yml
 gitea_oauth_enabled: true
 gitea_oauth_client_secret: "{{ vault_keycloak_gitea_client_secret }}"
-
-nextcloud_oidc_enabled: true
-nextcloud_oidc_client_secret: "{{ vault_keycloak_nextcloud_client_secret }}"
-
-guacamole_oidc_enabled: true
-n8n_oidc_enabled: true
 ```
 
 3. Generate client secrets:
@@ -379,11 +370,11 @@ Each role can be enabled/disabled via `-e` flags or role defaults:
 ```yaml
 # group_vars/all.yml
 traefik_enabled: true
-nextcloud_enabled: false
-n8n_enabled: true
-guacamole_enabled: true
-backup_enabled: true
-kopia_enabled: true
+coredns_enabled: true
+openldap_enabled: true
+keycloak_enabled: true
+nexus_enabled: true
+gitea_enabled: true
 ```
 
 ## Deployment Order
@@ -393,17 +384,12 @@ The `site.yml` playbook deploys services in dependency order:
 1. **nfs_server** - NFS storage VM (if needed)
 2. **infravm** - InfraVM (CoreOS VM running Portainer + all containers)
 3. **coredns** - DNS server
-4. **traefik** - Reverse proxy
-5. **homepage** - Dashboard
-6. **gitea** - Git server
-7. **nexus** - Artifacts
-8. **openldap** - Directory
-9. **keycloak** - SSO (depends on openldap if LDAP enabled)
-10. **nextcloud** - Files
-11. **n8n** - Automation
-12. **guacamole** - Remote desktop
-13. **backup** - Volume backups
-14. **kopia** - Filesystem backups
+4. **openldap** - Directory service
+5. **keycloak** - SSO (depends on openldap if LDAP enabled)
+6. **traefik** - Reverse proxy
+7. **dns_sync** - Syncs Traefik routers to CoreDNS
+8. **nexus** - Artifact repository
+9. **gitea** - Git server
 
 ## Podman & NFS Architecture
 
@@ -522,7 +508,7 @@ ansible-playbook site.yml
 # Verify services
 ssh admin@<coreos-ip> "podman ps"
 curl -k https://<coreos-ip>:9443/api/status  # Portainer
-curl http://<coreos-ip>:3000                  # Homepage
+curl http://<coreos-ip>:3000                  # Gitea
 ```
 
 ## Linting

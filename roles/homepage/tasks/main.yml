@@ -1,8 +1,0 @@
----
-# Deploy Homepage Dashboard
-# TODO: Rewrite to use portainer_stack approach (no delegate_to)
-
-- name: Skip homepage deployment (disabled)
-  ansible.builtin.debug:
-    msg: "Homepage role is disabled (homepage_enabled=false)"
-  when: not (homepage_enabled | default(false))

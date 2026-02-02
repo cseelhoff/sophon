@@ -1,8 +1,0 @@
----
-# Deploy Nextcloud
-# TODO: Rewrite to use portainer_stack approach (no delegate_to)
-
-- name: Skip nextcloud deployment (disabled)
-  ansible.builtin.debug:
-    msg: "Nextcloud role is disabled (nextcloud_enabled=false)"
-  when: not (nextcloud_enabled | default(false))

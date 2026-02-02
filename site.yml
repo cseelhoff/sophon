@@ -41,7 +41,7 @@
 #
 # TAGS:
 # ─────────────────────────────────────────────────────────────────────────────
-#   ansible-playbook site.yml --tags "traefik,homepage"
+#   ansible-playbook site.yml --tags "traefik,gitea"
 
 - name: Gather Required Variables
   hosts: localhost
@@ -451,6 +451,9 @@
 # =============================================================================
 # Step 5-10: Deploy Services via Portainer Stacks
 # =============================================================================
+# =============================================================================
+# Core Services (The Big 7)
+# =============================================================================
 - name: Deploy CoreDNS
   hosts: localhost
   connection: local
@@ -458,46 +461,6 @@
   tags: [coredns, dns, infrastructure]
   roles:
     - coredns
-
-- name: Deploy Traefik
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [traefik, proxy, infrastructure]
-  roles:
-    - traefik
-
-- name: Deploy DNS Sync
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [dns_sync, dns, infrastructure]
-  roles:
-    - dns_sync
-
-- name: Deploy Homepage
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [homepage, dashboard]
-  roles:
-    - homepage
-
-- name: Deploy Gitea
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [gitea, git, development]
-  roles:
-    - gitea
-
-- name: Deploy Nexus
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [nexus, artifacts, development]
-  roles:
-    - nexus
 
 - name: Deploy OpenLDAP
   hosts: localhost
@@ -515,45 +478,37 @@
   roles:
     - keycloak
 
-- name: Deploy Nextcloud
+- name: Deploy Traefik
   hosts: localhost
   connection: local
   gather_facts: false
-  tags: [nextcloud, files, collaboration]
+  tags: [traefik, proxy, infrastructure]
   roles:
-    - nextcloud
+    - traefik
 
-- name: Deploy n8n
+- name: Deploy DNS Sync
   hosts: localhost
   connection: local
   gather_facts: false
-  tags: [n8n, automation, workflow]
+  tags: [dns_sync, dns, infrastructure]
   roles:
-    - n8n
+    - dns_sync
 
-- name: Deploy Guacamole
+- name: Deploy Nexus
   hosts: localhost
   connection: local
   gather_facts: false
-  tags: [guacamole, remote, access]
+  tags: [nexus, artifacts, development]
   roles:
-    - guacamole
+    - nexus
 
-- name: Deploy Backup
+- name: Deploy Gitea
   hosts: localhost
   connection: local
   gather_facts: false
-  tags: [backup, infrastructure]
+  tags: [gitea, git, development]
   roles:
-    - backup
-
-- name: Deploy Kopia
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [kopia, backup, infrastructure]
-  roles:
-    - kopia
+    - gitea
 
 # =============================================================================
 # Final Summary
@@ -588,7 +543,6 @@
           Other Credentials:
             Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
             Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
-            Nextcloud Admin:     {{ nextcloud_admin_password | default('not generated') }}
             Nexus Admin:         {{ nexus_admin_password | default('not generated') }}
             OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
 
