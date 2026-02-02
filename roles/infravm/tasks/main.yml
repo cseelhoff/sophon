@@ -95,13 +95,6 @@
           podman load -i "$TARFILE"; echo "LOADED_FROM_NFS"; exit 0;
         fi;
         podman pull "$IMAGE";
-        if touch /var/mnt/nfs/containers/.write_test 2>/dev/null; then
-          rm -f /var/mnt/nfs/containers/.write_test;
-          podman save -o "$TARFILE" "$IMAGE";
-          echo "PULLED_AND_CACHED";
-        else
-          echo "PULLED_NO_CACHE";
-        fi
       loop: "{{ infravm_container_images }}"
       register: container_load_results
       changed_when: "'LOADED_FROM_NFS' in container_load_results.stdout or 'PULLED' in container_load_results.stdout"
