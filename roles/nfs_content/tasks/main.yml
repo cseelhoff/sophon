@@ -72,7 +72,7 @@
           ansible.builtin.shell:
             cmd: |
               cd {{ nfs_content_local_staging_dir }}/iso
-              curl -L -o fedora-coreos.qcow2.xz "{{ nfs_content_coreos_url }}"
+              curl -L -o fedora-coreos.qcow2.xz "{{ infravm_coreos_url }}"
               xz -d fedora-coreos.qcow2.xz
           register: coreos_download
 
@@ -134,7 +134,7 @@
           -H "CSRFPreventionToken: {{ proxmox_csrf }}"
           -F "content=iso"
           -F "filename=@{{ item.path }};filename={{ item.path | basename }}.iso"
-          "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/local/upload"
+          "{{ proxmox_api }}/nodes/{{ proxmox_node | default('pve') }}/storage/local/upload"
       loop: "{{ containers.files }}"
       register: container_upload
       when: containers.files | length > 0
@@ -144,11 +144,11 @@
       block:
         - name: Wait for upload tasks to complete
           ansible.builtin.uri:
-            url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/tasks/{{ (item.stdout | from_json).data | urlencode }}/status"
+            url: "{{ proxmox_api }}/nodes/{{ proxmox_node | default('pve') }}/tasks/{{ (item.stdout | from_json).data | urlencode }}/status"
             method: GET
             headers:
               Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+            validate_certs: "{{ proxmox_validate_certs }}"
           register: task_status
           until: task_status.json.data.status == 'stopped'
           retries: 120
@@ -163,7 +163,7 @@
             node: "{{ proxmox_node | default('pve') }}"
             pve_auth_cookie: "{{ proxmox_ticket }}"
             proxmox_csrf_token: "{{ proxmox_csrf }}"
-            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+            validate_certs: "{{ proxmox_validate_certs }}"
             timeout: 60
             command: |
               for f in /var/lib/vz/template/iso/*.tar.iso; do
@@ -190,7 +190,7 @@
           -H "CSRFPreventionToken: {{ proxmox_csrf }}"
           -F "content=iso"
           -F "filename=@{{ nfs_content_source_dir }}/iso/fedora-coreos.qcow2;filename=fedora-coreos.qcow2.iso"
-          "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/storage/local/upload"
+          "{{ proxmox_api }}/nodes/{{ proxmox_node | default('pve') }}/storage/local/upload"
       register: coreos_upload
 
     - name: Display upload summary
@@ -204,6 +204,6 @@
           CoreOS image uploaded to: Proxmox local storage
           
           Next Steps:
-          Run: ansible-playbook site.yml -e airgapped_mode=true
+          Run: ansible-playbook site.yml -e proxmox_airgapped=true
           
           ═══════════════════════════════════════════════════════════════════

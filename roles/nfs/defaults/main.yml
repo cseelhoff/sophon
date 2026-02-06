@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# NFS Server Role - Custom Alpine NFS Server  
+# NFS Server Role - Custom Alpine NFS Server
 # =============================================================================
 # Deploys a custom-built Alpine Linux VM on Proxmox configured as an NFS server.
 # The OS image is built on the Ansible controller using alpine-make-vm-image,
@@ -9,33 +9,27 @@
 # Depends on: proxmox role (via meta/main.yml)
 
 # Enable/disable this role
-nfs_server_enabled: true
+nfs_enabled: true
 
 # =============================================================================
 # VM Configuration
 # =============================================================================
-nfs_server_vm_name: "sophon-nfs"
-nfs_server_cores: 1
-nfs_server_memory: 512
-nfs_server_os_disk_size: "2G"     # OS disk (Alpine with NFS services)
-nfs_server_data_disk_size: "100G" # NFS storage disk (/dev/vdb, thin provisioned)
+nfs_vm_name: "sophon-nfs"
+nfs_cores: 1
+nfs_memory: 512
+nfs_os_disk_size: "2G"     # OS disk (Alpine with NFS services)
+nfs_data_disk_size: "100G" # NFS storage disk (/dev/vdb, thin provisioned)
 
 # =============================================================================
 # Network Configuration (Static IP Required)
 # =============================================================================
 # NFS server must have a static IP since other VMs depend on it.
 # Gateway and netmask are derived from Proxmox vnet configuration.
-# nfs_server_ip: "10.0.1.35"  # Required - set via -e or prompted
-
-# Optional: Override default Proxmox vnet (bridge)
-# proxmox_vnet: "vmbr0"
-
-# DNS server for NFS VM
-nfs_server_dns: "1.1.1.1"
+nfs_ip: ""  # Required - set via -e or prompted
 
 # Root password for NFS VM (defaults to proxmox_password if not set)
-# Can be overridden with -e nfs_server_root_password=<password>
-# nfs_server_root_password: "{{ proxmox_password }}"
+# Can be overridden with -e nfs_root_password=<password>
+# nfs_root_password: "{{ proxmox_password }}"
 
 # =============================================================================
 # Alpine Image Build Configuration
@@ -44,45 +38,45 @@ nfs_server_dns: "1.1.1.1"
 # https://github.com/alpinelinux/alpine-make-vm-image
 
 # Alpine version for the custom image
-nfs_server_alpine_version: "3.21"
+nfs_alpine_version: "3.21"
 
 # Local paths for image building and caching
-nfs_server_build_dir: "/tmp/sophon_nfs_build"
-nfs_server_image_filename: "sophon-nfs-alpine.qcow2"
-nfs_server_image_cache_path: "{{ nfs_server_build_dir }}/{{ nfs_server_image_filename }}"
+nfs_build_dir: "nfs_vm_build"
+nfs_image_filename: "sophon-nfs-alpine.qcow2"
+nfs_image_path: "{{ nfs_build_dir }}/{{ nfs_image_filename }}"
 
 # For air-gapped mode: path to prestaged image
-nfs_server_prestaged_image_path: "{{ nfs_content_local_staging_dir | default('/tmp/sophon_prestage') }}/{{ nfs_server_image_filename }}"
+nfs_prestaged_image_path: "{{ nfs_content_local_staging_dir }}/{{ nfs_image_filename }}"
 
 # alpine-make-vm-image script location (vendored in files/ or downloaded)
-nfs_server_alpine_make_vm_image_url: "https://raw.githubusercontent.com/alpinelinux/alpine-make-vm-image/master/alpine-make-vm-image"
-nfs_server_alpine_make_vm_image_path: "{{ nfs_server_build_dir }}/alpine-make-vm-image"
+nfs_alpine_make_vm_image_url: "https://raw.githubusercontent.com/alpinelinux/alpine-make-vm-image/master/alpine-make-vm-image"
+nfs_alpine_make_vm_image_path: "{{ nfs_build_dir }}/alpine-make-vm-image"
 
 # Proxmox storage paths
-nfs_server_image_storage: "local"
-nfs_server_image_storage_path: "/var/lib/vz/template/iso"
+nfs_image_storage: "local"
+nfs_image_storage_path: "/var/lib/vz/template/iso"
 
 # =============================================================================
-# NFS Export Configuration  
+# NFS Export Configuration
 # =============================================================================
 # Root export directory (mounted from /dev/vdb - the data disk)
-nfs_server_export_root: "/export"
+nfs_export_root: "/export"
 
 # Pre-created export directories
-nfs_server_export_paths:
-  - "{{ nfs_server_export_root }}/nexus/docker-proxy"
-  - "{{ nfs_server_export_root }}/nexus/yum-proxy"
-  - "{{ nfs_server_export_root }}/sophon/images"
-  - "{{ nfs_server_export_root }}/sophon/bin"
+nfs_export_paths:
+  - "{{ nfs_export_root }}/nexus/docker-proxy"
+  - "{{ nfs_export_root }}/nexus/yum-proxy"
+  - "{{ nfs_export_root }}/sophon/images"
+  - "{{ nfs_export_root }}/sophon/bin"
 
 # NFS export options
-nfs_server_export_options: "rw,sync,no_subtree_check,no_root_squash"
+nfs_export_options: "rw,sync,no_subtree_check,no_root_squash"
 
 # =============================================================================
 # Proxmox Storage Integration
 # =============================================================================
 # Name for the NFS storage in Proxmox
-nfs_server_proxmox_storage_name: "sophon-nfs"
+nfs_storage_name: "sophon-nfs"
 
 # Content types to enable on the Proxmox NFS storage
-nfs_server_proxmox_content_types: "images,iso,backup,snippets"
+nfs_proxmox_content_types: "images,iso,backup,snippets"

@@ -70,6 +70,7 @@
       until: openldap_health.rc == 0
       retries: 30
       delay: 5
+      changed_when: false
 
     - name: Display OpenLDAP status
       ansible.builtin.debug:

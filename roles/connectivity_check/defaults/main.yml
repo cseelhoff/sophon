@@ -5,26 +5,11 @@
 # Tests if Bootstrap (Ansible controller) can reach the NFS server network.
 # Determines if cloudflared tunnel is needed for InfraVM access.
 
-# Enable/disable this role
-connectivity_check_enabled: true
-
 # =============================================================================
 # NFS Connectivity Test Settings
 # =============================================================================
-# NFS server IP to test connectivity
-connectivity_check_nfs_server: "{{ nfs_server_ip | default('') }}"
-
 # NFS export path to verify (checked via showmount -e)
-connectivity_check_nfs_export: "/export"
 
-# =============================================================================
-# Cloudflared Settings
-# =============================================================================
-# Tunnel token (from environment variable)
-cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
-
-# Cloudflared container image
-cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
 
 # =============================================================================
 # Output Facts

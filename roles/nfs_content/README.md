@@ -6,14 +6,14 @@ Prepares NFS shares with RPM packages and container images for CoreOS first-boot
 
 - SSH access to the NFS server
 - Tools on the Ansible controller: `skopeo`, `dnf`, `rsync`
-- The NFS server IP should be set via `nfs_server_ip` variable
+- The NFS server IP should be set via `nfs_ip` variable
 
 ## Role Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `nfs_content_enabled` | `true` | Enable/disable this role |
-| `nfs_content_server` | `{{ nfs_server_ip }}` | NFS server hostname/IP |
+| `nfs_content_server` | `{{ nfs_ip }}` | NFS server hostname/IP |
 | `nfs_content_rpm_path` | `{{ nfs_rpm_packages_path }}` | Path on NFS for RPMs |
 | `nfs_content_docker_path` | `{{ nfs_docker_images_path }}` | Path on NFS for container images |
 | `nfs_content_fedora_version` | `43` | Fedora version for RPM downloads |
@@ -55,7 +55,7 @@ Or install manually:
   roles:
     - role: nfs_content
       vars:
-        nfs_server_ip: "10.1.1.35"
+        nfs_ip: "10.1.1.35"
         nfs_rpm_packages_path: "/exports/nexus/yum-proxy"
         nfs_docker_images_path: "/exports/nexus/docker-proxy"
 ```

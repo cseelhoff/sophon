@@ -15,6 +15,7 @@
     ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: portainer_stack_auth_response
+  changed_when: false
 
 - name: Parse auth token
   ansible.builtin.set_fact:
@@ -30,10 +31,12 @@
     ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: portainer_stack_endpoints_response
+  changed_when: false
 
 - name: Parse endpoints
   ansible.builtin.set_fact:
     portainer_stack_endpoints: "{{ portainer_stack_endpoints_response.stdout | trim | default('[]') | from_json }}"
+  changed_when: false
 
 - name: Find or create local endpoint
   when: portainer_stack_endpoints | length == 0
@@ -52,10 +55,7 @@
         ansible_user: "{{ infravm_username }}"
         ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
       register: portainer_stack_endpoint_create
-
-    - name: Debug endpoint create response
-      ansible.builtin.debug:
-        var: portainer_stack_endpoint_create.stdout
+      changed_when: portainer_stack_endpoints | length == 0
 
     - name: Parse new endpoint ID
       ansible.builtin.set_fact:
@@ -76,25 +76,30 @@
     ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: portainer_stack_list_response
+  changed_when: false
 
 - name: Parse stacks list
   ansible.builtin.set_fact:
     portainer_stack_list: "{{ portainer_stack_list_response.stdout | trim | default('[]') | from_json }}"
+  changed_when: false
 
 - name: Check if stack already exists
   ansible.builtin.set_fact:
     portainer_stack_existing: "{{ portainer_stack_list | selectattr('Name', 'equalto', portainer_stack_name) | list | first | default(none) }}"
+  changed_when: false
 
 - name: Prepare stack compose content
   ansible.builtin.set_fact:
-    _stack_compose_escaped: "{{ portainer_stack_compose_content | to_json }}"
+    portainer_stack_compose_escaped: "{{ portainer_stack_compose_content | to_json }}"
+  changed_when: false
 
 - name: Deploy new stack to Portainer
   ansible.builtin.raw: |
     curl -sk -X POST "https://{{ infravm_ip }}:{{ portainer_port }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}" \
       -H "Authorization: Bearer {{ portainer_stack_auth_token }}" \
       -H "Content-Type: application/json" \
-      -d '{"env":{{ portainer_stack_env_vars | default([]) | to_json }},"fromAppTemplate":false,"name":"{{ portainer_stack_name }}","stackFileContent":{{ _stack_compose_escaped }}}'
+      -d '{"env":{{ portainer_stack_env_vars | default([]) | to_json }},"fromAppTemplate":false,"name":"{{ portainer_stack_name }}",' \
+      -d '"stackFileContent":{{ portainer_stack_compose_escaped }}}'
   delegate_to: "{{ infravm_ansible_host }}"
   vars:
     ansible_connection: ssh
@@ -102,11 +107,7 @@
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   register: portainer_stack_deploy_result
   when: portainer_stack_existing is none
-
-- name: Debug stack deploy response
-  ansible.builtin.debug:
-    var: portainer_stack_deploy_result.stdout
-  when: portainer_stack_deploy_result is defined and portainer_stack_deploy_result.stdout is defined
+  changed_when: portainer_stack_existing is none
 
 - name: Fail if stack deployment failed
   ansible.builtin.fail:
@@ -129,3 +130,4 @@
     ansible_user: "{{ infravm_username }}"
     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
   when: portainer_stack_existing is not none
+  changed_when: portainer_stack_existing is not none

@@ -6,7 +6,7 @@
 
 - name: Authenticate to Proxmox API
   ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/access/ticket"
+    url: "{{ proxmox_api }}/access/ticket"
     method: POST
     body_format: form-urlencoded
     body:
@@ -21,3 +21,23 @@
     proxmox_ticket: "{{ proxmox_auth.json.data.ticket }}"
     proxmox_csrf: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
   when: proxmox_ticket is not defined
+
+- name: Get existing VMs from Proxmox
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: proxmox_existing_vms
+  when: proxmox_existing_vms is not defined
+
+- name: Check if image already exists on Proxmox
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage/{{ proxmox_iso_storage_id }}/content?content=iso"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: proxmox_iso_content
+  when: proxmox_iso_content is not defined

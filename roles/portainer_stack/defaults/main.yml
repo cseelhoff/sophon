@@ -6,6 +6,3 @@ portainer_stack_name: "default_stack"
 portainer_stack_env_vars: []
 portainer_stack_validate_certs: false
 portainer_stack_compose_content: ""
-
-# Portainer connection
-portainer_port: 9443

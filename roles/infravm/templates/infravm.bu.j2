@@ -57,8 +57,8 @@ storage:
           match-device=type:ethernet
 
           [ipv4]
-          address1={{ infravm_ip }}/{{ infravm_cidr }},{{ infravm_gateway }}
-          dns={{ infravm_gateway }};8.8.8.8;
+          address1={{ infravm_ip }}/{{ proxmox_cidr }},{{ proxmox_vnet_gateway }}
+          dns={{ proxmox_vnet_gateway }};8.8.8.8;
           method=manual
 
 systemd:
@@ -78,7 +78,7 @@ systemd:
         Requires=rpcbind.socket
 
         [Mount]
-        What={{ nfs_server_ip }}:/export
+        What={{ nfs_ip }}:/export
         Where=/var/mnt/nfs
         Type=nfs4
         Options={{ infravm_nfs_mount_options | default('rw,noatime,vers=4.1') }}
@@ -86,7 +86,7 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
-{% if cloudflared_tunnel_token | default('') != '' %}
+{% if infravm_cloudflared_tunnel_token | default('') != '' %}
     # Load cloudflared image from NFS or pull from registry (runs once at first boot)
     - name: load-cloudflared-image.service
       enabled: true
@@ -99,7 +99,7 @@ systemd:
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart=/bin/sh -c 'test -f /var/mnt/nfs/containers/cloudflare-cloudflared_latest.tar && podman load -i /var/mnt/nfs/containers/cloudflare-cloudflared_latest.tar || podman pull {{ cloudflared_image | default("docker.io/cloudflare/cloudflared:latest") }}'
+        ExecStart=/bin/sh -c 'test -f /var/mnt/nfs/containers/cloudflare-cloudflared_latest.tar && podman load -i /var/mnt/nfs/containers/cloudflare-cloudflared_latest.tar || podman pull {{ infravm_cloudflared_image }}'
 
         [Install]
         WantedBy=multi-user.target
@@ -116,7 +116,7 @@ systemd:
         [Service]
         TimeoutStartSec=0
         ExecStartPre=-/usr/bin/podman rm -f cloudflared
-        ExecStart=/usr/bin/podman run --name cloudflared --network host --rm {{ cloudflared_image | default('docker.io/cloudflare/cloudflared:latest') }} tunnel --no-autoupdate run --token {{ cloudflared_tunnel_token }}
+        ExecStart=/usr/bin/podman run --name cloudflared --network host --rm {{ infravm_cloudflared_image }} tunnel --no-autoupdate run --token {{ infravm_cloudflared_tunnel_token }}
         ExecStop=/usr/bin/podman stop -t 10 cloudflared
         Restart=always
         RestartSec=5s

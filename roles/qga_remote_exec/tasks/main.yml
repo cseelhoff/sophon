@@ -48,7 +48,7 @@
 # -----------------------------------------------------------------------------
 - name: Upload sophon package to VM via QGA file-write
   ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/file-write"
+    url: "{{ proxmox_api }}/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/file-write"
     method: POST
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
@@ -101,7 +101,7 @@
 
 - name: Upload execution script via QGA file-write
   ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/file-write"
+    url: "{{ proxmox_api }}/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/file-write"
     method: POST
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
@@ -115,7 +115,7 @@
 
 - name: Execute script on VM via QGA exec
   ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/exec"
+    url: "{{ proxmox_api }}/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/exec"
     method: POST
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
@@ -144,7 +144,7 @@
 
 - name: Poll for execution completion
   ansible.builtin.uri:
-    url: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/exec-status?pid={{ exec_pid }}"
+    url: "{{ proxmox_api }}/nodes/{{ qga_remote_exec_node }}/qemu/{{ qga_remote_exec_vmid }}/agent/exec-status?pid={{ exec_pid }}"
     method: GET
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"

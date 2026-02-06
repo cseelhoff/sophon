@@ -21,7 +21,7 @@ dependencies:
 Or include explicitly in tasks:
 
 ```yaml
-- include_role:
+- ansible.builtin.include_role:
     name: proxmox
 ```
 
@@ -32,7 +32,7 @@ After running, `proxmox_ticket` and `proxmox_csrf` facts are available for API c
 Execute commands inside a VM via the QEMU Guest Agent:
 
 ```yaml
-- include_role:
+- ansible.builtin.include_role:
     name: proxmox
     tasks_from: qga_exec
   vars:

@@ -28,16 +28,16 @@ This role is the first step in the Sophon deployment workflow. It creates a shar
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `nfs_server_enabled` | `true` | Enable/disable this role |
-| `nfs_server_ip` | **required** | Static IP address (must be specified) |
-| `nfs_server_vm_name` | `sophon-nfs` | VM name in Proxmox |
-| `nfs_server_cores` | `1` | CPU cores |
-| `nfs_server_memory` | `512` | RAM in MB |
-| `nfs_server_boot_disk_size` | `1G` | Ephemeral OS disk (stateless) |
-| `nfs_server_data_disk_size` | `100G` | Data disk for NFS exports (thin provisioned, persistent) |
-| `nfs_server_proxmox_storage_name` | `sophon-nfs` | Name in Proxmox storage list |
-| `nfs_server_export_root` | `/export` | Root export path |
-| `nfs_server_export_paths` | See defaults | List of export directories to create |
+| `nfs_enabled` | `true` | Enable/disable this role |
+| `nfs_ip` | **required** | Static IP address (must be specified) |
+| `nfs_vm_name` | `sophon-nfs` | VM name in Proxmox |
+| `nfs_cores` | `1` | CPU cores |
+| `nfs_memory` | `512` | RAM in MB |
+| `nfs_boot_disk_size` | `1G` | Ephemeral OS disk (stateless) |
+| `nfs_data_disk_size` | `100G` | Data disk for NFS exports (thin provisioned, persistent) |
+| `nfs_storage_name` | `sophon-nfs` | Name in Proxmox storage list |
+| `nfs_export_root` | `/export` | Root export path |
+| `nfs_export_paths` | See defaults | List of export directories to create |
 
 ## Disk Layout
 
@@ -61,7 +61,7 @@ On first boot, if virtio0 (`/dev/vda`) is unformatted:
 
 ## NFS Exports
 
-Default exports (configurable via `nfs_server_export_paths`):
+Default exports (configurable via `nfs_export_paths`):
 
 ```
 /export
@@ -86,7 +86,7 @@ All exports use options: `rw,sync,no_subtree_check,no_root_squash`
   roles:
     - role: nfs_server
       vars:
-        nfs_server_ip: "10.0.1.35"
+        nfs_ip: "10.0.1.35"
 ```
 
 ## Workflow Integration
@@ -94,7 +94,7 @@ All exports use options: `rw,sync,no_subtree_check,no_root_squash`
 This role integrates with the Sophon deployment workflow:
 
 1. **Detection**: `site.yml` checks if `sophon-nfs` storage exists in Proxmox
-2. **Deployment**: If not found and `nfs_server_ip` is set, deploys NFS server
+2. **Deployment**: If not found and `nfs_ip` is set, deploys NFS server
 3. **Storage**: Adds NFS to Proxmox as `sophon-nfs` storage
 4. **Content**: `nfs_content` role populates exports with images/RPMs
 5. **CoreOS**: Mounts NFS exports to load content at first boot
@@ -111,7 +111,7 @@ ansible-playbook prestage.yml
 ansible-playbook nfs-upload.yml
 
 # Phase 3: Deploy creates NFS server from uploaded image
-ansible-playbook site.yml -e airgapped_mode=true -e nfs_server_ip=10.0.1.35
+ansible-playbook site.yml -e proxmox_airgapped=true -e nfs_ip=10.0.1.35
 ```
 
 ## Troubleshooting

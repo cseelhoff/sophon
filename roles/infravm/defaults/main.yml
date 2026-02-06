@@ -4,9 +4,6 @@
 # =============================================================================
 # This role creates a CoreOS VM and deploys Portainer + all services.
 
-# Enable/disable this role
-infravm_enabled: true
-
 # =============================================================================
 # VM Configuration
 # =============================================================================
@@ -15,16 +12,12 @@ infravm_cores: 2
 infravm_memory: 4096
 infravm_disk_size: "32G"
 
-# Network (required - auto-discovered or prompted if not set)
-# infravm_ip: "10.0.1.10"
-# infravm_gateway: "10.0.1.1"
-infravm_cidr: "24"
-
 # User Configuration
 infravm_username: "core"
-# Default password hash for 'core' user (password: changeme)
-# Generate new hash with: mkpasswd --method=yescrypt 'yourpassword'
-infravm_password_hash: "$y$j9T$wf0/OmORycv3Xxlk9UeqM1$mgpcsOS5y9GPMgHfDxrpDoimDMM9wuIY4efuYmvRcqA"
+# Password for the core user (defaults to proxmox_password if not set)
+infravm_password: "{{ proxmox_password }}"
+# Password hash generated dynamically using yescrypt
+infravm_password_hash: "{{ infravm_password | password_hash('yescrypt') }}"
 
 # SSH public key for core user (required for Ansible access)
 infravm_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
@@ -36,10 +29,10 @@ infravm_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.
 # Cloudflared Settings (optional - enables tunnel access)
 # =============================================================================
 # Tunnel token for Cloudflared access to InfraVM
-cloudflared_tunnel_token: ""
+infravm_cloudflared_tunnel_token: ""
 
 # Container image for cloudflared
-cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
+infravm_cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
 
 # =============================================================================
 # NFS Settings
@@ -71,14 +64,13 @@ infravm_container_images:
 # =============================================================================
 # CoreOS Image
 # =============================================================================
-coreos_qcow2_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"
-coreos_qcow2_xz_filename: "{{ coreos_qcow2_url | basename }}"
-coreos_qcow2_img_filename: "{{ coreos_qcow2_xz_filename | regex_replace('\\.xz$', '') }}"
-coreos_qcow2_iso_filename: "{{ coreos_qcow2_img_filename }}.iso"
+infravm_coreos_url: |
+  https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/
+  43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz
+infravm_coreos_xz_filename: "{{ infravm_coreos_url | basename }}"
+infravm_coreos_qcow2_filename: "{{ infravm_coreos_xz_filename | regex_replace('\\.xz$', '') }}"
+infravm_coreos_iso_filename: "{{ infravm_coreos_qcow2_filename }}.iso"
 
-# Proxmox storage for the CoreOS image
-coreos_image_storage: "local"
-coreos_image_storage_path: "/var/lib/vz/template/iso"
 
 # =============================================================================
 # Local Cache/Download Directories

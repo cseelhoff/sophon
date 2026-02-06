@@ -10,10 +10,10 @@
 #   ansible-playbook site.yml
 #
 # Air-Gapped Mode (after running prestage.yml and nfs-upload.yml):
-#   ansible-playbook site.yml -e airgapped_mode=true
+#   ansible-playbook site.yml -e proxmox_airgapped=true
 #
 # With Cloudflared tunnel (for remote access when Bootstrap cannot reach NFS):
-#   CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook site.yml
+#   infravm_cloudflared_tunnel_token=xxx ansible-playbook site.yml
 #
 # Skip prompts (CI/scripting):
 #   ansible-playbook site.yml \
@@ -35,32 +35,19 @@
 # Phase 1 (on internet):   ansible-playbook prestage.yml
 # --- SWITCH NETWORKS ---
 # Phase 2 (on air-gapped): ansible-playbook nfs-upload.yml
-# Phase 3 (on air-gapped): ansible-playbook site.yml -e airgapped_mode=true
+# Phase 3 (on air-gapped): ansible-playbook site.yml -e proxmox_airgapped=true
 #
 # TAGS:
 # ─────────────────────────────────────────────────────────────────────────────
 #   ansible-playbook site.yml --tags "traefik,gitea"
 
-- name: Gather Required Variables
+- name: Deploy Sophon
   hosts: localhost
-  connection: local
-  gather_facts: false
   tags: [always]
   tasks:
-    - name: Load from environment or CLI
-      ansible.builtin.set_fact:
-        proxmox_host: "{{ proxmox_host | default(lookup('env', 'PROXMOX_HOST')) | default('', true) }}"
-        domain_name: "{{ domain_name | default(lookup('env', 'DOMAIN_NAME')) | default('', true) }}"
-        proxmox_password: "{{ proxmox_password | default(lookup('env', 'PROXMOX_PASSWORD')) | default('', true) }}"
-        infravm_ip: "{{ infravm_ip | default(lookup('env', 'INFRAVM_IP')) | default('', true) }}"
-        nfs_server_ip: "{{ nfs_server_ip | default(lookup('env', 'NFS_SERVER_IP')) | default('', true) }}"
-        proxmox_vnet: "{{ proxmox_vnet | default(lookup('env', 'PROXMOX_VNET')) | default('vmbr0', true) }}"
-        cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
-        airgapped_mode: "{{ airgapped_mode | default(false) }}"
-
     - name: Prompt for missing Proxmox host
       ansible.builtin.pause:
-        prompt: "Proxmox API host"
+        prompt: "Proxmox API host (IP or hostname)"
       register: _ph
       when: proxmox_host == ""
 
@@ -77,56 +64,29 @@
       register: _pp
       when: proxmox_password == ""
 
-    - name: Set prompted values
+    - name: Set updated variable values
       ansible.builtin.set_fact:
-        proxmox_host: "{{ _ph.user_input | default(proxmox_host, true) }}"
-        domain_name: "{{ _dn.user_input | default(domain_name, true) }}"
-        proxmox_password: "{{ _pp.user_input | default(proxmox_password, true) }}"
+        proxmox_host: "{{ _ph.user_input | default(proxmox_host) }}"
+        domain_name: "{{ _dn.user_input | default(domain_name) }}"
+        proxmox_password: "{{ _pp.user_input | default(proxmox_password) }}"
+        proxmox_api: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json"
 
-# =============================================================================
-# IP Address Auto-Discovery
-# =============================================================================
-- name: Auto-Discover IP Addresses
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [always]
-  tasks:
     - name: Authenticate with Proxmox
-      ansible.builtin.include_role:
-        name: proxmox
+      ansible.builtin.include_role: { name: proxmox }
 
-    # -------------------------------------------------------------------------
-    # NFS Server IP Discovery
-    # -------------------------------------------------------------------------
-    - name: Check for existing sophon-nfs storage
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/storage"
-        method: GET
-        headers:
-          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-      register: _storage_list
-      when: nfs_server_ip == ""
-
-    - name: Extract NFS server IP from existing storage
-      ansible.builtin.set_fact:
-        nfs_server_ip: "{{ (_storage_list.json.data | selectattr('storage', 'eq', 'sophon-nfs') | first).server }}"
-      when:
-        - nfs_server_ip == ""
-        - _storage_list is defined
-        - _storage_list.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0
+    - name: Deploy NFS Server
+      ansible.builtin.include_role: { name: nfs }
 
     # -------------------------------------------------------------------------
     # InfraVM IP Discovery
     # -------------------------------------------------------------------------
     - name: Check for existing sophon-infravm VM
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/cluster/resources?type=vm"
+        url: "{{ proxmox_api }}/cluster/resources?type=vm"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
       register: _vm_list
       when: infravm_ip == ""
 
@@ -134,19 +94,17 @@
       ansible.builtin.set_fact:
         _infravm_vm: "{{ _vm_list.json.data | selectattr('name', 'eq', 'sophon-infravm') | first | default({}) }}"
       when:
-        - infravm_ip == ""
         - _vm_list is defined
 
     - name: Get InfraVM config for MAC address
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ _infravm_vm.node }}/qemu/{{ _infravm_vm.vmid }}/config"
+        url: "{{ proxmox_api }}/nodes/{{ _infravm_vm.node }}/qemu/{{ _infravm_vm.vmid }}/config"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
       register: _infravm_config
       when:
-        - infravm_ip == ""
         - _infravm_vm is defined
         - _infravm_vm.vmid is defined
 
@@ -154,7 +112,6 @@
       ansible.builtin.set_fact:
         _infravm_mac: "{{ _infravm_config.json.data.net0 | regex_search('([0-9A-Fa-f:]{17})') | lower }}"
       when:
-        - infravm_ip == ""
         - _infravm_config is defined
         - _infravm_config.json.data.net0 is defined
 
@@ -163,23 +120,23 @@
     # -------------------------------------------------------------------------
     - name: Get Proxmox network configuration
       ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/nodes/{{ proxmox_node | default('pve') }}/network"
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node | default('pve') }}/network"
         method: GET
         headers:
           Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
       register: _proxmox_network
-      when: (nfs_server_ip == "") or (infravm_ip == "")
+      when: (nfs_ip == "") or (infravm_ip == "") or (proxmox_vnet_gateway == "") or (proxmox_cidr == "")
 
     - name: Find vnet configuration
       ansible.builtin.set_fact:
-        _vnet_config: "{{ _proxmox_network.json.data | selectattr('iface', 'eq', proxmox_vnet) | first | default({}) }}"
+        _vnet_config: "{{ _proxmox_network.json.data | selectattr('iface', 'eq', proxmox_vnet_interface) | first | default({}) }}"
       when: _proxmox_network is defined
 
     - name: Extract network base from vnet
       ansible.builtin.set_fact:
-        _network_base: "{{ _vnet_config.address | default(_vnet_config.gateway | default('')) | regex_replace('\\.[0-9]+$', '') }}"
-        _gateway: "{{ _vnet_config.gateway | default(_vnet_config.address | default('') | regex_replace('\\.[0-9]+$', '.1')) }}"
+        _network_base: "{{ _vnet_config.address | regex_replace('\\.[0-9]+$', '') }}"
+        proxmox_vnet_gateway: "{{ proxmox_vnet_gateway | default(_vnet_config.gateway) }}"
       when:
         - _vnet_config is defined
         - _vnet_config | length > 0
@@ -189,21 +146,22 @@
     # -------------------------------------------------------------------------
     - name: Scan network for used IPs
       when:
-        - (nfs_server_ip == "") or (infravm_ip == "") or (_infravm_mac is defined)
-        - _network_base is defined
-        - _network_base != ""
+        - (nfs_ip == "") or (infravm_ip == "")
       block:
         - name: Install arp-scan and discover network hosts on Proxmox
           proxmox_shell:
             api_host: "{{ proxmox_host }}"
-            api_port: "{{ proxmox_port | default(8006) }}"
-            api_user: "{{ proxmox_user | default('root@pam') }}"
-            node: "{{ proxmox_node | default('pve') }}"
+            api_port: "{{ proxmox_port }}"
+            api_user: "{{ proxmox_user }}"
+            node: "{{ proxmox_node }}"
             pve_auth_cookie: "{{ proxmox_ticket }}"
             proxmox_csrf_token: "{{ proxmox_csrf }}"
-            validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+            validate_certs: "{{ proxmox_validate_certs }}"
             timeout: 60
-            command: "apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1; arp-scan -I {{ proxmox_vnet }} -l 2>/dev/null | awk '/^[0-9]+\\./ {print $1, tolower($2)}'"
+            command: >-
+              apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1;
+              arp-scan -I {{ proxmox_vnet_interface }} -l 2>/dev/null |
+              awk '/^[0-9]+\./ {print $1, tolower($2)}'
           register: _arp_scan_result
 
         - name: Parse ARP scan results (IP and MAC pairs)
@@ -230,67 +188,45 @@
                 | reject('eq', _vnet_config.address | default(''))
                 | list
               }}
+          when: _network_base is defined
 
         - name: Set discovered NFS IP
           ansible.builtin.set_fact:
-            nfs_server_ip: "{{ _available_ips[0] }}"
+            nfs_ip: "{{ _available_ips[0] }}"
           when:
-            - nfs_server_ip == ""
+            - nfs_ip == ""
             - _available_ips | length > 0
+
+        - name: Remove NFS IP from available IPs
+          ansible.builtin.set_fact:
+            _available_ips: "{{ _available_ips | reject('eq', nfs_ip) | list }}"
+          when:
+            - nfs_ip != ""
+            - _available_ips is defined
 
         - name: Set discovered InfraVM IP
           ansible.builtin.set_fact:
-            infravm_ip: "{{ _available_ips[0] if nfs_server_ip != '' else _available_ips[1] }}"
+            infravm_ip: "{{ _available_ips[0] }}"
           when:
             - infravm_ip == ""
-            - _available_ips | length >= 1
-
-    # -------------------------------------------------------------------------
-    # Final Prompts (if auto-discovery failed)
-    # -------------------------------------------------------------------------
-    - name: Prompt for NFS IP if not discovered
-      ansible.builtin.pause:
-        prompt: "NFS server IP (auto-discovery failed)"
-      register: _nfs_prompt
-      when: nfs_server_ip == ""
-
-    - name: Set prompted NFS IP
-      ansible.builtin.set_fact:
-        nfs_server_ip: "{{ _nfs_prompt.user_input }}"
-      when:
-        - nfs_server_ip == ""
-        - _nfs_prompt.user_input is defined
-
-    - name: Prompt for InfraVM IP if not discovered
-      ansible.builtin.pause:
-        prompt: "InfraVM static IP (auto-discovery failed)"
-      register: _infravm_prompt
-      when: infravm_ip == ""
-
-    - name: Set prompted InfraVM IP
-      ansible.builtin.set_fact:
-        infravm_ip: "{{ _infravm_prompt.user_input }}"
-      when:
-        - infravm_ip == ""
-        - _infravm_prompt.user_input is defined
+            - _available_ips | length > 0
 
     # -------------------------------------------------------------------------
     # Derive Gateway and CIDR
     # -------------------------------------------------------------------------
     - name: Set gateway and CIDR from vnet
       ansible.builtin.set_fact:
-        infravm_gateway: "{{ _gateway | default(infravm_ip | regex_replace('\\.[0-9]+$', '.1')) }}"
-        proxmox_cidr: >-
-          {%- if _vnet_config.cidr is defined and '/' in (_vnet_config.cidr | string) -%}
-            {{ (_vnet_config.cidr | string).split('/')[1] }}
-          {%- elif _vnet_config.cidr is defined -%}
-            {{ _vnet_config.cidr }}
-          {%- elif _vnet_config.netmask is defined -%}
-            {{ (_vnet_config.netmask | ansible.utils.ipaddr('prefix')) | default('24') }}
-          {%- else -%}
-            24
-          {%- endif -%}
-      when: infravm_gateway is not defined or infravm_gateway == ""
+        proxmox_vnet_gateway: "{{ proxmox_vnet_gateway }}"
+        proxmox_cidr: "{{ proxmox_cidr }}"
+        # >-
+          # {%- if _vnet_config.cidr is defined and '/' in (_vnet_config.cidr | string) -%}
+          #   {{ (_vnet_config.cidr | string).split('/')[1] }}
+          # {%- elif _vnet_config.cidr is defined -%}
+          #   {{ _vnet_config.cidr }}
+          # {%- else -%}
+          #   {{ (_vnet_config.netmask | ansible.utils.ipaddr('prefix')) }}
+          # {%- endif -%}
+      when: (proxmox_vnet_gateway == "") or (proxmox_cidr == "")
 
     - name: Display final IP configuration
       ansible.builtin.debug:
@@ -298,78 +234,138 @@
           ═══════════════════════════════════════════════════════════════════
           IP ADDRESS CONFIGURATION
           ═══════════════════════════════════════════════════════════════════
-          NFS Server IP:    {{ nfs_server_ip }}
+          NFS Server IP:    {{ nfs_ip }}
+          InfraVM IP:       {{ infravm_ip }}
+          Gateway:          {{ proxmox_vnet_gateway }}
+          CIDR:             {{ proxmox_cidr }}
+          Vnet:             {{ proxmox_vnet_interface }}
+          Cloudflared:      {{ 'ENABLED' if infravm_cloudflared_tunnel_token != '' else 'DISABLED' }}
+          ═══════════════════════════════════════════════════════════════════
+ 
+    - ansible.builtin.include_role: { name: coredns }
+ 
+    # - name: Set global SSH connection facts
+    #   ansible.builtin.set_fact:
+    #     infravm_ansible_host: "{{ 'infra.' ~ domain_name if infravm_cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
+    #   when: infravm_gateway is not defined or infravm_gateway == ""
+
+    - name: Display final IP configuration
+      ansible.builtin.debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════════
+          IP ADDRESS CONFIGURATION
+          ═══════════════════════════════════════════════════════════════════
+          NFS Server IP:    {{ nfs_ip }}
           InfraVM IP:       {{ infravm_ip }}
           Gateway:          {{ infravm_gateway }}
           CIDR:             {{ proxmox_cidr | default('24') }}
-          Vnet:             {{ proxmox_vnet }}
-          Cloudflared:      {{ 'ENABLED' if cloudflared_tunnel_token != '' else 'DISABLED' }}
+          Vnet:             {{ proxmox_vnet_interface }}
+          Cloudflared:      {{ 'ENABLED' if infravm_cloudflared_tunnel_token != '' else 'DISABLED' }}
           ═══════════════════════════════════════════════════════════════════
 
-    - name: Set global SSH connection facts
-      ansible.builtin.set_fact:
-        infravm_ansible_host: "{{ 'infra.' ~ domain_name if cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
+    # - name: Set global SSH connection facts
+    #   ansible.builtin.set_fact:
+    #     infravm_ansible_host: "{{ 'infra.' ~ domain_name if infravm_cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
 
 # =============================================================================
 # Step 2: NFS Server Detection and Deployment
 # =============================================================================
-- name: Check and Deploy NFS Server
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [nfs, infrastructure]
-  tasks:
-    - name: Authenticate with Proxmox
-      ansible.builtin.include_role:
-        name: proxmox
-
-    - name: Check if NFS storage exists in Proxmox
-      ansible.builtin.uri:
-        url: "https://{{ proxmox_host }}:{{ proxmox_port | default(8006) }}/api2/json/storage"
-        method: GET
-        headers:
-          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
-      register: proxmox_storage_query
 
     - name: Set NFS detection facts
       ansible.builtin.set_fact:
-        sophon_nfs_exists: "{{ proxmox_storage_query.json.data | selectattr('storage', 'eq', 'sophon-nfs') | list | length > 0 }}"
-        proxmox_storage: "{{ proxmox_storage | default('local-lvm') }}"
+        sophon_nfs_exists: "{{ proxmox_disk_storage_id_query.json.data | selectattr('storage', 'eq', nfs_storage_name) | list | length > 0 }}"
 
-    - name: Deploy NFS server if needed
-      when:
-        - not sophon_nfs_exists
-        - nfs_server_ip | default('') | length > 0
-      block:
-        - name: Display NFS deployment notice
-          ansible.builtin.debug:
-            msg: "Deploying Alpine-based NFS server at {{ nfs_server_ip }}..."
-
-        - name: Deploy NFS Server
-          ansible.builtin.include_role:
-            name: nfs_server
+    - name: Deploy NFS Server
+      ansible.builtin.include_role:
+        name: nfs
+      when: not sophon_nfs_exists
 
 # =============================================================================
 # Step 3: Bootstrap Connectivity Check
 # =============================================================================
-- name: Check Bootstrap Connectivity to NFS
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tags: [connectivity, infrastructure]
-  tasks:
-    - name: Check if Bootstrap can reach NFS
-      ansible.builtin.include_role:
-        name: connectivity_check
-      vars:
-        connectivity_check_nfs_server: "{{ nfs_server_ip }}"
 
-    - name: Display connectivity result
+    - name: Create temporary mount point
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: nfs_test_
+      register: nfs_temp_mount
+
+    - name: Test NFS mount
+      ansible.builtin.shell:
+        cmd: |
+          # Try to mount NFS share using fuse-nfs (no root required)
+          if fuse-nfs -n nfs://{{ nfs_ip }}/export {{ nfs_temp_mount.path }} 2>/dev/null; then
+            echo "NFS_REACHABLE"
+            exit 0
+          else
+            echo "NFS_UNREACHABLE"
+            exit 1
+          fi
+      register: nfs_check_result
+      failed_when: false
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Set NFS reachability fact
+      ansible.builtin.set_fact:
+        nfs_reachable: "{{ nfs_check_result.rc == 0 }}"
+
+    - name: Set cloudflared enabled fact
+      ansible.builtin.set_fact:
+        cloudflared_enabled: "{{ (not nfs_reachable) and (infravm_cloudflared_tunnel_token != '') }}"
+
+    - name: Display connectivity summary
       ansible.builtin.debug:
         msg: |
-          NFS Reachable: {{ nfs_reachable }}
-          Cloudflared Enabled: {{ cloudflared_enabled | default(false) }}
+          ═══════════════════════════════════════════════════════════
+          Bootstrap Connectivity Check
+          ═══════════════════════════════════════════════════════════
+          NFS Server:       {{ nfs_ip }}
+          NFS Reachable:    {{ nfs_reachable }}
+          ───────────────────────────────────────────────────────────
+          Cloudflared Token Set: {{ 'Yes' if infravm_cloudflared_tunnel_token != '' else 'No' }}
+          Cloudflared Enabled:   {{ cloudflared_enabled }}
+          ═══════════════════════════════════════════════════════════
+
+    - name: Fail if NFS unreachable and no cloudflared token
+      ansible.builtin.fail:
+        msg: |
+          ═══════════════════════════════════════════════════════════
+          ERROR: Cannot reach NFS server and no cloudflared token set
+          ═══════════════════════════════════════════════════════════
+
+          Bootstrap cannot mount NFS at {{ nfs_ip }}/export
+
+          Options:
+          1. Ensure network connectivity to {{ nfs_ip }}
+          2. Provide cloudflared tunnel token for tunnel access:
+
+            ansible-playbook site.yml -e infravm_cloudflared_tunnel_token="your-tunnel-token"
+
+          ───────────────────────────────────────────────────────────
+          How to get a Cloudflare Tunnel token (requires free account):
+          ───────────────────────────────────────────────────────────
+          1. Log in at https://dash.cloudflare.com (create free account if needed)
+          2. Open Zero Trust dashboard: https://one.dash.cloudflare.com
+          3. Go to Networks > Tunnels in the left menu
+          4. Click "Create a tunnel"
+          5. Select "Cloudflared" as connector type, click Next
+          6. Name your tunnel (e.g., "ssh-tunnel"), click "Save tunnel"
+          7. Find the token in the install command (starts with "eyJ...")
+          8. Copy the full token string
+          9. Configure public hostname to match your infravm_ansible_host:
+            - Click "Add a public hostname"
+            - Subdomain: enter the hostname part (e.g., "infra" for infra.example.com)
+            - Domain: select your domain from the dropdown
+            - Service Type: SSH
+            - URL: localhost:22
+            - Click "Save hostname"
+
+          ═══════════════════════════════════════════════════════════
+      when:
+        - not nfs_reachable
+        - infravm_cloudflared_tunnel_token == ''
+
 
 # =============================================================================
 # Step 4: Deploy InfraVM
@@ -463,14 +459,14 @@
           InfraVM:
             IP:              {{ infravm_ip }}
             SSH:             ssh admin@{{ infravm_ansible_host | default(infravm_ip) }}
-            NFS Mount:       /mnt/nfs -> {{ nfs_server_ip }}:/export
+            NFS Mount:       /mnt/nfs -> {{ nfs_ip }}:/export
 
           Portainer:
             URL:             https://{{ infravm_ip }}:9443
             Username:        admin
             Password:        {{ portainer_admin_password | default('not generated') }}
 
-          {% if cloudflared_tunnel_token != '' %}
+          {% if infravm_cloudflared_tunnel_token != '' %}
           Cloudflared:       ENABLED (tunnel active)
           {% endif %}
 

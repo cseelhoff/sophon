@@ -3,7 +3,6 @@
 traefik_enabled: true
 
 # Portainer connection
-portainer_port: 9443
 traefik_image_name: "traefik"
 traefik_image_tag: "v3.2"
 

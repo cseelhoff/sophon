@@ -7,7 +7,7 @@ Deploys a Fedora CoreOS VM that runs all Sophon infrastructure services includin
 InfraVM is a CoreOS-based VM that:
 - Mounts NFS at `/mnt/nfs` for container image caching
 - Runs Portainer for container management
-- Optionally runs cloudflared for tunnel access (when `CLOUDFLARED_TUNNEL_TOKEN` is set)
+- Optionally runs cloudflared for tunnel access (when `infravm_cloudflared_tunnel_token` is set)
 - Loads container images from NFS cache or pulls from registry
 
 ## Requirements
@@ -34,8 +34,8 @@ InfraVM is a CoreOS-based VM that:
 | `infravm_memory` | `4096` | Memory in MB |
 | `infravm_disk_size` | `32G` | Root disk size |
 | `infravm_ip` | (required) | Static IP address |
-| `infravm_gateway` | (required) | Network gateway |
-| `infravm_cidr` | `24` | Network CIDR |
+| `proxmox_vnet_gateway` | (required) | Network gateway |
+| `proxmox_cidr` | `24` | Network CIDR |
 | `infravm_username` | `core` | VM user name |
 | `infravm_password_hash` | (default hash) | Password hash for user |
 | `infravm_ssh_public_key` | `~/.ssh/id_rsa.pub` | SSH public key for core user |
@@ -52,7 +52,7 @@ InfraVM is a CoreOS-based VM that:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `cloudflared_tunnel_token` | `$CLOUDFLARED_TUNNEL_TOKEN` | Tunnel token (enables cloudflared if set) |
+| `infravm_cloudflared_tunnel_token` | `$infravm_cloudflared_tunnel_token` | Tunnel token (enables cloudflared if set) |
 
 ## Dependencies
 
@@ -77,8 +77,8 @@ InfraVM is a CoreOS-based VM that:
 - hosts: localhost
   vars:
     infravm_ip: "10.1.1.100"
-    infravm_gateway: "10.1.1.1"
-    nfs_server_ip: "10.1.1.35"
+    proxmox_vnet_gateway: "10.1.1.1"
+    nfs_ip: "10.1.1.35"
   roles:
     - infravm
 ```

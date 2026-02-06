@@ -22,10 +22,10 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 | `proxmox_host` | CLI/prompt | Proxmox API endpoint |
 | `proxmox_password` | CLI/prompt/env | Proxmox authentication |
 | `domain_name` | CLI/prompt | Base domain for services |
-| `airgapped_mode` | CLI (default: false) | Enable air-gapped workflow |
-| `cloudflared_tunnel_token` | Env `CLOUDFLARED_TUNNEL_TOKEN` | If set, enables cloudflared on InfraVM |
+| `proxmox_airgapped` | CLI (default: false) | Enable air-gapped workflow |
+| `infravm_cloudflared_tunnel_token` | Env `infravm_cloudflared_tunnel_token` | If set, enables cloudflared on InfraVM |
 | `infravm_ansible_host` | Auto (default: `infravm.{{ domain_name }}`) | SSH target for InfraVM |
-| `nfs_server_ip` | Auto-discovered | NFS server address |
+| `nfs_ip` | Auto-discovered | NFS server address |
 | `infravm_ip` | Auto-discovered | InfraVM internal IP |
 
 ### NFS Directory Structure
@@ -46,7 +46,7 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 
 #### Step 1: Prepare Airgap (Optional)
 
-**Condition:** Only when `airgapped_mode=true`
+**Condition:** Only when `proxmox_airgapped=true`
 
 Bootstrap downloads all artifacts for offline deployment:
 - Container images: `portainer-ce.tar`, `coredns.tar`, `traefik.tar`, `gitea.tar`, `nexus.tar`
@@ -72,10 +72,10 @@ After download, switch to the air-gapped network.
 
 **Purpose:** Determine if Bootstrap can directly access the NFS/InfraVM network
 
-1. **Attempt NFS mount**: Bootstrap tries `mount -t nfs {{ nfs_server_ip }}:/export /tmp/nfs_test`
+1. **Attempt NFS mount**: Bootstrap tries `mount -t nfs {{ nfs_ip }}:/export /tmp/nfs_test`
 2. **Set facts:**
    - `nfs_reachable=true` → Bootstrap can reach NFS directly, no cloudflared needed
-   - `nfs_reachable=false` AND `cloudflared_tunnel_token` is set → Enable cloudflared container on InfraVM
+   - `nfs_reachable=false` AND `infravm_cloudflared_tunnel_token` is set → Enable cloudflared container on InfraVM
 
 #### Step 4: Create InfraVM
 
@@ -85,13 +85,13 @@ After download, switch to the air-gapped network.
 2. **Generate Ignition config** with:
    - Static IP configuration
    - SSH public key (`infravm_ssh_public_key`)
-   - NFS mount at `/mnt/nfs` → `{{ nfs_server_ip }}:/export`
-   - Conditional cloudflared container service (when `cloudflared_tunnel_token` is set):
+   - NFS mount at `/mnt/nfs` → `{{ nfs_ip }}:/export`
+   - Conditional cloudflared container service (when `infravm_cloudflared_tunnel_token` is set):
      - Runs `cloudflare/cloudflared:latest` container with `--network host`
      - Executes `tunnel --no-autoupdate run --token <token>`
 3. **Create VM**: Proxmox creates InfraVM with Ignition passed via `fw_cfg`
 4. **Set Ansible target**: `infravm_ansible_host` defaults to `infravm.{{ domain_name }}`
-   (resolves via cloudflared tunnel when `cloudflared_tunnel_token` is set)
+   (resolves via cloudflared tunnel when `infravm_cloudflared_tunnel_token` is set)
 
 #### Step 5: Load Container Images
 
@@ -223,7 +223,7 @@ ansible-playbook nfs-upload.yml
 # ═══════════════════════════════════════════════════════════════════
 # PHASE 3: Deploy infrastructure
 # ═══════════════════════════════════════════════════════════════════
-ansible-playbook site.yml -e airgapped_mode=true
+ansible-playbook site.yml -e proxmox_airgapped=true
 ```
 
 ### With Cloudflared Tunnel (Remote Access)
@@ -231,7 +231,7 @@ ansible-playbook site.yml -e airgapped_mode=true
 If you can't directly SSH to the deployed VMs but have a Cloudflare account:
 
 ```bash
-export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
+export infravm_cloudflared_tunnel_token="your-tunnel-token"
 ansible-playbook site.yml
 ```
 
@@ -307,7 +307,7 @@ Secrets (passwords, API tokens) are handled via **environment variables** or **i
 ```bash
 # Set secrets as environment variables
 export PROXMOX_PASSWORD="your-proxmox-password"
-export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"  # Optional
+export infravm_cloudflared_tunnel_token="your-tunnel-token"  # Optional
 
 # Run playbook (prompts only for unset values)
 ansible-playbook site.yml
@@ -335,39 +335,12 @@ When variables are not set, `site.yml` will prompt for:
 5. CoreOS gateway
 6. NFS server IP (defaults to gateway subnet .35)
 
-## SSO Integration (Keycloak)
-
-Keycloak provides single sign-on for all services. To enable:
-
-1. Set `keycloak_enabled: true` via `-e keycloak_enabled=true`
-2. Configure OIDC for each service:
-
-```yaml
-# group_vars/all.yml or vault.yml
-gitea_oauth_enabled: true
-gitea_oauth_client_secret: "{{ vault_keycloak_gitea_client_secret }}"
-```
-
 3. Generate client secrets:
 ```bash
 openssl rand -hex 32
 ```
 
 4. The realm is auto-provisioned via `realm-export.json.j2`
-
-## Role Enable/Disable
-
-Each role can be enabled/disabled via `-e` flags or role defaults:
-
-```yaml
-# group_vars/all.yml
-traefik_enabled: true
-coredns_enabled: true
-openldap_enabled: true
-keycloak_enabled: true
-nexus_enabled: true
-gitea_enabled: true
-```
 
 ## Deployment Order
 
@@ -430,7 +403,7 @@ After switching networks:
 ansible-playbook nfs-upload.yml
 ```
 
-**NFS destinations** (on `nfs_server_ip`):
+**NFS destinations** (on `nfs_ip`):
 - `/var/lib/vz/template/iso/` - VM images
 - `/exports/nexus/docker-proxy/` - Container tarballs
 - `/exports/nexus/yum-proxy/` - RPM packages
@@ -439,15 +412,15 @@ ansible-playbook nfs-upload.yml
 ### Phase 3: Deploy
 
 ```bash
-ansible-playbook site.yml -e airgapped_mode=true
+ansible-playbook site.yml -e proxmox_airgapped=true
 ```
 
 ### Key Variables
 
 ```yaml
 # group_vars/all.yml
-airgapped_mode: false          # Set true for air-gapped
-nfs_server_ip: "10.1.1.35"     # NFS server address
+proxmox_airgapped: false          # Set true for air-gapped
+nfs_ip: "10.1.1.35"     # NFS server address
 nfs_docker_images_path: "/exports/nexus/docker-proxy"
 nfs_rpm_packages_path: "/exports/nexus/yum-proxy"
 ```
@@ -460,7 +433,7 @@ provides tunnel access. This is automatically detected and configured.
 ### How It Works
 
 1. Bootstrap attempts to mount NFS from the target network
-2. If mount fails AND `CLOUDFLARED_TUNNEL_TOKEN` is set:
+2. If mount fails AND `infravm_cloudflared_tunnel_token` is set:
    - InfraVM Ignition config includes cloudflared container service
    - InfraVM pulls and runs `cloudflare/cloudflared:latest` container on boot
 3. Ansible connects to `infravm.{{ domain_name }}` via the tunnel
@@ -468,7 +441,7 @@ provides tunnel access. This is automatically detected and configured.
 ### Usage
 
 ```bash
-export CLOUDFLARED_TUNNEL_TOKEN="your-tunnel-token"
+export infravm_cloudflared_tunnel_token="your-tunnel-token"
 ansible-playbook site.yml
 ```
 

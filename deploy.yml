@@ -15,10 +15,10 @@
 #   ansible-playbook deploy.yml -i inventories/production/inventory.yml
 #
 #   # Air-gapped mode (after running prestage.yml and nfs-upload.yml)
-#   ansible-playbook deploy.yml -i inventories/production/inventory.yml -e airgapped_mode=true
+#   ansible-playbook deploy.yml -i inventories/production/inventory.yml -e proxmox_airgapped=true
 #
 #   # With Cloudflared tunnel for bastion access
-#   CLOUDFLARED_TUNNEL_TOKEN=xxx ansible-playbook deploy.yml -i inventories/production/inventory.yml
+#   infravm_cloudflared_tunnel_token=xxx ansible-playbook deploy.yml -i inventories/production/inventory.yml
 
 - name: Deploy Sophon Infrastructure
   hosts: localhost
@@ -26,11 +26,11 @@
   gather_facts: true
 
   vars:
-    # Deployment mode (set via -e airgapped_mode=true for air-gapped)
-    airgapped_mode: false
+    # Deployment mode (set via -e proxmox_airgapped=true for air-gapped)
+    proxmox_airgapped: false
     
     # Cloudflared tunnel token (set via environment variable)
-    cloudflared_tunnel_token: "{{ lookup('env', 'CLOUDFLARED_TUNNEL_TOKEN') | default('') }}"
+    infravm_cloudflared_tunnel_token: "{{ lookup('env', 'infravm_cloudflared_tunnel_token') | default('') }}"
 
   pre_tasks:
     - name: Display deployment mode
@@ -39,8 +39,8 @@
           ═══════════════════════════════════════════════════════════════════════
           SOPHON DEPLOYMENT
           ═══════════════════════════════════════════════════════════════════════
-          Mode:               {{ 'AIR-GAPPED' if airgapped_mode else 'ONLINE' }}
-          Cloudflared:        {{ 'ENABLED' if cloudflared_tunnel_token | length > 0 else 'DISABLED' }}
+          Mode:               {{ 'AIR-GAPPED' if proxmox_airgapped else 'ONLINE' }}
+          Cloudflared:        {{ 'ENABLED' if infravm_cloudflared_tunnel_token | length > 0 else 'DISABLED' }}
           Proxmox Host:       {{ proxmox_host | default('not set') }}
           CoreOS Target IP:   {{ coreos_ip | default('not set') }}
           ═══════════════════════════════════════════════════════════════════════
@@ -54,7 +54,7 @@
         name: portainer
       vars:
         infravm_ip: "{{ coreos_ip | default(omit) }}"
-        infravm_gateway: "{{ coreos_gateway | default(omit) }}"
+        proxmox_vnet_gateway: "{{ coreos_gateway | default(omit) }}"
 
     # =========================================================================
     # Phase 2: Check Connectivity to CoreOS
@@ -95,14 +95,7 @@
           ansible.builtin.debug:
             msg: |
               CoreOS is NOT directly reachable - deploying bastion VM
-              Cloudflared: {{ 'ENABLED' if cloudflared_tunnel_token | length > 0 else 'DISABLED' }}
-
-        - name: Deploy Bastion VM
-          ansible.builtin.include_role:
-            name: bastion
-          vars:
-            bastion_enabled: true
-            bastion_cloudflared_token: "{{ cloudflared_tunnel_token }}"
+              Cloudflared: {{ 'ENABLED' if infravm_cloudflared_tunnel_token | length > 0 else 'DISABLED' }}
 
         # Check bastion connectivity options
         - name: Check bastion SSH connectivity
@@ -115,7 +108,7 @@
         - name: Set bastion access method
           ansible.builtin.set_fact:
             bastion_access_method: >-
-              {% if cloudflared_tunnel_token | length > 0 %}cloudflared
+              {% if infravm_cloudflared_tunnel_token | length > 0 %}cloudflared
               {% elif coreos_ssh_reachable | default(false) %}direct_ssh
               {% else %}qga{% endif %}
 

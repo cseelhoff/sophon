@@ -13,7 +13,6 @@
 #   skip          - Skip entirely (online mode in site.yml)
 
 # Enable/disable this role
-nfs_content_enabled: true
 
 # =============================================================================
 # Operation Mode
@@ -21,13 +20,13 @@ nfs_content_enabled: true
 # download_only: Air-gapped Phase 1 - download containers to local staging
 # upload_only: Air-gapped Phase 2 - upload prestaged containers to NFS
 # skip: Online mode - InfraVM pulls directly, no prestaging needed
-nfs_content_mode: "skip"
+
 
 # =============================================================================
 # NFS Server Configuration
 # =============================================================================
 # NFS storage name in Proxmox
-nfs_content_storage_name: "{{ nfs_server_proxmox_storage_name | default('sophon-nfs') }}"
+nfs_content_storage_name: "{{ nfs_storage_name }}"
 
 # =============================================================================
 # Source Directory (for upload_only mode)
@@ -57,5 +56,4 @@ nfs_content_container_images:
 # =============================================================================
 # CoreOS Image (for air-gapped prestaging)
 # =============================================================================
-nfs_content_coreos_enabled: true
-nfs_content_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz"
+
