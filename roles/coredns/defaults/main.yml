@@ -5,15 +5,25 @@ coredns_enabled: true
 coredns_image_name: "coredns/coredns"
 coredns_image_tag: "1.12.0"
 
+# Init container image (writes Corefile into shared volume)
+coredns_init_image: "library/busybox"
+coredns_init_image_tag: "stable"
+
+# Pre-staged container image tarballs directory
+coredns_image_tar_dir: "{{ playbook_dir }}/nfs/containers"
+
+# Image tar filenames (relative to coredns_image_tar_dir)
+coredns_image_tars:
+  - "coredns-coredns_{{ coredns_image_tag }}.tar"
+  - "library-busybox_{{ coredns_init_image_tag }}.tar"
+
 # CoreDNS configuration
 coredns_dns_port: 53
 coredns_config_dir: "/opt/coredns"
 
 # DNS forwarding settings
-coredns_forward_dns: "8.8.8.8 8.8.4.4"
-
-# Portainer connection (for stack deployment)
-portainer_port: 9443
+coredns_forward_dns: "9.9.9.9"
+coredns_domain_name: ""
 
 # Local zones (synced by dns_sync sidecar)
 # coredns_local_zones:

@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# Minimal Alpine Linux VM image builder using libguestfs (no root required)
+# Usage: build-alpine-image [options] <output-image>
+#
+# This script builds Alpine VM images using:
+# 1. apk-tools-static to install packages to a local rootfs (no root needed)
+# 2. guestfish to create the disk image and install bootloader (no root needed)
+set -euo pipefail
+
+# Ensure SSL certificates are found (needed for apk on NixOS)
+export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+
+# Defaults
+IMAGE_SIZE="2G"
+IMAGE_FORMAT="raw"
+ALPINE_VERSION="3.21"
+PACKAGES=""
+CHROOT_SCRIPT=""
+MIRROR="https://dl-cdn.alpinelinux.org/alpine"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options] <output-image>
+
+Options:
+  --image-size SIZE     Disk image size (default: 2G)
+  --image-format FMT    Output format: raw or qcow2 (default: raw)
+  --branch VERSION      Alpine version, e.g. v3.21 (default: v3.21)
+  --packages PKGS       Space-separated list of packages to install
+  --script-chroot FILE  Script with rc-update/mkdir/echo commands to apply
+  --mirror URL          Alpine mirror URL
+  -h, --help            Show this help
+
+Example:
+  $(basename "$0") --image-size 2G --branch v3.21 \\
+    --packages "qemu-guest-agent nfs-utils" \\
+    --script-chroot setup.sh alpine.qcow2
+EOF
+    exit 1
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --image-size) IMAGE_SIZE="$2"; shift 2 ;;
+        --image-format) IMAGE_FORMAT="$2"; shift 2 ;;
+        --branch) ALPINE_VERSION="${2#v}"; shift 2 ;;
+        --packages) PACKAGES="$2"; shift 2 ;;
+        --script-chroot) CHROOT_SCRIPT="$2"; shift 2 ;;
+        --mirror) MIRROR="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        -*) echo "Unknown option: $1"; usage ;;
+        *) OUTPUT_IMAGE="$1"; shift ;;
+    esac
+done
+
+[[ -z "${OUTPUT_IMAGE:-}" ]] && { echo "Error: No output image specified"; usage; }
+
+# Temp files
+WORK_DIR=$(mktemp -d)
+RAW_IMAGE="$WORK_DIR/disk.raw"
+ROOTFS_DIR="$WORK_DIR/rootfs"
+ROOTFS_TAR="$WORK_DIR/rootfs.tar"
+APK_STATIC="$WORK_DIR/apk.static"
+
+cleanup() {
+    echo "==> Cleaning up..."
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+echo "==> Downloading apk-tools-static"
+APK_URL="${MIRROR}/v${ALPINE_VERSION}/main/x86_64/"
+APK_PKG=$(curl -fsSL "$APK_URL" | grep -oP 'apk-tools-static-[\d.]+-r\d+\.apk' | head -1)
+curl -fsSL "${APK_URL}${APK_PKG}" | tar -xz -C "$WORK_DIR" sbin/apk.static --strip-components=1
+chmod +x "$APK_STATIC"
+
+echo "==> Creating rootfs directory structure"
+mkdir -p "$ROOTFS_DIR"
+mkdir -p "$ROOTFS_DIR/etc/apk"
+
+cat > "$ROOTFS_DIR/etc/apk/repositories" <<REPOS
+${MIRROR}/v${ALPINE_VERSION}/main
+${MIRROR}/v${ALPINE_VERSION}/community
+REPOS
+
+echo "==> Installing Alpine base system (this may take a minute)"
+# Create directories needed for bind mounts
+mkdir -p "$ROOTFS_DIR/etc/ssl/certs"
+
+# Use proot to emulate root and chroot via ptrace (works with musl/static binaries)
+# -0: fake root (uid 0)
+# -r: set root filesystem for chroot emulation
+# -w: set working directory to / (avoids warning about host cwd not existing in guest)
+# -b: bind mount apk.static, resolv.conf, ssl certs into the guest
+proot -0 -w / -r "$ROOTFS_DIR" \
+    -b "$APK_STATIC:/apk.static" \
+    -b /etc/resolv.conf:/etc/resolv.conf \
+    -b /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt \
+    /apk.static -X "${MIRROR}/v${ALPINE_VERSION}/main" -X "${MIRROR}/v${ALPINE_VERSION}/community" \
+    -U --allow-untrusted --initdb \
+    add alpine-base linux-lts linux-firmware-none mkinitfs syslinux $PACKAGES
+
+echo "==> Configuring system"
+# Create fstab
+cat > "$ROOTFS_DIR/etc/fstab" <<'FSTAB'
+LABEL=alpine-root  /     ext4  defaults,noatime  0  1
+FSTAB
+
+# Configure mkinitfs for virtio
+mkdir -p "$ROOTFS_DIR/etc/mkinitfs"
+echo 'features="ata base ide scsi usb virtio ext4"' > "$ROOTFS_DIR/etc/mkinitfs/mkinitfs.conf"
+
+# Create extlinux.conf
+cat > "$ROOTFS_DIR/boot/extlinux.conf" <<'EXTLINUX'
+DEFAULT alpine
+PROMPT 0
+TIMEOUT 20
+
+LABEL alpine
+    LINUX vmlinuz-lts
+    INITRD initramfs-lts
+    APPEND root=LABEL=alpine-root modules=ext4 rootfstype=ext4 console=tty0 console=ttyS0,115200n8
+EXTLINUX
+
+# Copy syslinux modules to /boot
+cp "$ROOTFS_DIR/usr/share/syslinux/ldlinux.c32" "$ROOTFS_DIR/boot/"
+cp "$ROOTFS_DIR/usr/share/syslinux/libutil.c32" "$ROOTFS_DIR/boot/" 2>/dev/null || true
+cp "$ROOTFS_DIR/usr/share/syslinux/libcom32.c32" "$ROOTFS_DIR/boot/" 2>/dev/null || true
+
+# Save MBR for later
+cp "$ROOTFS_DIR/usr/share/syslinux/mbr.bin" "$WORK_DIR/mbr.bin"
+
+# Process chroot script - apply file-based customizations
+if [[ -n "$CHROOT_SCRIPT" ]] && [[ -f "$CHROOT_SCRIPT" ]]; then
+    echo "==> Processing customization script"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        
+        # Handle rc-update add <service> <runlevel>
+        if [[ "$line" =~ rc-update[[:space:]]+add[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+) ]]; then
+            service="${BASH_REMATCH[1]}"
+            runlevel="${BASH_REMATCH[2]}"
+            mkdir -p "$ROOTFS_DIR/etc/runlevels/$runlevel"
+            if [[ -f "$ROOTFS_DIR/etc/init.d/$service" ]]; then
+                ln -sf "/etc/init.d/$service" "$ROOTFS_DIR/etc/runlevels/$runlevel/$service"
+                echo "    Enabled $service in $runlevel"
+            else
+                echo "    Warning: service $service not found"
+            fi
+        # Handle mkdir -p /path
+        elif [[ "$line" =~ mkdir[[:space:]]+-p[[:space:]]+(/[^[:space:]]+) ]]; then
+            dir="${BASH_REMATCH[1]}"
+            mkdir -p "$ROOTFS_DIR$dir"
+            echo "    Created $dir"
+        # Handle echo "content" > /path
+        elif [[ "$line" =~ echo[[:space:]]+[\"\']([^\"\']+)[\"\'][[:space:]]*\>[[:space:]]*(/[^[:space:]]+) ]]; then
+            content="${BASH_REMATCH[1]}"
+            filepath="${BASH_REMATCH[2]}"
+            mkdir -p "$(dirname "$ROOTFS_DIR$filepath")"
+            echo "$content" > "$ROOTFS_DIR$filepath"
+            echo "    Wrote $filepath"
+        # Handle cat > /path <<'EOF' ... EOF blocks (hostname case)
+        elif [[ "$line" =~ echo[[:space:]]+([^[:space:]\"\']+)[[:space:]]*\>[[:space:]]*(/[^[:space:]]+) ]]; then
+            content="${BASH_REMATCH[1]}"
+            filepath="${BASH_REMATCH[2]}"
+            mkdir -p "$(dirname "$ROOTFS_DIR$filepath")"
+            echo "$content" > "$ROOTFS_DIR$filepath"
+            echo "    Wrote $filepath"
+        fi
+    done < "$CHROOT_SCRIPT"
+fi
+
+echo "==> Creating rootfs tarball"
+# Create tarball - proot handles ownership via ptrace, files are owned by user on disk
+# guestfish will fix ownership when extracting (it has real root)
+tar -C "$ROOTFS_DIR" -cf "$ROOTFS_TAR" .
+
+echo "==> Creating ${IMAGE_SIZE} disk image"
+truncate -s "$IMAGE_SIZE" "$RAW_IMAGE"
+
+echo "==> Building disk with guestfish"
+guestfish --rw -a "$RAW_IMAGE" <<GUESTFISH_EOF
+run
+
+# Partition the disk (MBR with single bootable partition)
+part-disk /dev/sda mbr
+part-set-bootable /dev/sda 1 true
+
+# Format partition with ext4
+mkfs ext4 /dev/sda1 label:alpine-root
+
+# Mount the partition
+mount /dev/sda1 /
+
+# Extract rootfs tarball
+tar-in $ROOTFS_TAR / xattrs:true
+
+# Fix ownership (files were created by non-root user on host)
+# Exclude virtual filesystems that can't be chowned
+sh "find / -xdev -exec chown root:root {} + 2>/dev/null || true"
+
+# Generate initramfs (needs to run inside guest for proper paths)
+sh "KVER=\$(ls /lib/modules | head -1) && mkinitfs \$KVER"
+
+# Remove any boot->. symlink that causes issues
+sh "rm -f /boot/boot"
+
+# Install extlinux bootloader using native guestfish command
+extlinux /boot
+
+# Copy required syslinux modules (ldlinux.c32 is required for booting)
+sh "cp /usr/share/syslinux/ldlinux.c32 /boot/"
+sh "cp /usr/share/syslinux/libutil.c32 /boot/ 2>/dev/null || true"
+sh "cp /usr/share/syslinux/libcom32.c32 /boot/ 2>/dev/null || true"
+
+# Sync and close
+sync
+umount-all
+GUESTFISH_EOF
+
+echo "==> Writing MBR to disk image"
+dd if="$WORK_DIR/mbr.bin" of="$RAW_IMAGE" bs=440 count=1 conv=notrunc 2>/dev/null
+
+# Convert to final format
+if [[ "$IMAGE_FORMAT" == "qcow2" ]]; then
+    echo "==> Converting to qcow2"
+    qemu-img convert -f raw -O qcow2 -c "$RAW_IMAGE" "$OUTPUT_IMAGE"
+else
+    echo "==> Moving raw image to output"
+    mv "$RAW_IMAGE" "$OUTPUT_IMAGE"
+fi
+
+echo "==> Build complete: $OUTPUT_IMAGE"
+ls -lh "$OUTPUT_IMAGE"

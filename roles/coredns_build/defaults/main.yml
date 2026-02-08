@@ -13,7 +13,7 @@ coredns_image_name: "coredns-dockerdiscovery"
 coredns_image_tag: "latest"
 
 # Output tar file location
-coredns_image_output: "{{ playbook_dir }}/nfs/coredns-dockerdiscovery.tar"
+coredns_image_output: "{{ playbook_dir }}/nfs/containers/coredns-dockerdiscovery.tar"
 
 # Whether to force rebuild even if tar already exists
 coredns_force_rebuild: false

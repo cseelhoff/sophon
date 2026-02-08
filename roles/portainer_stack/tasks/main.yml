@@ -1,65 +1,69 @@
 ---
-# Deploy Stack to Portainer via SSH
-# Uses raw curl commands since we may be going through a tunnel
-#
-# Note: SSH raw output may contain escape sequences, so we use grep to extract JSON
+# Deploy Stack to Portainer via REST API
+# Uses ansible.builtin.uri to call Portainer directly from controller (no SSH)
+
+- name: Set Portainer API base URL
+  ansible.builtin.set_fact:
+    _portainer_api_url: "https://{{ infravm_ip }}:{{ portainer_port }}"
+  changed_when: false
 
 - name: Authenticate with Portainer
-  ansible.builtin.raw: |
-    curl -sk -X POST "https://{{ infravm_ip }}:{{ portainer_port }}/api/auth" \
-      -H "Content-Type: application/json" \
-      -d '{"Username":"admin","Password":"{{ portainer_admin_password }}"}'  2>/dev/null | grep -E '^\{|^\['
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  ansible.builtin.uri:
+    url: "{{ _portainer_api_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: 200
   register: portainer_stack_auth_response
   changed_when: false
 
-- name: Parse auth token
+- name: Set auth token
   ansible.builtin.set_fact:
-    portainer_stack_auth_token: "{{ (portainer_stack_auth_response.stdout | trim | from_json).jwt }}"
+    portainer_stack_auth_token: "{{ portainer_stack_auth_response.json.jwt }}"
 
 - name: Get endpoints
-  ansible.builtin.raw: |
-    curl -sk "https://{{ infravm_ip }}:{{ portainer_port }}/api/endpoints" \
-      -H "Authorization: Bearer {{ portainer_stack_auth_token }}" 2>/dev/null | grep -E '^\{|^\['
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  ansible.builtin.uri:
+    url: "{{ _portainer_api_url }}/api/endpoints"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: 200
   register: portainer_stack_endpoints_response
   changed_when: false
 
-- name: Parse endpoints
+- name: Set endpoints fact
   ansible.builtin.set_fact:
-    portainer_stack_endpoints: "{{ portainer_stack_endpoints_response.stdout | trim | default('[]') | from_json }}"
+    portainer_stack_endpoints: "{{ portainer_stack_endpoints_response.json | default([]) }}"
   changed_when: false
 
 - name: Find or create local endpoint
   when: portainer_stack_endpoints | length == 0
   block:
     - name: Create local endpoint
-      ansible.builtin.raw: |
-        curl -sk -X POST "https://{{ infravm_ip }}:{{ portainer_port }}/api/endpoints" \
-          -H "Authorization: Bearer {{ portainer_stack_auth_token }}" \
-          -H "Content-Type: multipart/form-data" \
-          -F "Name=local" \
-          -F "EndpointCreationType=1" \
-          -F "URL=unix:///var/run/docker.sock" 2>/dev/null | grep -E '^\{|^\['
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      ansible.builtin.uri:
+        url: "{{ _portainer_api_url }}/api/endpoints"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ portainer_stack_auth_token }}"
+        body_format: form-multipart
+        body:
+          Name:
+            content: "local"
+          EndpointCreationType:
+            content: "1"
+          URL:
+            content: "unix:///var/run/docker.sock"
+        validate_certs: "{{ portainer_stack_validate_certs }}"
+        status_code: [200, 201]
       register: portainer_stack_endpoint_create
-      changed_when: portainer_stack_endpoints | length == 0
 
-    - name: Parse new endpoint ID
+    - name: Set new endpoint ID
       ansible.builtin.set_fact:
-        portainer_stack_endpoint_id: "{{ (portainer_stack_endpoint_create.stdout | trim | from_json).Id }}"
+        portainer_stack_endpoint_id: "{{ portainer_stack_endpoint_create.json.Id }}"
 
 - name: Set endpoint ID from existing
   ansible.builtin.set_fact:
@@ -67,67 +71,35 @@
   when: portainer_stack_endpoints | length > 0
 
 - name: Get existing stacks
-  ansible.builtin.raw: |
-    curl -sk "https://{{ infravm_ip }}:{{ portainer_port }}/api/stacks" \
-      -H "Authorization: Bearer {{ portainer_stack_auth_token }}" 2>/dev/null | grep -E '^\{|^\['
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  ansible.builtin.uri:
+    url: "{{ _portainer_api_url }}/api/stacks"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: 200
   register: portainer_stack_list_response
-  changed_when: false
-
-- name: Parse stacks list
-  ansible.builtin.set_fact:
-    portainer_stack_list: "{{ portainer_stack_list_response.stdout | trim | default('[]') | from_json }}"
   changed_when: false
 
 - name: Check if stack already exists
   ansible.builtin.set_fact:
-    portainer_stack_existing: "{{ portainer_stack_list | selectattr('Name', 'equalto', portainer_stack_name) | list | first | default(none) }}"
-  changed_when: false
-
-- name: Prepare stack compose content
-  ansible.builtin.set_fact:
-    portainer_stack_compose_escaped: "{{ portainer_stack_compose_content | to_json }}"
+    portainer_stack_existing: "{{ portainer_stack_list_response.json | selectattr('Name', 'equalto', portainer_stack_name) | list | first | default(none) }}"
   changed_when: false
 
 - name: Deploy new stack to Portainer
-  ansible.builtin.raw: |
-    curl -sk -X POST "https://{{ infravm_ip }}:{{ portainer_port }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}" \
-      -H "Authorization: Bearer {{ portainer_stack_auth_token }}" \
-      -H "Content-Type: application/json" \
-      -d '{"env":{{ portainer_stack_env_vars | default([]) | to_json }},"fromAppTemplate":false,"name":"{{ portainer_stack_name }}",' \
-      -d '"stackFileContent":{{ portainer_stack_compose_escaped }}}'
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  ansible.builtin.uri:
+    url: "{{ _portainer_api_url }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    body_format: json
+    body:
+      name: "{{ portainer_stack_name }}"
+      stackFileContent: "{{ portainer_stack_compose_content }}"
+      env: "{{ portainer_stack_env_vars | default([]) }}"
+      fromAppTemplate: false
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: [200, 201]
   register: portainer_stack_deploy_result
   when: portainer_stack_existing is none
   changed_when: portainer_stack_existing is none
-
-- name: Fail if stack deployment failed
-  ansible.builtin.fail:
-    msg: "Stack deployment failed: {{ portainer_stack_deploy_result.stdout }}"
-  when:
-    - portainer_stack_deploy_result is defined
-    - portainer_stack_deploy_result.stdout is defined
-    - "'message' in portainer_stack_deploy_result.stdout"
-    - "'failed' in portainer_stack_deploy_result.stdout"
-
-- name: Update existing stack
-  ansible.builtin.raw: |
-    curl -sk -X PUT "https://{{ infravm_ip }}:{{ portainer_port }}/api/stacks/{{ portainer_stack_existing.Id }}?endpointId={{ portainer_stack_endpoint_id }}" \
-      -H "Authorization: Bearer {{ portainer_stack_auth_token }}" \
-      -H "Content-Type: application/json" \
-      -d '{"env":{{ portainer_stack_env_vars | default([]) | to_json }},"stackFileContent":{{ _stack_compose_escaped }},"prune":true,"pullImage":false}'
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-  when: portainer_stack_existing is not none
-  changed_when: portainer_stack_existing is not none

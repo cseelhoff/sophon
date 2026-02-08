@@ -1,46 +1,15 @@
 ---
-# =============================================================================
-# InfraVM Role Tasks
-# =============================================================================
-# This role:
-#   1. Creates the CoreOS VM on Proxmox with Ignition configuration
-#   2. Waits for InfraVM to boot and NFS to mount
-#   3. Loads container images via SSH (from NFS cache or pull from registry)
-#   4. Waits for Portainer and initializes admin password via API
-
-# =============================================================================
-# Step 1: Create the CoreOS VM
-# =============================================================================
-# =============================================================================
-# InfraVM - Create CoreOS VM on Proxmox
-# =============================================================================
-# Creates the CoreOS VM with Ignition configuration passed via fw_cfg.
-
-# -----------------------------------------------------------------------------
-# Validate Required Variables
-# -----------------------------------------------------------------------------
-- name: Validate required InfraVM variables
-  ansible.builtin.assert:
-    that:
-      - infravm_vm_name is defined
-      - infravm_ip is defined
-      - proxmox_vnet_gateway is defined
-      - infravm_butane_template is defined
-    fail_msg: "Required variables: infravm_vm_name, infravm_ip, proxmox_vnet_gateway, infravm_butane_template"
-
 # -----------------------------------------------------------------------------
 # VM Existence Check
 # -----------------------------------------------------------------------------
 
+# -------------------------------------------------------------------------
+# InfraVM IP Discovery
+# -------------------------------------------------------------------------
 
-- name: Set existing VM fact
+- name: Find sophon-infravm VM
   ansible.builtin.set_fact:
-    infravm_existing_vm: "{{ proxmox_existing_vms.json.data | selectattr('name', 'eq', infravm_vm_name) | list | first | default(none) }}"
-
-- name: Display existing VM info
-  ansible.builtin.debug:
-    msg: "Found existing VM '{{ infravm_vm_name }}' with VMID {{ infravm_existing_vm.vmid }} - skipping creation"
-  when: infravm_existing_vm is not none
+    infravm_existing_vm: "{{ proxmox_existing_vms.json.data | selectattr('name', 'eq', 'sophon-infravm') | first | default(none) }}"
 
 # -----------------------------------------------------------------------------
 # CoreOS Image and VM Creation (only if VM doesn't exist)
@@ -184,6 +153,10 @@
         state: directory
         mode: "0755"
 
+    - name: Generate yescrypt password hash
+      ansible.builtin.set_fact:
+        infravm_password_hash: "{{ lookup('pipe', 'echo ' ~ (infravm_password | quote) ~ ' | mkpasswd --method=yescrypt --stdin') }}"
+
     - name: Generate Butane config from template
       ansible.builtin.template:
         src: "{{ infravm_butane_template }}"
@@ -241,7 +214,7 @@
         autostart: true
         agent: "enabled=1"
         net:
-          net0: "virtio,bridge={{ proxmox_vnet }}"
+          net0: "virtio,bridge={{ vnet_interface }},tag={{ vnet_vlan }}"
         state: present
         timeout: 600
         virtio: "{{ infravm_virtio_disks }}"
@@ -249,13 +222,31 @@
         args: "{{ args_escaped }}"
       register: vm_create
 
+- name: Get InfraVM config for MAC address
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ infravm_existing_vm.node }}/qemu/{{ infravm_existing_vm.vmid }}/config"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: infravm_config
+  when:
+    - infravm_existing_vm is defined
+    - infravm_existing_vm.vmid is defined
+
+- name: Extract InfraVM MAC address from VM config
+  ansible.builtin.set_fact:
+    _infravm_mac: "{{ infravm_config.json.data.net0 | regex_search('([0-9A-Fa-f:]{17})') | lower }}"
+  when:
+    - infravm_config is defined
+    - infravm_config.json.data.net0 is defined
+
 # -----------------------------------------------------------------------------
 # Set Output Facts
 # -----------------------------------------------------------------------------
 - name: Set InfraVM output facts
   ansible.builtin.set_fact:
     infravm_vmid: "{{ infravm_existing_vm.vmid if infravm_existing_vm is not none else vm_create.vmid }}"
-    infravm_vm_created: "{{ infravm_existing_vm is none }}"
 
 # -----------------------------------------------------------------------------
 # Start VM
@@ -274,212 +265,130 @@
   ansible.builtin.debug:
     msg: |
       ═══════════════════════════════════════════════════════════════════
-      InfraVM {{ 'created' if infravm_vm_created else 'found' }}
-      ═══════════════════════════════════════════════════════════════════
       
       Name: {{ infravm_vm_name }}
       VMID: {{ infravm_vmid }}
       IP: {{ infravm_ip }}
-      Status: {{ 'Created new VM' if infravm_vm_created else 'Using existing VM' }}
       
       ═══════════════════════════════════════════════════════════════════
-
-
-# =============================================================================
-# Step 2: Wait for VM to be ready
-# =============================================================================
-- name: Debug SSH connection target
-  ansible.builtin.debug:
-    msg: "Waiting for SSH on host: {{ infravm_ansible_host }}, port: 22"
-
-# - name: Wait for InfraVM SSH to be ready
-#   ansible.builtin.wait_for:
-#     host: "{{ infravm_ansible_host }}"
-#     port: 22
-#     delay: 10
-#     timeout: 300
-#   delegate_to: localhost
-
-- name: Wait for SSH connectivity (tunnel may take time to establish)
-  ansible.builtin.command:
-    cmd: >
-      ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no
-      -i {{ infravm_ssh_private_key }}
-      {{ infravm_username }}@{{ infravm_ansible_host }}
-      echo "SSH connection established"
-  delegate_to: localhost
-  register: ssh_wait
-  until: ssh_wait.rc == 0
-  retries: 30
-  delay: 3
-  changed_when: false
-  ignore_errors: false
-
-- name: Debug NFS mount status on InfraVM
-  ansible.builtin.raw: |
-    echo "=== Mount status ==="
-    mount | grep nfs || echo "No NFS mounts found"
-    echo "=== systemctl status var-mnt-nfs.mount ==="
-    systemctl status var-mnt-nfs.mount --no-pager 2>&1 || true
-    echo "=== journalctl for mount ==="
-    journalctl -u var-mnt-nfs.mount --no-pager -n 20 2>&1 || true
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-  register: nfs_debug
-  ignore_errors: true
-
-- name: Wait for NFS mount on InfraVM
-  ansible.builtin.raw: mountpoint -q /var/mnt/nfs
-  register: nfs_mount_check
-  until: nfs_mount_check.rc == 0
-  retries: 30
-  delay: 5
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-
-# =============================================================================
-# Load Container Images via SSH
-# =============================================================================
-- name: Load container images on InfraVM
-  block:
-    - name: Check and load each container image
-      ansible.builtin.raw: >-
-        IMAGE="{{ item }}";
-        IMAGE_NO_TAG=$(echo "$IMAGE" | sed 's|:.*||');
-        ORG_NAME=$(echo "$IMAGE_NO_TAG" | rev | cut -d'/' -f1-2 | rev | tr '/' '-');
-        TAG=$(echo "$IMAGE" | sed 's|.*:||');
-        TARFILE="/var/mnt/nfs/containers/${ORG_NAME}_${TAG}.tar";
-        if podman image exists "$IMAGE" 2>/dev/null; then
-          echo "ALREADY_LOADED"; exit 0;
-        fi;
-        if [ -f "$TARFILE" ]; then
-          podman load -i "$TARFILE"; echo "LOADED_FROM_NFS"; exit 0;
-        fi;
-        podman pull "$IMAGE";
-      loop: "{{ infravm_container_images }}"
-      register: container_load_results
-      changed_when: "'LOADED_FROM_NFS' in container_load_results.stdout or 'PULLED' in container_load_results.stdout"
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-
-    - name: Display container loading summary
-      ansible.builtin.debug:
-        msg: |
-          Container Image Loading Summary:
-          {% for result in container_load_results.results %}
-          - {{ result.item }}: {{ result.stdout | default('unknown') }}
-          {% endfor %}
-
-# =============================================================================
-# Start Portainer Container (Rootless)
-# =============================================================================
-- name: Create and start Portainer container
-  ansible.builtin.raw: |
-    # Check if portainer is already running
-    if podman ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^portainer$'; then
-      echo "ALREADY_RUNNING"
-      exit 0
-    fi
-
-    # Enable lingering so containers persist after logout
-    loginctl enable-linger $(whoami)
-
-    # Enable podman socket for rootless podman
-    systemctl --user enable --now podman.socket
-
-    # Wait for socket to appear
-    SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
-    for i in 1 2 3 4 5; do
-      [ -S "$SOCKET_PATH" ] && break
-      sleep 1
-    done
-
-    # Remove existing stopped container if present
-    podman rm -f portainer 2>/dev/null || true
-
-    # Create portainer data volume if not exists
-    podman volume create portainer_data 2>/dev/null || true
-
-    # Run the container with restart policy
-    podman run -d \
-      --name portainer \
-      --restart always \
-      --security-opt label=disable \
-      -p {{ portainer_port }}:9443 \
-      -v "$SOCKET_PATH":/var/run/docker.sock \
-      -v portainer_data:/data:Z \
-      docker.io/portainer/portainer-ce:{{ portainer_image_tag }}
-
-    echo "STARTED"
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-  register: portainer_start
-  changed_when: "'STARTED' in portainer_start.stdout"
-
-- name: Show Portainer start result
-  ansible.builtin.debug:
-    var: portainer_start.stdout
 
 # =============================================================================
 # Initialize Portainer
 # =============================================================================
-- name: Generate Portainer admin password
+- name: Set Portainer API base URL
   ansible.builtin.set_fact:
-    portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-  when: portainer_admin_password is not defined
-
-- name: Validate Portainer password meets requirements
-  ansible.builtin.assert:
-    that:
-      - portainer_admin_password | length >= 12
-    fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
+    portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"
 
 - name: Wait for Portainer API to be ready
-  ansible.builtin.raw: |
-    curl -sk -o /dev/null -w '%{http_code}' "https://{{ infravm_ip }}:{{ portainer_port }}/api/status" | grep -q 200
+  ansible.builtin.uri:
+    url: "{{ portainer_url }}/api/status"
+    method: GET
+    validate_certs: false
+    status_code: 200
   register: portainer_status
-  until: portainer_status.rc == 0
+  until: portainer_status.status | default(-1) == 200
   retries: 60
   delay: 3
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+  changed_when: false
 
-- name: Initialize Portainer admin user
-  ansible.builtin.raw: |
-    curl -sk -X POST "https://{{ infravm_ip }}:{{ portainer_port }}/api/users/admin/init" \
-      -H "Content-Type: application/json" \
-      -d '{"Username":"admin","Password":"{{ portainer_admin_password }}"}' \
-      -w '\n%{http_code}' | tail -1
-  register: portainer_init
-  delegate_to: "{{ infravm_ansible_host }}"
-  vars:
-    ansible_connection: ssh
-    ansible_user: "{{ infravm_username }}"
-    ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+- name: Check if Portainer admin is already initialized
+  ansible.builtin.uri:
+    url: "{{ portainer_url }}/api/users/admin/check"
+    method: GET
+    validate_certs: false
+    status_code: [204, 404]
+  register: portainer_admin_check
+  changed_when: false
 
-- name: Set portainer init status
+- name: when block for if admin not initialized
+  when: portainer_admin_check.status == 404
+  block:
+    - name: Generate Portainer admin password
+      ansible.builtin.set_fact:
+        portainer_admin_password: "{{ lookup('password', '/dev/null length=12 chars=ascii_letters,digits') }}"
+      when: portainer_admin_password is not defined
+
+    - name: Validate Portainer password meets requirements
+      ansible.builtin.assert:
+        that:
+          - portainer_admin_password | length >= 12
+        fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
+
+    - name: Initialize Portainer admin user
+      ansible.builtin.uri:
+        url: "{{ portainer_url }}/api/users/admin/init"
+        method: POST
+        body_format: json
+        body:
+          Username: "admin"
+          Password: "{{ portainer_admin_password }}"
+        validate_certs: false
+        status_code: [200]
+      register: portainer_init
+
+# - name: Warn if admin already exists and password was auto-generated
+#   ansible.builtin.debug:
+#     msg: "WARNING: Admin already exists. If auth fails, set -e portainer_admin_password=<existing_password>"
+#   when: portainer_init_status == '409'
+
+- name: Authenticate with Portainer
+  ansible.builtin.uri:
+    url: "{{ portainer_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    validate_certs: false
+    status_code: 200
+  register: portainer_auth
+  changed_when: false
+
+- name: Get Portainer endpoints
+  ansible.builtin.uri:
+    url: "{{ portainer_url }}/api/endpoints"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+    validate_certs: false
+    status_code: 200
+  register: portainer_endpoints
+  changed_when: false
+
+# - name: debug print portainer_endpoints
+#   ansible.builtin.debug:
+#     var: portainer_endpoints
+
+- name: Set portainer_local_endpoint to first local endpoint if exists
   ansible.builtin.set_fact:
-    portainer_init_status: "{{ portainer_init.stdout | trim }}"
+    portainer_local_endpoint: "{{ portainer_endpoints.json | selectattr('Type', 'eq', 1) | first }}"
+    portainer_local_endpoint_id: "{{ (portainer_endpoints.json | selectattr('Type', 'eq', 1) | first)['Id'] }}"
+  when: portainer_endpoints.json | length > 0
 
-- name: Warn if admin already exists and password was auto-generated
+- name: Create local Docker endpoint if none exist
+  ansible.builtin.uri:
+    url: "{{ portainer_url }}/api/endpoints"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+      Content-Type: "multipart/form-data"
+    body_format: form-multipart
+    body:
+      Name: "local"
+      EndpointCreationType: "1"
+    validate_certs: false
+    status_code: [200, 201]
+  register: _portainer_create_endpoint
+  when: portainer_local_endpoint_id is not defined
+
+- name: Set endpoint ID from newly created endpoint
+  ansible.builtin.set_fact:
+    portainer_local_endpoint_id: "{{ _portainer_create_endpoint.json['Id'] }}"
+  when: portainer_local_endpoint_id is not defined
+
+- name: debug print portainer_local_endpoint_id
   ansible.builtin.debug:
-    msg: "WARNING: Admin already exists. If auth fails, set -e portainer_admin_password=<existing_password>"
-  when: portainer_init_status == '409'
+    var: portainer_local_endpoint_id
 
 - name: Display InfraVM access info
   ansible.builtin.debug:
@@ -488,21 +397,11 @@
       InfraVM Deployed Successfully
       ═══════════════════════════════════════════════════════════════════
 
-      SSH Access:
-        Host: {{ infravm_ansible_host }}
-        User: {{ infravm_username }}
-        Command: ssh {{ infravm_username }}@{{ infravm_ansible_host }}
-
       Portainer:
-        URL: https://{{ infravm_ansible_host }}:{{ portainer_port }}
+        URL: https://{{ infravm_ip }}:{{ infravm_portainer_port }}
         Username: admin
         Password: {{ portainer_admin_password }}
-        {{ '(existing admin - password unchanged)' if portainer_init_status == '409' else '' }}
 
-      NFS Mount: /var/mnt/nfs -> {{ nfs_ip }}:/export
       VM ID: {{ infravm_vmid | default('N/A') }}
-      {% if infravm_cloudflared_tunnel_token | default('') != '' %}
-      Cloudflared: Tunnel active (token configured)
-      {% endif %}
 
       ═══════════════════════════════════════════════════════════════════

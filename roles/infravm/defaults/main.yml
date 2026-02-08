@@ -16,8 +16,6 @@ infravm_disk_size: "32G"
 infravm_username: "core"
 # Password for the core user (defaults to proxmox_password if not set)
 infravm_password: "{{ proxmox_password }}"
-# Password hash generated dynamically using yescrypt
-infravm_password_hash: "{{ infravm_password | password_hash('yescrypt') }}"
 
 # SSH public key for core user (required for Ansible access)
 infravm_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
@@ -41,32 +39,17 @@ infravm_cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
 infravm_nfs_mount_options: "ro,noatime,vers=4.1"
 
 # =============================================================================
-# Portainer Application Settings
-# =============================================================================
-portainer_image_tag: "2.27.1"
-portainer_port: 9443
-
-# =============================================================================
-# Container Images (loaded via SSH from Ansible controller)
+# Container Images (loaded at boot via sophon-init.service in Butane/Ignition)
 # =============================================================================
 # List of container images to load on InfraVM
 # These are cached on NFS at /export/containers/<basename>.tar
-infravm_container_images:
-  - "docker.io/portainer/portainer-ce:{{ portainer_image_tag }}"
-  - "docker.io/coredns/coredns:1.12.0"
-  - "docker.io/library/traefik:v3.2"
-  - "docker.io/gitea/gitea:1.21"
-  - "docker.io/sonatype/nexus3:3.72.0"
-  - "docker.io/osixia/openldap:1.5.0"
-  - "docker.io/osixia/phpldapadmin:0.9.0"
-  - "docker.io/cloudflare/cloudflared:latest"  # For optional tunnel access
+infravm_portainer_port: 9443
 
 # =============================================================================
 # CoreOS Image
 # =============================================================================
-infravm_coreos_url: |
-  https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/
-  43.20251214.3.0/x86_64/fedora-coreos-43.20251214.3.0-qemu.x86_64.qcow2.xz
+infravm_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/\
+  43.20260119.3.1/x86_64/fedora-coreos-43.20260119.3.1-qemu.x86_64.qcow2.xz"
 infravm_coreos_xz_filename: "{{ infravm_coreos_url | basename }}"
 infravm_coreos_qcow2_filename: "{{ infravm_coreos_xz_filename | regex_replace('\\.xz$', '') }}"
 infravm_coreos_iso_filename: "{{ infravm_coreos_qcow2_filename }}.iso"

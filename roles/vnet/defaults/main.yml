@@ -1,0 +1,6 @@
+---
+vnet_interface: "vmbr0"
+vnet_vlan: ""
+vnet_gateway: ""
+vnet_cidr: ""
+vnet_dns: ""

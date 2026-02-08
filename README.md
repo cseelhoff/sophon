@@ -97,7 +97,7 @@ After download, switch to the air-gapped network.
 
 **Execution:** Via SSH to `{{ infravm_ansible_host }}`
 
-For each image in `infravm_container_images`:
+For each image in `prestage_container_images`:
 1. **Check NFS cache**: Does `/mnt/nfs/containers/{{ image_basename }}.tar` exist?
 2. **If cached**: `podman load -i /mnt/nfs/containers/{{ image_basename }}.tar`
 3. **If not cached**:

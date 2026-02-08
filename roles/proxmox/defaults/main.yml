@@ -4,16 +4,13 @@
 # =============================================================================
 # These are fallback defaults - override via inventory group_vars or -e flags
 
-proxmox_host: "pve.example.com"
-proxmox_port: 8006
+proxmox_host: ""
 proxmox_username: "root"
 proxmox_user: "{{ proxmox_username }}@pam"
-# proxmox_password: ""  # Required: Set via environment, vault, or command line
+proxmox_password: ""
 proxmox_node: "proxmox"
+proxmox_port: 8006
 proxmox_disk_storage_id: "local-lvm"
-proxmox_vnet_gateway: ""
-proxmox_cidr: ""
-proxmox_vnet_interface: "vmbr0"
 proxmox_airgapped: false
 
 # Certificate validation (set to true in production with valid certs)

@@ -26,7 +26,6 @@
 # NFS Server Configuration
 # =============================================================================
 # NFS storage name in Proxmox
-nfs_content_storage_name: "{{ nfs_storage_name }}"
 
 # =============================================================================
 # Source Directory (for upload_only mode)

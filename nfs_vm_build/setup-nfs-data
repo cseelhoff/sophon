@@ -1,0 +1,80 @@
+#!/sbin/openrc-run
+# =============================================================================
+# NFS Data Disk Setup Service
+# =============================================================================
+# This service runs at boot to:
+# 1. Check for a data disk at /dev/vdb
+# 2. Partition and format it if needed
+# 3. Mount it to /export
+# 4. Configure NFS exports
+
+description="Setup persistent NFS data disk"
+
+DATA_DISK=/dev/vdb
+MOUNT_POINT=/export
+
+depend() {
+    need rpcbind
+    before nfs
+}
+
+start() {
+    ebegin "Setting up NFS data disk"
+    
+    # Check if data disk exists
+    if [ ! -b "$DATA_DISK" ]; then
+        ewarn "No data disk found at $DATA_DISK - NFS will use empty $MOUNT_POINT in RAM"
+        mkdir -p "$MOUNT_POINT"
+        chmod 777 "$MOUNT_POINT"
+        setup_exports
+        eend 0
+        return 0
+    fi
+    
+    PART="${DATA_DISK}1"
+    
+    # Check for existing partition/filesystem
+    if ! blkid "$PART" >/dev/null 2>&1; then
+        ewarn "No filesystem detected on $PART - formatting..."
+        parted -s "$DATA_DISK" mklabel gpt
+        parted -s "$DATA_DISK" mkpart primary ext4 0% 100%
+        # Wait for partition to appear
+        sleep 2
+        mkfs.ext4 -F -L nfsdata "$PART"
+    fi
+    
+    # Mount if not already mounted
+    mkdir -p "$MOUNT_POINT"
+    if ! mountpoint -q "$MOUNT_POINT"; then
+        mount "$PART" "$MOUNT_POINT"
+    fi
+    
+    # Ensure proper permissions
+    chmod 755 "$MOUNT_POINT"
+    
+    # Setup exports
+    setup_exports
+    
+    eend 0
+}
+
+setup_exports() {
+    # Create standard export directories
+    for dir in nexus/docker-proxy nexus/yum-proxy sophon/images sophon/bin; do
+        mkdir -p "$MOUNT_POINT/$dir"
+    done
+    
+    # Ensure base export exists
+    if ! grep -q "^$MOUNT_POINT " /etc/exports 2>/dev/null; then
+        echo "$MOUNT_POINT *(rw,sync,no_subtree_check,no_root_squash)" >> /etc/exports
+    fi
+    
+    # Reload exports
+    exportfs -ra 2>/dev/null || true
+}
+
+stop() {
+    ebegin "Stopping NFS data disk service"
+    # Nothing to do - let system handle unmount
+    eend 0
+}

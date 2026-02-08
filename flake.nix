@@ -78,6 +78,8 @@
             git
             cacert
             buildah
+            mkpasswd
+            dig
           ];
 
           shellHook = ''

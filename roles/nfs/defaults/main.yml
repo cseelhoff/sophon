@@ -15,9 +15,9 @@ nfs_enabled: true
 # VM Configuration
 # =============================================================================
 nfs_vm_name: "sophon-nfs"
-nfs_cores: 1
-nfs_memory: 512
-nfs_os_disk_size: "2G"     # OS disk (Alpine with NFS services)
+nfs_cores: 2
+nfs_memory: 4096
+nfs_os_disk_size: "10G"     # OS disk (Alpine with NFS services)
 nfs_data_disk_size: "100G" # NFS storage disk (/dev/vdb, thin provisioned)
 
 # =============================================================================
@@ -26,6 +26,7 @@ nfs_data_disk_size: "100G" # NFS storage disk (/dev/vdb, thin provisioned)
 # NFS server must have a static IP since other VMs depend on it.
 # Gateway and netmask are derived from Proxmox vnet configuration.
 nfs_ip: ""  # Required - set via -e or prompted
+nfs_dns: "{{ vnet_dns | default('') }}"
 
 # Root password for NFS VM (defaults to proxmox_password if not set)
 # Can be overridden with -e nfs_root_password=<password>
@@ -80,3 +81,6 @@ nfs_storage_name: "sophon-nfs"
 
 # Content types to enable on the Proxmox NFS storage
 nfs_proxmox_content_types: "images,iso,backup,snippets"
+
+nfs_root_password: "{{ proxmox_password }}"
+

@@ -1,3 +1,5 @@
 secrets.yml
 coredns
 .ansible
+nfs
+*.qcow2

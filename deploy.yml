@@ -54,7 +54,7 @@
         name: portainer
       vars:
         infravm_ip: "{{ coreos_ip | default(omit) }}"
-        proxmox_vnet_gateway: "{{ coreos_gateway | default(omit) }}"
+        vnet_gateway: "{{ coreos_gateway | default(omit) }}"
 
     # =========================================================================
     # Phase 2: Check Connectivity to CoreOS

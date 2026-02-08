@@ -1,0 +1,165 @@
+---
+# =============================================================================
+# Vnet Role - Network Discovery and IP Assignment
+# =============================================================================
+# Requires: proxmox role (for proxmox_api, proxmox_ticket, proxmox_csrf)
+
+# -------------------------------------------------------------------------
+# Vnet Configuration for IP Scanning
+# -------------------------------------------------------------------------
+- name: Get Proxmox network configuration
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node | default('pve') }}/network"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: _proxmox_network
+  when: (nfs_ip == "") or (infravm_ip == "") or (vnet_gateway == "") or (vnet_cidr == "") or (vnet_dns == "")
+
+- name: Find vnet configuration
+  ansible.builtin.set_fact:
+    _vnet_config: "{{ _proxmox_network.json.data | selectattr('iface', 'eq', vnet_interface) | first | default({}) }}"
+  when: _proxmox_network is defined
+
+- name: Query Proxmox node for DNS
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/dns"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: _proxmox_node_config
+  when: vnet_dns == ""
+
+- name: Extract network base from vnet
+  ansible.builtin.set_fact:
+    _network_base: "{{ _vnet_config.address | regex_replace('\\.[0-9]+$', '') }}"
+    vnet_gateway: "{{ vnet_gateway if vnet_gateway else (_vnet_config.gateway | default('')) }}"
+    vnet_dns: "{{ vnet_dns if vnet_dns else (_proxmox_node_config.json.data.dns1 | default('')) }}"
+  when:
+    - _vnet_config is defined
+    - _vnet_config | length > 0
+    - _vnet_config.address is defined
+
+- name: Extract network base from gateway (for VLAN-aware bridges without address)
+  ansible.builtin.set_fact:
+    _network_base: "{{ vnet_gateway | regex_replace('\\.[0-9]+$', '') }}"
+    vnet_dns: "{{ vnet_dns if vnet_dns else (_proxmox_node_config.json.data.dns1 | default('')) }}"
+  when:
+    - _network_base is not defined
+    - vnet_gateway != ""
+
+- name: Fail if network configuration is incomplete
+  ansible.builtin.fail:
+    msg: |
+      Cannot determine network configuration. The bridge '{{ vnet_interface }}' has no IP address.
+      For VLAN-aware bridges, you must specify network parameters manually:
+        -e vnet_gateway=<gateway_ip> -e vnet_cidr=<cidr>
+      Example: -e vnet_gateway=10.0.60.1 -e vnet_cidr=24
+  when:
+    - _network_base is not defined
+    - vnet_gateway == ""
+
+# -------------------------------------------------------------------------
+# ARP Scan for Network Discovery
+# -------------------------------------------------------------------------
+- name: Scan network for used IPs
+  when:
+    - (nfs_ip is not defined) or (nfs_ip == "") or (infravm_ip is not defined) or (infravm_ip == "")
+  block:
+    - name: Install arp-scan and discover network hosts on Proxmox
+      proxmox_shell:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        node: "{{ proxmox_node }}"
+        pve_auth_cookie: "{{ proxmox_ticket }}"
+        proxmox_csrf_token: "{{ proxmox_csrf }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        timeout: 60
+        command: >-
+          apt-get update -qq && apt-get install -qq -y arp-scan >/dev/null 2>&1;
+          arp-scan -I {{ vnet_interface }}{{ ' -Q ' ~ vnet_vlan if vnet_vlan else '' }} -l 2>/dev/null |
+          awk '/^[0-9]+\./ {print $1, tolower($2)}'
+      register: _arp_scan_result
+
+    - name: Debug ARP scan results
+      ansible.builtin.debug:
+        msg: "ARP Scan Output:\n{{ _arp_scan_result.stdout }}"
+
+    - name: Parse ARP scan results (IP and MAC pairs)
+      ansible.builtin.set_fact:
+        _arp_entries: "{{ (_arp_scan_result.stdout | default('') | trim).split('\n') | map('trim') | select() | list }}"
+        _used_ips: "{{ (_arp_scan_result.stdout | default('') | trim).split('\n') | map('trim') | select() | map('split', ' ') | map('first') | list }}"
+
+    - name: Find InfraVM IP from MAC address
+      ansible.builtin.set_fact:
+        infravm_ip: "{{ item.split(' ')[0] }}"
+      loop: "{{ _arp_entries }}"
+      when:
+        - infravm_ip == ""
+        - _infravm_mac is defined
+        - _infravm_mac in item
+
+    - name: Find available IPs
+      ansible.builtin.set_fact:
+        _available_ips: >-
+          {{
+            range(2, 255) | map('string') | map('regex_replace', '^(.*)$', _network_base ~ '.\1')
+            | reject('in', _used_ips)
+            | reject('eq', vnet_gateway)
+            | reject('eq', _vnet_config.address | default(''))
+            | list
+          }}
+      when: _network_base is defined
+
+    - name: Set discovered NFS IP
+      ansible.builtin.set_fact:
+        nfs_ip: "{{ _available_ips[0] }}"
+      when:
+        - nfs_ip == ""
+        - _available_ips | length > 0
+
+    - name: Remove NFS IP from available IPs
+      ansible.builtin.set_fact:
+        _available_ips: "{{ _available_ips | reject('eq', nfs_ip) | list }}"
+      when:
+        - _available_ips is defined
+
+    - name: Set discovered InfraVM IP
+      ansible.builtin.set_fact:
+        infravm_ip: "{{ _available_ips[0] }}"
+      when:
+        - infravm_ip is not defined or infravm_ip == ""
+        - _available_ips | length > 0
+
+# -------------------------------------------------------------------------
+# Derive Gateway and CIDR
+# -------------------------------------------------------------------------
+- name: Set gateway and CIDR from vnet
+  ansible.builtin.set_fact:
+    vnet_gateway: "{{ vnet_gateway }}"
+    vnet_cidr: "{{ vnet_cidr }}"
+    # >-
+      # {%- if _vnet_config.cidr is defined and '/' in (_vnet_config.cidr | string) -%}
+      #   {{ (_vnet_config.cidr | string).split('/')[1] }}
+      # {%- elif _vnet_config.cidr is defined -%}
+      #   {{ _vnet_config.cidr }}
+      # {%- else -%}
+      #   {{ (_vnet_config.netmask | ansible.utils.ipaddr('prefix')) }}
+      # {%- endif -%}
+  when: (vnet_gateway == "") or (vnet_cidr == "")
+
+- name: Display final IP configuration
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      IP ADDRESS CONFIGURATION
+      ═══════════════════════════════════════════════════════════════════
+      NFS Server IP:    {{ nfs_ip }}
+      InfraVM IP:       {{ infravm_ip }}
+      Gateway:          {{ vnet_gateway }}
+      CIDR:             {{ vnet_cidr }}
+      Vnet:             {{ vnet_interface }}
+      ═══════════════════════════════════════════════════════════════════

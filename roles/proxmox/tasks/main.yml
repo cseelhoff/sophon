@@ -4,6 +4,28 @@
 # =============================================================================
 # Provides: proxmox_ticket, proxmox_csrf (set as facts for other roles to use)
 
+- name: Prompt for missing Proxmox host
+  ansible.builtin.pause:
+    prompt: "Proxmox API host (IP or hostname)"
+  register: _ph
+  when: proxmox_host == ""
+
+- name: Prompt for missing password
+  ansible.builtin.pause:
+    prompt: "Proxmox password"
+    echo: false
+  register: _pp
+  when: proxmox_password == ""
+
+- name: Set updated variable values
+  ansible.builtin.set_fact:
+    proxmox_host: "{{ _ph.user_input | default(proxmox_host) }}"
+    proxmox_password: "{{ _pp.user_input | default(proxmox_password) }}"
+
+- name: Set Proxmox API URL
+  ansible.builtin.set_fact:
+    proxmox_api: "https://{{ proxmox_host }}:{{ proxmox_port }}/api2/json"
+
 - name: Authenticate to Proxmox API
   ansible.builtin.uri:
     url: "{{ proxmox_api }}/access/ticket"
@@ -29,7 +51,12 @@
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-  register: proxmox_existing_vms
+  register: _proxmox_existing_vms
+  when: proxmox_existing_vms is not defined
+
+- name: Set existing VMs fact
+  ansible.builtin.set_fact:
+    proxmox_existing_vms: "{{ _proxmox_existing_vms }}"
   when: proxmox_existing_vms is not defined
 
 - name: Check if image already exists on Proxmox
@@ -39,5 +66,10 @@
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-  register: proxmox_iso_content
+  register: _proxmox_iso_content
+  when: proxmox_iso_content is not defined
+
+- name: Set ISO content fact
+  ansible.builtin.set_fact:
+    proxmox_iso_content: "{{ _proxmox_iso_content }}"
   when: proxmox_iso_content is not defined

@@ -1,61 +1,42 @@
 ---
-# Deploy CoreDNS via Portainer stack
-# Image is pre-loaded at boot from ISO
+
+- name: Prompt for missing domain
+  ansible.builtin.pause:
+    prompt: "Domain name"
+  register: _dn
+  when: coredns_domain_name == ""
+
+- name: Set updated variable values
+  ansible.builtin.set_fact:
+    coredns_domain_name: "{{ _dn.user_input | default(coredns_domain_name) }}"
 
 - name: Deploy CoreDNS
   when: coredns_enabled | default(true)
   block:
-    - name: Create CoreDNS config volume and populate Corefile
-      ansible.builtin.raw: |
-        # Create volume in user namespace (rootless podman)
-        podman volume create coredns_config 2>/dev/null || true
 
-        # Get volume mount point
-        VOLPATH=$(podman volume inspect coredns_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
+    # -----------------------------------------------------------------
+    # Upload container images to Docker via Portainer API
+    # -----------------------------------------------------------------
 
-        # Write Corefile to volume
-        tee "${VOLPATH}/Corefile" > /dev/null << 'COREFILE'
-        . {
-            forward . {{ coredns_forward_dns }}
-            log
-            errors
-            cache 30
-            reload
-        }
-        COREFILE
+    - name: Upload container image tars to Docker via Portainer
+      ansible.builtin.uri:
+        url: "{{ portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/images/load"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+          Content-Type: "application/x-tar"
+        src: "{{ coredns_image_tar_dir }}/{{ item }}"
+        remote_src: false
+        validate_certs: false
+        status_code: [200]
+      loop: "{{ coredns_image_tars }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _coredns_image_load
 
-        chmod 644 "${VOLPATH}/Corefile"
-        echo "Corefile created at ${VOLPATH}/Corefile"
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      changed_when: true
-
-    - name: Ensure systemd-resolved stub listener is disabled for CoreDNS
-      ansible.builtin.raw: |
-        # Check if stub listener is already disabled (set in Ignition)
-        if grep -q 'DNSStubListener=no' /etc/systemd/resolved.conf.d/nostub.conf 2>/dev/null; then
-          # Restart resolved if not already restarted since boot
-          if ss -tlnup | grep -q '127.0.0.53:53'; then
-            sudo systemctl restart systemd-resolved
-          fi
-          echo "OK"
-        else
-          # Fallback: create config if not present from Ignition
-          sudo mkdir -p /etc/systemd/resolved.conf.d
-          echo -e '[Resolve]\nDNSStubListener=no' | sudo tee /etc/systemd/resolved.conf.d/nostub.conf > /dev/null
-          sudo systemctl restart systemd-resolved
-          echo "CONFIGURED"
-        fi
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      changed_when: "'CONFIGURED' in coredns_dnsstub_check.stdout"
-      register: coredns_dnsstub_check
+    - name: Render Corefile and encode for init container
+      ansible.builtin.set_fact:
+        _coredns_corefile_b64: "{{ lookup('template', 'Corefile.j2') | b64encode }}"
 
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:
@@ -64,6 +45,16 @@
         portainer_stack_name: "coredns"
         portainer_stack_compose_content: |
           services:
+            coredns-init:
+              image: docker.io/{{ coredns_init_image }}:{{ coredns_init_image_tag }}
+              pull_policy: never
+              container_name: coredns-init
+              restart: "no"
+              volumes:
+                - coredns_config:/config
+              entrypoint: ["/bin/sh", "-c"]
+              command:
+                - 'echo {{ _coredns_corefile_b64 }} | base64 -d > /config/Corefile && chmod 644 /config/Corefile'
             coredns:
               image: docker.io/{{ coredns_image_name }}:{{ coredns_image_tag }}
               pull_policy: never
@@ -75,26 +66,25 @@
               command:
                 - -conf
                 - /config/Corefile
+              depends_on:
+                coredns-init:
+                  condition: service_completed_successfully
           volumes:
             coredns_config:
-              external: true
 
-    - name: Wait for CoreDNS and test DNS resolution
-      ansible.builtin.raw: |
-        for i in $(seq 1 30); do
-          if nslookup google.com 127.0.0.1 2>/dev/null || dig @127.0.0.1 google.com +short 2>/dev/null | grep -q .; then
-            echo "CoreDNS ready - DNS resolution successful"
-            exit 0
-          fi
-          sleep 2
-        done
-        echo "CoreDNS not ready after 60s"
-        exit 1
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+    - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
+      ansible.builtin.wait_for:
+        host: "{{ infravm_ip }}"
+        port: "{{ coredns_dns_port }}"
+        timeout: 60
+
+    - name: Test DNS resolution through CoreDNS
+      ansible.builtin.command:
+        cmd: "dig @{{ infravm_ip }} google.com +short +timeout=3"
+      register: coredns_dns_check
+      until: coredns_dns_check.rc == 0 and coredns_dns_check.stdout | trim | length > 0
+      retries: 30
+      delay: 3
       changed_when: false
 
     - name: Display CoreDNS status

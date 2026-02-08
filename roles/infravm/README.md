@@ -22,7 +22,7 @@ InfraVM is a CoreOS-based VM that:
 |----------|---------|-------------|
 | `infravm_enabled` | `true` | Enable/disable this role |
 | `infravm_ansible_host` | `infra.{{ domain_name }}` (with cloudflared) or `infravm_ip` | SSH target for Ansible |
-| `infravm_container_images` | See defaults | List of container images to load |
+| `prestage_container_images` | See defaults | List of container images to load |
 | `infravm_nfs_mount_options` | `ro,noatime,vers=4.1` | NFS mount options |
 
 ### VM Configuration
@@ -34,8 +34,8 @@ InfraVM is a CoreOS-based VM that:
 | `infravm_memory` | `4096` | Memory in MB |
 | `infravm_disk_size` | `32G` | Root disk size |
 | `infravm_ip` | (required) | Static IP address |
-| `proxmox_vnet_gateway` | (required) | Network gateway |
-| `proxmox_cidr` | `24` | Network CIDR |
+| `vnet_gateway` | (required) | Network gateway |
+| `vnet_cidr` | `24` | Network CIDR |
 | `infravm_username` | `core` | VM user name |
 | `infravm_password_hash` | (default hash) | Password hash for user |
 | `infravm_ssh_public_key` | `~/.ssh/id_rsa.pub` | SSH public key for core user |
@@ -77,7 +77,7 @@ InfraVM is a CoreOS-based VM that:
 - hosts: localhost
   vars:
     infravm_ip: "10.1.1.100"
-    proxmox_vnet_gateway: "10.1.1.1"
+    vnet_gateway: "10.1.1.1"
     nfs_ip: "10.1.1.35"
   roles:
     - infravm
