@@ -10,12 +10,12 @@ coredns_init_image: "library/busybox"
 coredns_init_image_tag: "stable"
 
 # Pre-staged container image tarballs directory
-coredns_image_tar_dir: "{{ playbook_dir }}/nfs/containers"
+coredns_image_path: "{{ playbook_dir }}/artifacts/containers/coredns-dockerdiscovery.tar"
 
 # Image tar filenames (relative to coredns_image_tar_dir)
-coredns_image_tars:
-  - "coredns-coredns_{{ coredns_image_tag }}.tar"
-  - "library-busybox_{{ coredns_init_image_tag }}.tar"
+# coredns_image_tars:
+#   - "coredns-coredns_{{ coredns_image_tag }}.tar"
+#   - "library-busybox_{{ coredns_init_image_tag }}.tar"
 
 # CoreDNS configuration
 coredns_dns_port: 53

@@ -1,23 +1,10 @@
 ---
 # Deploy Traefik via Portainer stack
+# All tasks run from the Ansible controller via HTTP APIs (no SSH required)
 
 - name: Deploy Traefik
   when: traefik_enabled | default(true)
   block:
-    - name: Create Traefik config volume
-      ansible.builtin.raw: |
-        podman volume create traefik_config 2>/dev/null || true
-        VOLPATH=$(podman volume inspect traefik_config --format '{{ '{{' }} .Mountpoint {{ '}}' }}')
-        # Create empty dynamic config file if not exists
-        touch "${VOLPATH}/dynamic.yml"
-        echo "Traefik config at ${VOLPATH}"
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      changed_when: true
-
     - name: Deploy Traefik stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
@@ -25,18 +12,30 @@
         portainer_stack_name: "traefik"
         portainer_stack_compose_content: |
           services:
+            traefik-init:
+              image: docker.io/library/traefik:{{ traefik_image_tag }}
+              pull_policy: never
+              entrypoint: ["/bin/sh", "-c", "touch /etc/traefik/dynamic.yml"]
+              volumes:
+                - traefik_config:/etc/traefik
             traefik:
               image: docker.io/library/traefik:{{ traefik_image_tag }}
               pull_policy: never
               container_name: traefik
               restart: unless-stopped
-              network_mode: host
               security_opt:
                 - label=disable
+              ports:
+                - "{{ traefik_port_http }}:80"
+                - "{{ traefik_port_https }}:443"
+                - "{{ traefik_port_ui }}:8080"
+              depends_on:
+                traefik-init:
+                  condition: service_completed_successfully
               volumes:
                 - traefik_config:/etc/traefik:ro
                 - traefik_data:/data
-                - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
+                - /run/user/1000/podman/podman.sock:/var/run/docker.sock
               command:
                 - --api.dashboard=true
                 - --api.insecure=true
@@ -49,25 +48,18 @@
                 - --log.level={{ traefik_log_level }}
           volumes:
             traefik_config:
-              external: true
             traefik_data:
 
     - name: Wait for Traefik to be ready
-      ansible.builtin.raw: |
-        for i in $(seq 1 30); do
-          if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:80 2>/dev/null | grep -qE '(200|404|301|302)'; then
-            echo "Traefik ready"
-            exit 0
-          fi
-          sleep 2
-        done
-        echo "Traefik not ready after 60s"
-        exit 1
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+      ansible.builtin.uri:
+        url: "http://{{ infravm_ip }}:{{ traefik_port_http }}"
+        method: GET
+        status_code: [200, 301, 302, 404]
+        validate_certs: false
+      register: traefik_health
+      until: traefik_health.status | default(-1) in [200, 301, 302, 404]
+      retries: 30
+      delay: 2
       changed_when: false
 
     - name: Display Traefik status

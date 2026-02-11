@@ -1,6 +1,4 @@
 ---
 - name: Deploy Traefik
-  hosts: coreos
-  gather_facts: true
   roles:
     - traefik

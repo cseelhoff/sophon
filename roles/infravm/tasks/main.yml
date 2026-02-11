@@ -265,23 +265,19 @@
   ansible.builtin.debug:
     msg: |
       ═══════════════════════════════════════════════════════════════════
-      
+
       Name: {{ infravm_vm_name }}
       VMID: {{ infravm_vmid }}
       IP: {{ infravm_ip }}
-      
+
       ═══════════════════════════════════════════════════════════════════
 
 # =============================================================================
 # Initialize Portainer
 # =============================================================================
-- name: Set Portainer API base URL
-  ansible.builtin.set_fact:
-    portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"
-
 - name: Wait for Portainer API to be ready
   ansible.builtin.uri:
-    url: "{{ portainer_url }}/api/status"
+    url: "{{ infravm_portainer_url }}/api/status"
     method: GET
     validate_certs: false
     status_code: 200
@@ -293,7 +289,7 @@
 
 - name: Check if Portainer admin is already initialized
   ansible.builtin.uri:
-    url: "{{ portainer_url }}/api/users/admin/check"
+    url: "{{ infravm_portainer_url }}/api/users/admin/check"
     method: GET
     validate_certs: false
     status_code: [204, 404]
@@ -316,7 +312,7 @@
 
     - name: Initialize Portainer admin user
       ansible.builtin.uri:
-        url: "{{ portainer_url }}/api/users/admin/init"
+        url: "{{ infravm_portainer_url }}/api/users/admin/init"
         method: POST
         body_format: json
         body:
@@ -333,7 +329,7 @@
 
 - name: Authenticate with Portainer
   ansible.builtin.uri:
-    url: "{{ portainer_url }}/api/auth"
+    url: "{{ infravm_portainer_url }}/api/auth"
     method: POST
     body_format: json
     body:
@@ -346,7 +342,7 @@
 
 - name: Get Portainer endpoints
   ansible.builtin.uri:
-    url: "{{ portainer_url }}/api/endpoints"
+    url: "{{ infravm_portainer_url }}/api/endpoints"
     method: GET
     headers:
       Authorization: "Bearer {{ portainer_auth.json.jwt }}"
@@ -367,7 +363,7 @@
 
 - name: Create local Docker endpoint if none exist
   ansible.builtin.uri:
-    url: "{{ portainer_url }}/api/endpoints"
+    url: "{{ infravm_portainer_url }}/api/endpoints"
     method: POST
     headers:
       Authorization: "Bearer {{ portainer_auth.json.jwt }}"
@@ -398,7 +394,7 @@
       ═══════════════════════════════════════════════════════════════════
 
       Portainer:
-        URL: https://{{ infravm_ip }}:{{ infravm_portainer_port }}
+        URL: {{ infravm_portainer_url }}
         Username: admin
         Password: {{ portainer_admin_password }}
 

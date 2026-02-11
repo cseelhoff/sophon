@@ -53,12 +53,12 @@
     - name: Deploy InfraVM
       ansible.builtin.include_role: { name: infravm }
 
-    - ansible.builtin.include_role: { name: coredns }
- 
-    # - name: Set global SSH connection facts
-    #   ansible.builtin.set_fact:
-    #     infravm_ansible_host: "{{ 'infra.' ~ domain_name if infravm_cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
-    #   when: infravm_gateway is not defined or infravm_gateway == ""
+    - name: Deploy CoreDNS Docker Discovery
+      ansible.builtin.include_role: { name: coredns }
+
+    - name: Deploy Traefik
+      ansible.builtin.include_role: { name: traefik }
+
 
     - name: Display final IP configuration
       ansible.builtin.debug:

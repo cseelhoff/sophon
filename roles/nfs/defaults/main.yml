@@ -42,7 +42,7 @@ nfs_dns: "{{ vnet_dns | default('') }}"
 nfs_alpine_version: "3.21"
 
 # Local paths for image building and caching
-nfs_build_dir: "nfs_vm_build"
+nfs_build_dir: "{{ playbook_dir }}/artifacts/nfs-vm-build"
 nfs_image_filename: "sophon-nfs-alpine.qcow2"
 nfs_image_path: "{{ nfs_build_dir }}/{{ nfs_image_filename }}"
 
@@ -83,4 +83,3 @@ nfs_storage_name: "sophon-nfs"
 nfs_proxmox_content_types: "images,iso,backup,snippets"
 
 nfs_root_password: "{{ proxmox_password }}"
-

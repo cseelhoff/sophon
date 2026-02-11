@@ -8,9 +8,9 @@
 # VM Configuration
 # =============================================================================
 infravm_vm_name: "sophon-infravm"
-infravm_cores: 2
-infravm_memory: 4096
-infravm_disk_size: "32G"
+infravm_cores: 8
+infravm_memory: 8192
+infravm_disk_size: "100G"
 
 # User Configuration
 infravm_username: "core"
@@ -44,6 +44,9 @@ infravm_nfs_mount_options: "ro,noatime,vers=4.1"
 # List of container images to load on InfraVM
 # These are cached on NFS at /export/containers/<basename>.tar
 infravm_portainer_port: 9443
+# infravm_portainer_fqdn: "portainer.{{ sophon_domain }}"
+infravm_portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"
+
 
 # =============================================================================
 # CoreOS Image
@@ -53,10 +56,3 @@ infravm_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable
 infravm_coreos_xz_filename: "{{ infravm_coreos_url | basename }}"
 infravm_coreos_qcow2_filename: "{{ infravm_coreos_xz_filename | regex_replace('\\.xz$', '') }}"
 infravm_coreos_iso_filename: "{{ infravm_coreos_qcow2_filename }}.iso"
-
-
-# =============================================================================
-# Local Cache/Download Directories
-# =============================================================================
-coreos_local_cache_dir: "/tmp/sophon_cache"
-coreos_local_download_dir: "/tmp/sophon_images"

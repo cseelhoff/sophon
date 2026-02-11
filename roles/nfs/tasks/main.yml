@@ -116,12 +116,16 @@
                       --script-chroot {{ nfs_build_dir }}/nfs-chroot-setup.sh
                       {{ nfs_build_dir }}/{{ nfs_image_filename }}
                     # creates: "{{ nfs_build_dir }}"
+                  changed_when: true
                   environment:
                     SSL_CERT_FILE: "{{ lookup('env', 'SSL_CERT_FILE') | default('/etc/ssl/certs/ca-certificates.crt', true) }}"
                     NIX_SSL_CERT_FILE: "{{ lookup('env', 'NIX_SSL_CERT_FILE') | default('', true) }}"
                     LIBGUESTFS_BACKEND: "direct"
 
-            - name: Upload image via curl (as ISO for local storage compatibility)
+            # Using curl instead of ansible.builtin.uri because the uri module's
+            # form-multipart body base64-encodes binary file payloads, which
+            # Proxmox does not accept. See https://github.com/ansible/ansible/issues/73621
+            - name: Upload image via curl (as ISO for local storage compatibility) # noqa: command-instead-of-module
               ansible.builtin.shell:
                 cmd: >-
                   curl -k -s
@@ -157,7 +161,7 @@
                 nfs_upload_upid: "{{ (nfs_upload_result.stdout | from_json).data | default('') }}"
               when: nfs_upload_result.stdout is defined and 'data' in nfs_upload_result.stdout
 
-            - name: debug upload UPID
+            - name: Debug upload UPID
               ansible.builtin.debug:
                 var: nfs_upload_upid
 
@@ -365,87 +369,36 @@
   register: nfs_temp_mount
 
 - name: Test NFS mount and verify contents
-  block:
-    - name: Mount NFS export with fuse-nfs
-      ansible.builtin.shell:
-        cmd: "fuse-nfs -n 'nfs://{{ nfs_ip }}{{ nfs_export_root }}?rsize=1048576&wsize=1048576&readahead=1048576' -m {{ nfs_temp_mount.path }} -d"
-      register: nfs_mount_result
-      changed_when: true
-      failed_when: false
+  ansible.builtin.shell:
+    cmd: "fuse-nfs -n 'nfs://{{ nfs_ip }}{{ nfs_export_root }}?rsize=1048576&wsize=1048576&readahead=1048576' -m {{ nfs_temp_mount.path }} -d"
+  register: nfs_mount_result
+  changed_when: true
+  failed_when: false
 
-    # - name: Wait for mount to stabilize
-    #   ansible.builtin.pause:
-    #     seconds: 3
+- name: Set NFS mount success fact
+  ansible.builtin.set_fact:
+    nfs_mount_success: "{{ nfs_mount_result.rc == 0 }}"
 
-    # - name: Verify mount succeeded by listing contents
-    #   ansible.builtin.shell:
-    #     cmd: "ls -la {{ nfs_temp_mount.path }}"
-    #   register: nfs_mount_verify
-    #   changed_when: false
-    #   failed_when: false
-
-    # - name: Set NFS reachability fact
-    #   ansible.builtin.set_fact:
-    #     nfs_reachable: "{{ nfs_mount_verify.rc == 0 and 'containers' in nfs_mount_verify.stdout }}"
-
-    # - name: Debug NFS mount verification
-    #   ansible.builtin.debug:
-    #     msg: |
-    #       NFS Server IP: {{ nfs_ip }}
-    #       NFS Export: {{ nfs_export_root | default('/export') }}
-    #       Mount point: {{ nfs_temp_mount.path }}
-          
-    #       Mount RC: {{ nfs_mount_result.rc }}
-    #       Mount output: {{ nfs_mount_result.stdout | default('(no output)') }}
-    #       Mount error: {{ nfs_mount_result.stderr | default('(no errors)') }}
-          
-    #       List verify RC: {{ nfs_mount_verify.rc }}
-    #       Contents:
-    #       {{ nfs_mount_verify.stdout | default('(no output)') }}
-    #       List error: {{ nfs_mount_verify.stderr | default('(no errors)') }}
-          
-    #       NFS Reachable: {{ nfs_reachable }}
-
-# =============================================================================
-# Upload Container Images to NFS (if NFS is reachable)
-# =============================================================================
-# - name: Find container images to upload
-#   ansible.builtin.find:
-#     paths: "{{ playbook_dir }}/nfs/containers"
-#     patterns: "*.tar"
-#   register: container_images
-#   when: nfs_reachable
-
-# - name: Check if container images already exist on NFS
-#   ansible.builtin.stat:
-#     path: "{{ nfs_temp_mount.path }}/containers/{{ item.path | basename }}"
-#   loop: "{{ container_images.files }}"
-#   register: nfs_existing_images
-#   when: nfs_reachable and container_images.files | length > 0
-#   loop_control:
-#     index_var: file_idx
-
-# - name: Upload container images to NFS
-#   ansible.builtin.copy:
-#     src: "{{ item.path }}"
-#     dest: "{{ nfs_temp_mount.path }}/containers/{{ item.path | basename }}"
-#   loop: "{{ container_images.files }}"
-#   loop_control:
-#     index_var: file_idx
-#   when: nfs_reachable and container_images.files | length > 0 and not nfs_existing_images.results[file_idx].stat.exists
+- name: Warn if NFS mount failed
+  ansible.builtin.debug:
+    msg: "WARNING: NFS mount failed (rc={{ nfs_mount_result.rc }}). Skipping NFS content upload. stderr: {{ nfs_mount_result.stderr | default('') }}"
+  when: not nfs_mount_success
 
 - name: Check local portainer image size
   ansible.builtin.stat:
-    path: "{{ playbook_dir }}/nfs/containers/portainer-portainer-ce_2.27.1.tar"
+    path: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.27.1.tar"
   register: nfs_portainer_local
+  when: nfs_mount_success
 
 - name: Check remote portainer image size
   ansible.builtin.stat:
     path: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.27.1.tar"
   register: nfs_portainer_remote
+  when: nfs_mount_success
 
 - name: Upload portainer image to NFS
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/nfs/containers/portainer-portainer-ce_2.27.1.tar"
+    src: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.27.1.tar"
     dest: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.27.1.tar"
-  when: not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size
+    mode: "0644"
+  when: nfs_mount_success and (not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size)

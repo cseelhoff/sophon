@@ -2,14 +2,9 @@
 # Deploy Stack to Portainer via REST API
 # Uses ansible.builtin.uri to call Portainer directly from controller (no SSH)
 
-- name: Set Portainer API base URL
-  ansible.builtin.set_fact:
-    _portainer_api_url: "https://{{ infravm_ip }}:{{ portainer_port }}"
-  changed_when: false
-
 - name: Authenticate with Portainer
   ansible.builtin.uri:
-    url: "{{ _portainer_api_url }}/api/auth"
+    url: "{{ infravm_portainer_url }}/api/auth"
     method: POST
     body_format: json
     body:
@@ -26,7 +21,7 @@
 
 - name: Get endpoints
   ansible.builtin.uri:
-    url: "{{ _portainer_api_url }}/api/endpoints"
+    url: "{{ infravm_portainer_url }}/api/endpoints"
     method: GET
     headers:
       Authorization: "Bearer {{ portainer_stack_auth_token }}"
@@ -45,7 +40,7 @@
   block:
     - name: Create local endpoint
       ansible.builtin.uri:
-        url: "{{ _portainer_api_url }}/api/endpoints"
+        url: "{{ infravm_portainer_url }}/api/endpoints"
         method: POST
         headers:
           Authorization: "Bearer {{ portainer_stack_auth_token }}"
@@ -72,7 +67,7 @@
 
 - name: Get existing stacks
   ansible.builtin.uri:
-    url: "{{ _portainer_api_url }}/api/stacks"
+    url: "{{ infravm_portainer_url }}/api/stacks"
     method: GET
     headers:
       Authorization: "Bearer {{ portainer_stack_auth_token }}"
@@ -88,7 +83,7 @@
 
 - name: Deploy new stack to Portainer
   ansible.builtin.uri:
-    url: "{{ _portainer_api_url }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}"
+    url: "{{ infravm_portainer_url }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}"
     method: POST
     headers:
       Authorization: "Bearer {{ portainer_stack_auth_token }}"

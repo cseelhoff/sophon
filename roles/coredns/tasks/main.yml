@@ -20,72 +20,62 @@
 
     - name: Upload container image tars to Docker via Portainer
       ansible.builtin.uri:
-        url: "{{ portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/images/load"
+        url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/images/load"
         method: POST
         headers:
           Authorization: "Bearer {{ portainer_auth.json.jwt }}"
           Content-Type: "application/x-tar"
-        src: "{{ coredns_image_tar_dir }}/{{ item }}"
+        src: "{{ coredns_image_path }}"
         remote_src: false
         validate_certs: false
         status_code: [200]
-      loop: "{{ coredns_image_tars }}"
-      loop_control:
-        label: "{{ item }}"
       register: _coredns_image_load
 
-    - name: Render Corefile and encode for init container
-      ansible.builtin.set_fact:
-        _coredns_corefile_b64: "{{ lookup('template', 'Corefile.j2') | b64encode }}"
+    # - name: Render Corefile and encode for init container
+    #   ansible.builtin.set_fact:
+    #     _coredns_corefile_b64: "{{ lookup('template', 'Corefile.j2') | b64encode }}"
 
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_name: "coredns"
+        portainer_stack_name: "coredns-dockerdiscovery"
         portainer_stack_compose_content: |
           services:
-            coredns-init:
-              image: docker.io/{{ coredns_init_image }}:{{ coredns_init_image_tag }}
-              pull_policy: never
-              container_name: coredns-init
-              restart: "no"
-              volumes:
-                - coredns_config:/config
-              entrypoint: ["/bin/sh", "-c"]
-              command:
-                - 'echo {{ _coredns_corefile_b64 }} | base64 -d > /config/Corefile && chmod 644 /config/Corefile'
             coredns:
-              image: docker.io/{{ coredns_image_name }}:{{ coredns_image_tag }}
-              pull_policy: never
+              image: coredns-dockerdiscovery:latest
               container_name: coredns
-              restart: unless-stopped
-              network_mode: host
+              restart: always
+              ports:
+                - "53:53/udp"
+                - "53:53/tcp"
               volumes:
-                - coredns_config:/config:ro
-              command:
-                - -conf
-                - /config/Corefile
-              depends_on:
-                coredns-init:
-                  condition: service_completed_successfully
-          volumes:
-            coredns_config:
+                - /var/run/docker.sock:/var/run/docker.sock:ro
+              environment:
+                - TRAEFIK_IP={{ infravm_ip }}
+                - TRAEFIK_HOST=traefik.{{ coredns_domain_name }}
+                - DOCKER_DOMAIN={{ coredns_domain_name }}
+                - CF_TARGET=traefik.{{ coredns_domain_name }}
+                - CF_TOKEN={{ coredns_cf_token }}
+                - CF_ZONE_DOMAIN={{ coredns_domain_name }}
+                - CF_ZONE_ID={{ coredns_cf_zone_id }}
+                - FORWARD_DNS=1.1.1.1 8.8.8.8
+                - CACHE_TTL=30
 
-    - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
-      ansible.builtin.wait_for:
-        host: "{{ infravm_ip }}"
-        port: "{{ coredns_dns_port }}"
-        timeout: 60
+    # - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
+    #   ansible.builtin.wait_for:
+    #     host: "{{ infravm_ip }}"
+    #     port: "{{ coredns_dns_port }}"
+    #     timeout: 60
 
-    - name: Test DNS resolution through CoreDNS
-      ansible.builtin.command:
-        cmd: "dig @{{ infravm_ip }} google.com +short +timeout=3"
-      register: coredns_dns_check
-      until: coredns_dns_check.rc == 0 and coredns_dns_check.stdout | trim | length > 0
-      retries: 30
-      delay: 3
-      changed_when: false
+    # - name: Test DNS resolution through CoreDNS
+    #   ansible.builtin.command:
+    #     cmd: "dig @{{ infravm_ip }} google.com +short +timeout=3"
+    #   register: coredns_dns_check
+    #   until: coredns_dns_check.rc == 0 and coredns_dns_check.stdout | trim | length > 0
+    #   retries: 30
+    #   delay: 3
+    #   changed_when: false
 
     - name: Display CoreDNS status
       ansible.builtin.debug:

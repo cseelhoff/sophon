@@ -7,20 +7,20 @@
 - name: Prompt for missing Proxmox host
   ansible.builtin.pause:
     prompt: "Proxmox API host (IP or hostname)"
-  register: _ph
+  register: _proxmox_host_input
   when: proxmox_host == ""
 
 - name: Prompt for missing password
   ansible.builtin.pause:
     prompt: "Proxmox password"
     echo: false
-  register: _pp
+  register: _proxmox_password
   when: proxmox_password == ""
 
 - name: Set updated variable values
   ansible.builtin.set_fact:
-    proxmox_host: "{{ _ph.user_input | default(proxmox_host) }}"
-    proxmox_password: "{{ _pp.user_input | default(proxmox_password) }}"
+    proxmox_host: "{{ _proxmox_host_input.user_input | default(proxmox_host) }}"
+    proxmox_password: "{{ _proxmox_password.user_input | default(proxmox_password) }}"
 
 - name: Set Proxmox API URL
   ansible.builtin.set_fact:
