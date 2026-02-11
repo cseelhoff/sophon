@@ -382,10 +382,6 @@
     portainer_local_endpoint_id: "{{ _portainer_create_endpoint.json['Id'] }}"
   when: portainer_local_endpoint_id is not defined
 
-- name: debug print portainer_local_endpoint_id
-  ansible.builtin.debug:
-    var: portainer_local_endpoint_id
-
 - name: Display InfraVM access info
   ansible.builtin.debug:
     msg: |

@@ -76,17 +76,17 @@
               name: proxy
               driver: bridge
 
-    - name: Wait for Traefik to be ready
-      ansible.builtin.uri:
-        url: "http://{{ infravm_ip }}:{{ traefik_port_http }}"
-        method: GET
-        status_code: [200, 301, 302, 404]
-        validate_certs: false
-      register: traefik_health
-      until: traefik_health.status | default(-1) in [200, 301, 302, 404]
-      retries: 30
-      delay: 2
-      changed_when: false
+    # - name: Wait for Traefik to be ready
+    #   ansible.builtin.uri:
+    #     url: "http://{{ infravm_ip }}:{{ traefik_port_http }}"
+    #     method: GET
+    #     status_code: [200, 301, 302, 404]
+    #     validate_certs: false
+    #   register: traefik_health
+    #   until: traefik_health.status | default(-1) in [200, 301, 302, 404]
+    #   retries: 30
+    #   delay: 2
+    #   changed_when: false
 
     - name: Display Traefik status
       ansible.builtin.debug:

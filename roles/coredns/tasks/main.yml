@@ -3,12 +3,12 @@
 - name: Prompt for missing domain
   ansible.builtin.pause:
     prompt: "Domain name"
-  register: _dn
+  register: _coredns_dn
   when: coredns_domain_name == ""
 
 - name: Set updated variable values
   ansible.builtin.set_fact:
-    coredns_domain_name: "{{ _dn.user_input | default(coredns_domain_name) }}"
+    coredns_domain_name: "{{ _coredns_dn.user_input | default(coredns_domain_name) }}"
 
 - name: Deploy CoreDNS
   when: coredns_enabled | default(true)
