@@ -12,11 +12,11 @@ openldap_data_dir: "/opt/openldap"
 # Network ports
 openldap_port_ldap: 389
 openldap_port_ldaps: 636
-openldap_port_admin: 8089
+openldap_port_admin: 80
 
 # Domain configuration
-openldap_organisation: "Sophon"
-openldap_domain: "{{ traefik_domain | default('example.local') }}"
+openldap_organisation: ""
+openldap_domain: "{{ domain_name }}"
 openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
 
 # Credentials (set via vault in production)

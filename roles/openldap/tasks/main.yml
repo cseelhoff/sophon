@@ -1,11 +1,6 @@
 ---
 # Deploy OpenLDAP Directory Service via Portainer Stack
 
-- name: Skip openldap deployment (disabled)
-  ansible.builtin.debug:
-    msg: "OpenLDAP role is disabled (openldap_enabled=false)"
-  when: not (openldap_enabled | default(false))
-
 - name: Deploy OpenLDAP
   when: openldap_enabled | default(false)
   block:
@@ -16,13 +11,16 @@
         portainer_stack_name: "openldap"
         portainer_stack_compose_content: |
           services:
-            openldap:
+            ldap:
               image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
-              pull_policy: never
-              container_name: openldap
-              restart: unless-stopped
-              hostname: ldap
-              network_mode: host
+              container_name: ldap
+              restart: always
+              hostname: ldap.{{ openldap_domain }}
+              extra_hosts:
+                - "ldap.{{ openldap_domain }}:127.0.0.1"
+              networks:
+                - proxy
+
               environment:
                 - LDAP_LOG_LEVEL={{ openldap_log_level }}
                 - LDAP_ORGANISATION={{ openldap_organisation }}
@@ -44,33 +42,42 @@
                 - openldap_config:/etc/ldap/slapd.d
 
             phpldapadmin:
+              networks:
+                - proxy
               image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
-              pull_policy: never
               container_name: phpldapadmin
-              restart: unless-stopped
-              network_mode: host
+              restart: always
               environment:
-                - PHPLDAPADMIN_LDAP_HOSTS=127.0.0.1
+                - PHPLDAPADMIN_LDAP_HOSTS=ldap
                 - PHPLDAPADMIN_HTTPS=false
                 - PHPLDAPADMIN_SERVER_ADMIN=admin@{{ openldap_domain }}
-
+              labels:
+                - "traefik.enable=true"
+                - "traefik.http.routers.ldapadmin.rule=Host(`ldapadmin.{{ openldap_domain }}`)"
+                - "traefik.http.routers.ldapadmin.entrypoints=websecure"
+                - "traefik.http.routers.ldapadmin.tls=true"
+                - "traefik.http.routers.ldapadmin.tls.certresolver=letsencrypt"
+                - "traefik.http.services.ldapadmin.loadbalancer.server.port={{ openldap_port_admin }}"
           volumes:
             openldap_data:
             openldap_config:
 
-    - name: Wait for OpenLDAP to be ready
-      ansible.builtin.raw: |
-        timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{{ openldap_port_ldap }}'
-      delegate_to: "{{ infravm_ansible_host }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: "{{ infravm_username }}"
-        ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-      register: openldap_health
-      until: openldap_health.rc == 0
-      retries: 30
-      delay: 5
-      changed_when: false
+          networks:
+            proxy:
+              external: true
+    # - name: Wait for OpenLDAP to be ready
+    #   ansible.builtin.raw: |
+    #     timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{{ openldap_port_ldap }}'
+    #   delegate_to: "{{ infravm_ansible_host }}"
+    #   vars:
+    #     ansible_connection: ssh
+    #     ansible_user: "{{ infravm_username }}"
+    #     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
+    #   register: openldap_health
+    #   until: openldap_health.rc == 0
+    #   retries: 30
+    #   delay: 5
+    #   changed_when: false
 
     - name: Display OpenLDAP status
       ansible.builtin.debug:

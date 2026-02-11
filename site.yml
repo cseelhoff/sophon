@@ -59,19 +59,22 @@
     - name: Deploy Traefik
       ansible.builtin.include_role: { name: traefik }
 
+    - name: Deploy OpenLDAP
+      ansible.builtin.include_role: { name: openldap }
 
-    - name: Display final IP configuration
-      ansible.builtin.debug:
-        msg: |
-          ═══════════════════════════════════════════════════════════════════
-          IP ADDRESS CONFIGURATION
-          ═══════════════════════════════════════════════════════════════════
-          NFS Server IP:    {{ nfs_ip }}
-          InfraVM IP:       {{ infravm_ip }}
-          Gateway:          {{ vnet_gateway }}
-          CIDR:             {{ vnet_cidr }}
-          Vnet:             {{ vnet_interface }}
-          ═══════════════════════════════════════════════════════════════════
+
+    # - name: Display final IP configuration
+    #   ansible.builtin.debug:
+    #     msg: |
+    #       ═══════════════════════════════════════════════════════════════════
+    #       IP ADDRESS CONFIGURATION
+    #       ═══════════════════════════════════════════════════════════════════
+    #       NFS Server IP:    {{ nfs_ip }}
+    #       InfraVM IP:       {{ infravm_ip }}
+    #       Gateway:          {{ vnet_gateway }}
+    #       CIDR:             {{ vnet_cidr }}
+    #       Vnet:             {{ vnet_interface }}
+    #       ═══════════════════════════════════════════════════════════════════
 
     # - name: Set global SSH connection facts
     #   ansible.builtin.set_fact:
