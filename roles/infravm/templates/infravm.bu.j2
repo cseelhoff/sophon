@@ -58,7 +58,7 @@ storage:
 
           [ipv4]
           address1={{ infravm_ip }}/{{ vnet_cidr }},{{ vnet_gateway }}
-          dns={{ vnet_dns }};
+          dns=127.0.0.1;{{ vnet_dns }};
           method=manual
 
   links:

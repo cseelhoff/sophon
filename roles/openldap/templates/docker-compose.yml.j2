@@ -1,71 +1,97 @@
-
 services:
-  openldap:
-    image: {{ openldap_image_name }}:{{ openldap_image_tag }}
-    container_name: openldap
+{% if openldap_tls_enabled %}
+  certs-dumper:
+    image: docker.io/{{ openldap_certs_dumper_image_name }}:{{ openldap_certs_dumper_image_tag }}
+    container_name: ldap-certs-dumper
     restart: unless-stopped
-    hostname: ldap
-    domainname: {{ openldap_domain }}
-    environment:
-      - LDAP_LOG_LEVEL={{ openldap_log_level }}
-      - LDAP_ORGANISATION={{ openldap_organisation }}
-      - LDAP_DOMAIN={{ openldap_domain }}
-      - LDAP_ADMIN_PASSWORD=${LDAP_ADMIN_PASSWORD}
-      - LDAP_CONFIG_PASSWORD=${LDAP_CONFIG_PASSWORD}
-      - LDAP_READONLY_USER=false
-      - LDAP_RFC2307BIS_SCHEMA=false
-      - LDAP_BACKEND=mdb
-      - LDAP_TLS={{ openldap_tls_enabled | lower }}
-      - LDAP_TLS_ENFORCE={{ openldap_tls_enforce | lower }}
-      - LDAP_REPLICATION=false
-      - KEEP_EXISTING_CONFIG=false
-      - LDAP_REMOVE_CONFIG_AFTER_SETUP=true
-    tty: true
-    stdin_open: true
     volumes:
-      - {{ openldap_data_dir }}/database:/var/lib/ldap
-      - {{ openldap_data_dir }}/config:/etc/ldap/slapd.d
-      - {{ openldap_data_dir }}/certs:/container/service/slapd/assets/certs
-    ports:
-      - "{{ openldap_port_ldap }}:389"
-      - "{{ openldap_port_ldaps }}:636"
+      - acme_data:/data:ro
+      - ldap_certs:/output
+    command: file --source /data/acme.json --dest /output --version v2 --watch --post-hook "chmod -R a+r /output/private/"
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /output/certs/{{ openldap_tls_domain }}.crt"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+{% endif %}
+  ldap:
+    image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
+    container_name: ldap
+    restart: always
+{% if openldap_tls_enabled %}
     networks:
-      - ldap
+      default:
+      proxy:
+        aliases:
+          - {{ openldap_tls_domain }}
+    depends_on:
+      certs-dumper:
+        condition: service_healthy
+{% else %}
+    networks:
       - proxy
-    labels:
-      - "homepage.group=Infrastructure"
-      - "homepage.name=OpenLDAP"
-      - "homepage.icon=openldap"
-      - "homepage.description=Directory Service"
+{% endif %}
+    environment:
+      - LDAP_ROOT={{ openldap_base_dn }}
+      - LDAP_ADMIN_USERNAME=admin
+      - LDAP_ADMIN_PASSWORD={{ openldap_admin_password | default('admin') }}
+      - LDAP_LOGLEVEL={{ openldap_log_level }}
+      - LDAP_PORT_NUMBER={{ openldap_port_ldap }}
+      - LDAP_LDAPS_PORT_NUMBER={{ openldap_port_ldaps }}
+      - LDAP_ALLOW_ANON_BINDING=no
+{% if openldap_tls_enabled %}
+      - LDAP_ENABLE_TLS=yes
+      - LDAP_REQUIRE_TLS={{ 'yes' if openldap_tls_enforce else 'no' }}
+      - LDAP_TLS_CERT_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
+      - LDAP_TLS_KEY_FILE=/opt/bitnami/openldap/certs/private/{{ openldap_tls_domain }}.key
+      - LDAP_TLS_CA_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
+{% endif %}
+      - LDAP_SKIP_DEFAULT_TREE=no
+      - LDAP_USERS=
+      - LDAP_PASSWORDS=
+    volumes:
+      - openldap_data:/bitnami/openldap
+{% if openldap_tls_enabled %}
+      - ldap_certs:/opt/bitnami/openldap/certs:ro
+{% endif %}
 
   phpldapadmin:
-    image: {{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
-    container_name: phpldapadmin
-    restart: unless-stopped
-    environment:
-      - PHPLDAPADMIN_LDAP_HOSTS=openldap
-      - PHPLDAPADMIN_HTTPS=false
-    ports:
-      - "{{ openldap_port_admin }}:80"
-    depends_on:
-      - openldap
     networks:
-      - ldap
-      - proxy
+      default:
+      proxy:
+    image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
+    container_name: phpldapadmin
+    restart: always
+    environment:
+      - PHPLDAPADMIN_LDAP_HOSTS=ldap
+      - PHPLDAPADMIN_HTTPS=false
+      - PHPLDAPADMIN_SERVER_ADMIN=admin@{{ openldap_domain }}
+      - PHPLDAPADMIN_LDAP_CLIENT_TLS=false
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.ldapadmin.entrypoints=https"
-      - "traefik.http.routers.ldapadmin.rule=Host(`ldap.{{ openldap_domain }}`)"
+      - "traefik.http.routers.ldapadmin.rule=Host(`ldapadmin.{{ openldap_domain }}`)"
+      - "traefik.http.routers.ldapadmin.entrypoints=websecure"
       - "traefik.http.routers.ldapadmin.tls=true"
-      - "traefik.http.services.ldapadmin.loadbalancer.server.port=80"
-      - "homepage.group=Infrastructure"
-      - "homepage.name=phpLDAPadmin"
-      - "homepage.icon=phpldapadmin"
-      - "homepage.href=https://ldap.{{ openldap_domain }}"
-      - "homepage.description=LDAP Admin UI"
+      - "traefik.http.routers.ldapadmin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ldapadmin.loadbalancer.server.port={{ openldap_port_admin }}"
+{% if openldap_tls_enabled %}
+      - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
+      - "traefik.http.routers.ldap-certs.entrypoints=websecure"
+      - "traefik.http.routers.ldap-certs.tls=true"
+      - "traefik.http.routers.ldap-certs.tls.certresolver=letsencrypt"
+{% endif %}
+
+volumes:
+  openldap_data:
+{% if openldap_tls_enabled %}
+  ldap_certs:
+  acme_data:
+    external: true
+    name: {{ openldap_traefik_acme_volume }}
+{% endif %}
 
 networks:
-  ldap:
-    driver: bridge
   proxy:
     external: true

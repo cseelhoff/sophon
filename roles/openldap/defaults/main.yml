@@ -1,21 +1,17 @@
 ---
 # OpenLDAP configuration
 openldap_enabled: true
-openldap_image_name: "osixia/openldap"
-openldap_image_tag: "1.5.0"
+openldap_image_name: "bitnamilegacy/openldap"
+openldap_image_tag: "2.6.10-debian-12-r4"
 openldap_phpldapadmin_image_name: "osixia/phpldapadmin"
 openldap_phpldapadmin_image_tag: "0.9.0"
 
-# Directories
-openldap_data_dir: "/opt/openldap"
-
-# Network ports
+# Network ports (bitnami supports privileged ports)
 openldap_port_ldap: 389
 openldap_port_ldaps: 636
 openldap_port_admin: 80
 
 # Domain configuration
-openldap_organisation: ""
 openldap_domain: "{{ domain_name }}"
 openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
 
@@ -24,8 +20,14 @@ openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.
 # openldap_config_password: ""
 
 # TLS settings
-openldap_tls_enabled: false
+openldap_tls_enabled: true
 openldap_tls_enforce: false
+openldap_tls_domain: "ldap.{{ openldap_domain }}"
+
+# Certs dumper (extracts ACME certs from Traefik for LDAPS)
+openldap_certs_dumper_image_name: "ldez/traefik-certs-dumper"
+openldap_certs_dumper_image_tag: "v2.8.3"
+openldap_traefik_acme_volume: "traefik_traefik_data"
 
 # Logging
 openldap_log_level: 256

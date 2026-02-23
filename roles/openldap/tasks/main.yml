@@ -9,62 +9,7 @@
         name: portainer_stack
       vars:
         portainer_stack_name: "openldap"
-        portainer_stack_compose_content: |
-          services:
-            ldap:
-              image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
-              container_name: ldap
-              restart: always
-              hostname: ldap.{{ openldap_domain }}
-              extra_hosts:
-                - "ldap.{{ openldap_domain }}:127.0.0.1"
-              networks:
-                - proxy
-
-              environment:
-                - LDAP_LOG_LEVEL={{ openldap_log_level }}
-                - LDAP_ORGANISATION={{ openldap_organisation }}
-                - LDAP_DOMAIN={{ openldap_domain }}
-                - LDAP_ADMIN_PASSWORD={{ openldap_admin_password | default('admin') }}
-                - LDAP_CONFIG_PASSWORD={{ openldap_config_password | default('config') }}
-                - LDAP_READONLY_USER=false
-                - LDAP_RFC2307BIS_SCHEMA=false
-                - LDAP_BACKEND=mdb
-                - LDAP_TLS={{ openldap_tls_enabled | string | lower }}
-                - LDAP_TLS_ENFORCE={{ openldap_tls_enforce | string | lower }}
-                - LDAP_REPLICATION=false
-                - KEEP_EXISTING_CONFIG=false
-                - LDAP_REMOVE_CONFIG_AFTER_SETUP=true
-              tty: true
-              stdin_open: true
-              volumes:
-                - openldap_data:/var/lib/ldap
-                - openldap_config:/etc/ldap/slapd.d
-
-            phpldapadmin:
-              networks:
-                - proxy
-              image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
-              container_name: phpldapadmin
-              restart: always
-              environment:
-                - PHPLDAPADMIN_LDAP_HOSTS=ldap
-                - PHPLDAPADMIN_HTTPS=false
-                - PHPLDAPADMIN_SERVER_ADMIN=admin@{{ openldap_domain }}
-              labels:
-                - "traefik.enable=true"
-                - "traefik.http.routers.ldapadmin.rule=Host(`ldapadmin.{{ openldap_domain }}`)"
-                - "traefik.http.routers.ldapadmin.entrypoints=websecure"
-                - "traefik.http.routers.ldapadmin.tls=true"
-                - "traefik.http.routers.ldapadmin.tls.certresolver=letsencrypt"
-                - "traefik.http.services.ldapadmin.loadbalancer.server.port={{ openldap_port_admin }}"
-          volumes:
-            openldap_data:
-            openldap_config:
-
-          networks:
-            proxy:
-              external: true
+        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
     # - name: Wait for OpenLDAP to be ready
     #   ansible.builtin.raw: |
     #     timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{{ openldap_port_ldap }}'

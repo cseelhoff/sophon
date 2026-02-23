@@ -6,3 +6,4 @@ portainer_stack_name: ""
 portainer_stack_env_vars: []
 portainer_stack_validate_certs: false
 portainer_stack_compose_content: ""
+portainer_stack_deploy_timeout: 120

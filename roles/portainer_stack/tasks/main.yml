@@ -95,6 +95,7 @@
       fromAppTemplate: false
     validate_certs: "{{ portainer_stack_validate_certs }}"
     status_code: [200, 201]
+    timeout: "{{ portainer_stack_deploy_timeout }}"
   register: portainer_stack_deploy_result
   when: portainer_stack_existing is none
   changed_when: portainer_stack_existing is none
