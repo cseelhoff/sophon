@@ -45,6 +45,9 @@ services:
       - LDAP_TLS_KEY_FILE=/opt/bitnami/openldap/certs/private/{{ openldap_tls_domain }}.key
       - LDAP_TLS_CA_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
 {% endif %}
+      - LDAP_CONFIG_ADMIN_ENABLED=yes
+      - LDAP_CONFIG_ADMIN_USERNAME=configadmin
+      - LDAP_CONFIG_ADMIN_PASSWORD={{ openldap_config_password | default(openldap_admin_password | default('admin')) }}
       - LDAP_SKIP_DEFAULT_TREE=no
       - LDAP_USERS=
       - LDAP_PASSWORDS=
@@ -53,6 +56,54 @@ services:
 {% if openldap_tls_enabled %}
       - ldap_certs:/opt/bitnami/openldap/certs:ro
 {% endif %}
+
+  ldap-init:
+    image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
+    container_name: ldap-init
+    restart: "no"
+    networks:
+      - proxy
+    depends_on:
+      ldap:
+        condition: service_started
+    environment:
+      - LDAP_HOST=ldap
+      - LDAP_PORT={{ openldap_port_ldap }}
+      - LDAP_CONFIG_ADMIN_DN=cn=configadmin,cn=config
+      - LDAP_CONFIG_ADMIN_PASSWORD={{ openldap_config_password | default(openldap_admin_password | default('admin')) }}
+      - LDAP_ADMIN_DN=cn=admin,{{ openldap_base_dn }}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "Waiting for LDAP to be ready..."
+        for i in $$(seq 1 60); do
+          ldapsearch -x -H ldap://$$LDAP_HOST:$$LDAP_PORT -D "$$LDAP_CONFIG_ADMIN_DN" -w "$$LDAP_CONFIG_ADMIN_PASSWORD" -b "olcDatabase={2}mdb,cn=config" olcAccess 2>/dev/null && break
+          echo "Attempt $$i: LDAP not ready, retrying in 3s..."
+          sleep 3
+        done
+
+        EXISTING=$$(ldapsearch -x -H ldap://$$LDAP_HOST:$$LDAP_PORT -D "$$LDAP_CONFIG_ADMIN_DN" -w "$$LDAP_CONFIG_ADMIN_PASSWORD" -b "olcDatabase={2}mdb,cn=config" -LLL olcAccess 2>/dev/null | grep -c olcAccess || true)
+        if [ "$$EXISTING" -gt 0 ]; then
+          echo "ACLs already configured, skipping."
+          exit 0
+        fi
+
+        echo "Applying ACL rules..."
+        ldapmodify -x -H ldap://$$LDAP_HOST:$$LDAP_PORT -D "$$LDAP_CONFIG_ADMIN_DN" -w "$$LDAP_CONFIG_ADMIN_PASSWORD" <<EOF
+        dn: olcDatabase={2}mdb,cn=config
+        changetype: modify
+        add: olcAccess
+        olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=1001,cn=peercred,cn=external,cn=auth manage by * break
+        olcAccess: {1}to attrs=userPassword,shadowLastChange by self write by dn="$$LDAP_ADMIN_DN" write by anonymous auth by * none
+        olcAccess: {2}to * by self read by dn="$$LDAP_ADMIN_DN" write by * read
+        EOF
+
+        if [ $$? -eq 0 ]; then
+          echo "ACLs applied successfully."
+        else
+          echo "Failed to apply ACLs."
+          exit 1
+        fi
 
   phpldapadmin:
     image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}

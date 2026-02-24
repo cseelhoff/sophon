@@ -17,7 +17,7 @@ openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.
 
 # Credentials (set via vault in production)
 # openldap_admin_password: ""
-# openldap_config_password: ""
+# openldap_config_password: ""  # defaults to openldap_admin_password if unset
 
 # TLS settings
 openldap_tls_enabled: true
