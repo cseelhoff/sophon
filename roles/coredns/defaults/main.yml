@@ -25,6 +25,10 @@ coredns_config_dir: "/opt/coredns"
 coredns_forward_dns: "9.9.9.9"
 coredns_domain_name: ""
 
+# Cloudflare settings
+coredns_cf_account_id: ""
+coredns_cf_tunnel_id: ""
+
 # Local zones (synced by dns_sync sidecar)
 # coredns_local_zones:
 #   - name: "homelab.local"

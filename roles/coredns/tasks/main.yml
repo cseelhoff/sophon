@@ -39,18 +39,22 @@
       ansible.builtin.include_role:
         name: portainer_stack
       vars:
-        portainer_stack_name: "coredns-dockerdiscovery"
+        portainer_stack_name: "coredns"
         portainer_stack_compose_content: |
           services:
             coredns:
               image: coredns-dockerdiscovery:latest
               container_name: coredns
               restart: always
+              security_opt:
+                - label:disable
               ports:
                 - "53:53/udp"
                 - "53:53/tcp"
+              networks:
+                - proxy
               volumes:
-                - /var/run/docker.sock:/var/run/docker.sock:ro
+                - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
               environment:
                 - TRAEFIK_IP={{ infravm_ip }}
                 - TRAEFIK_HOST=traefik.{{ coredns_domain_name }}
@@ -59,8 +63,13 @@
                 - CF_TOKEN={{ coredns_cf_token }}
                 - CF_ZONE_DOMAIN={{ coredns_domain_name }}
                 - CF_ZONE_ID={{ coredns_cf_zone_id }}
+                - CF_ACCOUNT_ID={{ coredns_cf_account_id }}
+                - CF_TUNNEL_ID={{ coredns_cf_tunnel_id }}
                 - FORWARD_DNS=1.1.1.1 8.8.8.8
                 - CACHE_TTL=30
+          networks:
+            proxy:
+              external: true
 
     # - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
     #   ansible.builtin.wait_for:

@@ -5,7 +5,7 @@ services:
     container_name: dns-sync
     restart: unless-stopped
     volumes:
-      - /var/run/podman/podman.sock:/var/run/docker.sock:ro
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
       - /opt/dns_sync:/app:ro
       - {{ dns_sync_zones_dir }}:/zones:rw
     environment:

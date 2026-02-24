@@ -15,7 +15,7 @@ services:
       - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - /run/podman/podman.sock:/var/run/docker.sock:ro
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
       - traefik-config:/traefik.yml:/traefik.yml:ro
       - traefik-config:/config.yml:/config.yml:ro
       - traefik-data:/data
