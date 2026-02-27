@@ -147,11 +147,11 @@
     # -------------------------------------------------------------------------
     # Ignition Configuration (via Butane)
     # -------------------------------------------------------------------------
-    - name: Ensure local cache directory exists
-      ansible.builtin.file:
-        path: "{{ coreos_local_cache_dir }}"
+    - name: Create temporary directory for Ignition build
+      ansible.builtin.tempfile:
         state: directory
-        mode: "0755"
+        prefix: sophon_infravm_
+      register: _infravm_tmpdir
 
     - name: Generate yescrypt password hash
       ansible.builtin.set_fact:
@@ -160,12 +160,12 @@
     - name: Generate Butane config from template
       ansible.builtin.template:
         src: "{{ infravm_butane_template }}"
-        dest: "{{ coreos_local_cache_dir }}/{{ infravm_vm_name }}.bu"
+        dest: "{{ _infravm_tmpdir.path }}/{{ infravm_vm_name }}.bu"
         mode: "0644"
 
     - name: Convert Butane to Ignition JSON
       ansible.builtin.command:
-        cmd: "butane --strict {{ coreos_local_cache_dir }}/{{ infravm_vm_name }}.bu"
+        cmd: "butane --strict {{ _infravm_tmpdir.path }}/{{ infravm_vm_name }}.bu"
       register: ignition_result
       changed_when: false
 
@@ -209,6 +209,7 @@
         name: "{{ infravm_vm_name }}"
         cores: "{{ infravm_cores }}"
         memory: "{{ infravm_memory }}"
+        cpu: "{{ infravm_cpu_type }}"
         ostype: "l26"
         onboot: true
         autostart: true

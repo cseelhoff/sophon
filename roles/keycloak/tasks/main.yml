@@ -1,8 +1,13 @@
 ---
-# Deploy Keycloak Identity Provider
-# TODO: Rewrite to use portainer_stack approach (no delegate_to)
+# Deploy Keycloak Identity Provider via Portainer Stack
 
-- name: Skip keycloak deployment (disabled)
+- name: Deploy Keycloak stack via Portainer
+  ansible.builtin.include_role:
+    name: portainer_stack
+  vars:
+    portainer_stack_name: "keycloak"
+    portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+
+- name: Display Keycloak status
   ansible.builtin.debug:
-    msg: "Keycloak role is disabled (keycloak_enabled=false)"
-  when: not (keycloak_enabled | default(false))
+    msg: "Keycloak ready at https://{{ keycloak_hostname }}.{{ keycloak_domain }} (port {{ keycloak_port }})"

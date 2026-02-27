@@ -62,6 +62,9 @@
     - name: Deploy OpenLDAP
       ansible.builtin.include_role: { name: openldap }
 
+    - name: Deploy Keycloak
+      ansible.builtin.include_role: { name: keycloak }
+
 
     # - name: Display final IP configuration
     #   ansible.builtin.debug:

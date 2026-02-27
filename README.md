@@ -545,3 +545,7 @@ Key settings:
 3. Include molecule tests for new roles
 4. Run linting before submitting PR
 5. Update documentation as needed
+
+
+# example for 177cpt
+ansible-playbook site.yml -e proxmox_host=pm.177cpt.com -e proxmox_port=443 -e domain_name=177cpt.com -e proxmox_node=pve-prod-01 -e proxmox_password=example -e portainer_admin_password=example -e cloudflared_tunnel_token=example -e proxmox_iso_storage_id=fs-storage -e nfs_image_storage_path=/mnt/pve/fs-storage/template/iso -e vnet_vlan=60 -e nfs_ip=10.0.60.2 -e infravm_ip=10.0.60.3 -e vnet_gateway=10.0.60.1 -e vnet_cidr=24 -e coredns_domain_name=177cpt.com -e infravm_portainer_url=https://portainer.177cpt.com -e coredns_cf_token=example -e coredns_cf_zone_id=3fd93df8ed40e10b5b0de6ab1b1cface -e coredns_cf_account_id=6f64a8ecc4e31470814553e879a9db77 -e coredns_cf_tunnel_id=5c4fccc8-6376-479b-8131-7cd8cc033473 -e traefik_acme_email=admin@177cpt.com

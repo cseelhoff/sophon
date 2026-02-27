@@ -10,6 +10,7 @@
 infravm_vm_name: "sophon-infravm"
 infravm_cores: 8
 infravm_memory: 8192
+infravm_cpu_type: "x86-64-v2-AES"
 infravm_disk_size: "100G"
 
 # User Configuration
@@ -22,6 +23,7 @@ infravm_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore')
 
 # Butane template location
 infravm_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.j2"
+
 
 # =============================================================================
 # Cloudflared Settings (optional - enables tunnel access)

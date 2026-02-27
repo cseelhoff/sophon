@@ -31,7 +31,7 @@
               networks:
                 - proxy
               environment:
-                - CF_DNS_API_TOKEN={{ traefik_cf_dns_api_token }}
+                - CF_DNS_API_TOKEN={{ coredns_cf_token }}
               ports:
                 - "{{ traefik_port_http }}:80"
                 - "{{ traefik_port_https }}:443"

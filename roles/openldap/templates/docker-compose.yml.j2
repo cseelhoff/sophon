@@ -4,6 +4,8 @@ services:
     image: docker.io/{{ openldap_certs_dumper_image_name }}:{{ openldap_certs_dumper_image_tag }}
     container_name: ldap-certs-dumper
     restart: unless-stopped
+    networks:
+      - proxy
     volumes:
       - acme_data:/data:ro
       - ldap_certs:/output
@@ -21,10 +23,15 @@ services:
     container_name: ldap
     restart: always
     ports:
-      - "{{ openldap_port_ldap }}:{{ openldap_port_ldap }}"
       - "{{ openldap_port_ldaps }}:{{ openldap_port_ldaps }}"
     networks:
       - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -Q -Y EXTERNAL -H ldapi://%2Fopt%2Fbitnami%2Fopenldap%2Fvar%2Frun%2Fldapi -b '' -s base namingContexts 2>/dev/null | grep -q namingContexts"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
 {% if openldap_tls_enabled %}
     depends_on:
       certs-dumper:
@@ -56,54 +63,43 @@ services:
 {% if openldap_tls_enabled %}
       - ldap_certs:/opt/bitnami/openldap/certs:ro
 {% endif %}
-
-  ldap-init:
-    image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
-    container_name: ldap-init
-    restart: "no"
-    networks:
-      - proxy
-    depends_on:
-      ldap:
-        condition: service_started
-    environment:
-      - LDAP_HOST=ldap
-      - LDAP_PORT={{ openldap_port_ldap }}
-      - LDAP_CONFIG_ADMIN_DN=cn=configadmin,cn=config
-      - LDAP_CONFIG_ADMIN_PASSWORD={{ openldap_config_password | default(openldap_admin_password | default('admin')) }}
-      - LDAP_ADMIN_DN=cn=admin,{{ openldap_base_dn }}
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        echo "Waiting for LDAP to be ready..."
-        for i in $$(seq 1 60); do
-          ldapsearch -x -H ldap://$$LDAP_HOST:$$LDAP_PORT -D "$$LDAP_CONFIG_ADMIN_DN" -w "$$LDAP_CONFIG_ADMIN_PASSWORD" -b "olcDatabase={2}mdb,cn=config" olcAccess 2>/dev/null && break
-          echo "Attempt $$i: LDAP not ready, retrying in 3s..."
-          sleep 3
+        /opt/bitnami/scripts/openldap/entrypoint.sh /opt/bitnami/scripts/openldap/run.sh &
+        SLAPD_PID=$$!
+
+        LDAPI_URL="ldapi://%2Fopt%2Fbitnami%2Fopenldap%2Fvar%2Frun%2Fldapi"
+
+        echo "Waiting for slapd to be ready..."
+        for i in $$(seq 1 40); do
+          ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b '' -s base namingContexts >/dev/null 2>&1 && break
+          echo "Attempt $$i/40..."
+          sleep 2
         done
 
-        EXISTING=$$(ldapsearch -x -H ldap://$$LDAP_HOST:$$LDAP_PORT -D "$$LDAP_CONFIG_ADMIN_DN" -w "$$LDAP_CONFIG_ADMIN_PASSWORD" -b "olcDatabase={2}mdb,cn=config" -LLL olcAccess 2>/dev/null | grep -c olcAccess || true)
+        EXISTING=$$(ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b "olcDatabase={2}mdb,cn=config" -LLL olcAccess 2>/dev/null | grep -c olcAccess || true)
         if [ "$$EXISTING" -gt 0 ]; then
           echo "ACLs already configured, skipping."
-          exit 0
-        fi
-
-        echo "Applying ACL rules..."
-        ldapmodify -x -H ldap://$$LDAP_HOST:$$LDAP_PORT -D "$$LDAP_CONFIG_ADMIN_DN" -w "$$LDAP_CONFIG_ADMIN_PASSWORD" <<EOF
+        else
+          echo "Applying ACL rules..."
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF
         dn: olcDatabase={2}mdb,cn=config
         changetype: modify
         add: olcAccess
         olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=1001,cn=peercred,cn=external,cn=auth manage by * break
-        olcAccess: {1}to attrs=userPassword,shadowLastChange by self write by dn="$$LDAP_ADMIN_DN" write by anonymous auth by * none
-        olcAccess: {2}to * by self read by dn="$$LDAP_ADMIN_DN" write by * read
+        olcAccess: {1}to attrs=userPassword,shadowLastChange by self write by dn="cn=admin,{{ openldap_base_dn }}" write by anonymous auth by * none
+        olcAccess: {2}to * by self read by dn="cn=admin,{{ openldap_base_dn }}" write by * read
         EOF
 
-        if [ $$? -eq 0 ]; then
-          echo "ACLs applied successfully."
-        else
-          echo "Failed to apply ACLs."
-          exit 1
+          if [ $$? -eq 0 ]; then
+            echo "ACLs applied successfully."
+          else
+            echo "Failed to apply ACLs."
+          fi
         fi
+
+        wait $$SLAPD_PID
 
   phpldapadmin:
     image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
@@ -112,10 +108,16 @@ services:
     networks:
       - proxy
     environment:
-      - PHPLDAPADMIN_LDAP_HOSTS={{ openldap_tls_domain if openldap_tls_enabled else 'ldap' }}
       - PHPLDAPADMIN_HTTPS=false
       - PHPLDAPADMIN_SERVER_ADMIN=admin@{{ openldap_domain }}
+{% if openldap_tls_enabled %}
+      - PHPLDAPADMIN_LDAP_HOSTS={{ 'ldaps://' ~ openldap_tls_domain }}
+      - PHPLDAPADMIN_LDAP_CLIENT_TLS=true
+      - PHPLDAPADMIN_LDAP_CLIENT_TLS_REQCERT=demand
+{% else %}
+      - PHPLDAPADMIN_LDAP_HOSTS={{ 'ldap' }}
       - PHPLDAPADMIN_LDAP_CLIENT_TLS=false
+{% endif %}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.ldapadmin.rule=Host(`ldapadmin.{{ openldap_domain }}`)"
@@ -123,7 +125,7 @@ services:
       - "traefik.http.routers.ldapadmin.tls=true"
       - "traefik.http.routers.ldapadmin.tls.certresolver=letsencrypt"
       - "traefik.http.services.ldapadmin.loadbalancer.server.port={{ openldap_port_admin }}"
-      - "coredns.dockerdiscovery.cf_tunnel=https://10.0.60.3:443"
+      - "coredns.dockerdiscovery.cf_tunnel=https://traefik.{{ openldap_domain }}"
 {% if openldap_tls_enabled %}
       - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
       - "traefik.http.routers.ldap-certs.entrypoints=websecure"

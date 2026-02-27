@@ -113,6 +113,9 @@ systemd:
         # Load container images from NFS
         # ExecStart=/bin/sh -c 'for tarfile in /var/mnt/nfs/containers/*.tar; do podman load -i "$tarfile" || true; done'
 
+        # Create shared proxy network for inter-stack communication
+        ExecStart=/bin/sh -c 'podman network exists proxy || podman network create --label com.docker.compose.network=proxy proxy'
+
         # Start Portainer (rootless, restart=always for linger persistence)
         ExecStart=/bin/sh -c '\
           podman load -i /var/mnt/nfs/containers/portainer-portainer-ce_2.27.1.tar || true; \

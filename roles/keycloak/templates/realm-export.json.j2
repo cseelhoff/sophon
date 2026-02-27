@@ -35,7 +35,7 @@
       "publicClient": true,
 {% else %}
       "publicClient": false,
-      "secret": "${{{ client.client_id | upper }}_CLIENT_SECRET}",
+      "secret": "${{ '{' }}{{ client.client_id | upper }}_CLIENT_SECRET{{ '}' }}",
 {% endif %}
       "protocol": "openid-connect",
       "standardFlowEnabled": true,
@@ -62,7 +62,7 @@
           "vendor": ["other"],
           "connectionUrl": ["{{ keycloak_ldap_url }}"],
           "bindDn": ["{{ keycloak_ldap_bind_dn }}"],
-          "bindCredential": ["${LDAP_BIND_PASSWORD}"],
+          "bindCredential": ["${{ '{' }}LDAP_BIND_PASSWORD{{ '}' }}"],
           "usersDn": ["{{ openldap_user_dn | default('ou=users,' + openldap_base_dn) }}"],
           "usernameLDAPAttribute": ["uid"],
           "uuidLDAPAttribute": ["entryUUID"],
