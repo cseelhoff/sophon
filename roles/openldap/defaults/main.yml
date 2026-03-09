@@ -4,7 +4,7 @@ openldap_enabled: true
 openldap_image_name: "bitnamilegacy/openldap"
 openldap_image_tag: "2.6.10-debian-12-r4"
 openldap_lam_image_name: "ldapaccountmanager/lam"
-openldap_lam_image_tag: "stable"
+openldap_lam_image_tag: "8.3"
 
 # Network ports (bitnami supports privileged ports)
 openldap_port_ldap: 389

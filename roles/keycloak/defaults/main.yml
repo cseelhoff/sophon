@@ -1,7 +1,7 @@
 ---
 # Keycloak configuration
 keycloak_image_name: "quay.io/keycloak/keycloak"
-keycloak_image_tag: "26.0"
+keycloak_image_tag: "26.5"
 
 # Network
 keycloak_port: 8180
@@ -11,17 +11,18 @@ keycloak_hostname: "auth"
 keycloak_domain: "{{ domain_name }}"
 
 # Admin credentials (set via -e or vault in production)
-# keycloak_admin_user: "admin"
-# keycloak_admin_password: ""
+keycloak_admin_user: "admin"
+keycloak_admin_password: "admin"
 
 # Database - using built-in H2 for simplicity
 # For production, use PostgreSQL
-keycloak_db_type: "dev-file"
+# Use "dev-mem" for in-memory (no stale H2 auth issues) or "dev-file" for persistence
+keycloak_db_type: "dev-mem"
 
 # LDAP integration (requires openldap role deployed first)
 keycloak_ldap_enabled: false
-keycloak_ldap_url: "ldap://ldap:389"
-keycloak_ldap_bind_dn: "cn=admin,{{ openldap_base_dn  }}"
+keycloak_ldap_url: "ldaps://ldap.{{ openldap_domain }}:636"
+keycloak_ldap_bind_dn: "cn=admin,dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
 
 # Realm configuration
 keycloak_realm: "177cpt"

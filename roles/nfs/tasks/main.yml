@@ -362,43 +362,58 @@
 
           ═══════════════════════════════════════════════════════════════════
 
-- name: Create temporary mount point
-  ansible.builtin.tempfile:
-    state: directory
-    prefix: nfs_test_
-  register: nfs_temp_mount
-
-- name: Test NFS mount and verify contents
-  ansible.builtin.shell:
-    cmd: "fuse-nfs -n 'nfs://{{ nfs_ip }}{{ nfs_export_root }}?rsize=1048576&wsize=1048576&readahead=1048576' -m {{ nfs_temp_mount.path }} -d"
-  register: nfs_mount_result
-  changed_when: true
+- name: Check if NFS server is reachable
+  ansible.builtin.command:
+    cmd: "ping -c 1 -W 3 {{ nfs_ip }}"
+  register: nfs_ping_result
+  changed_when: false
   failed_when: false
 
-- name: Set NFS mount success fact
-  ansible.builtin.set_fact:
-    nfs_mount_success: "{{ nfs_mount_result.rc == 0 }}"
-
-- name: Warn if NFS mount failed
+- name: Skip NFS content tasks if server is unreachable
   ansible.builtin.debug:
-    msg: "WARNING: NFS mount failed (rc={{ nfs_mount_result.rc }}). Skipping NFS content upload. stderr: {{ nfs_mount_result.stderr | default('') }}"
-  when: not nfs_mount_success
+    msg: "NFS server {{ nfs_ip }} is not reachable — skipping NFS mount and content upload."
+  when: nfs_ping_result.rc != 0
 
-- name: Check local portainer image size
-  ansible.builtin.stat:
-    path: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.39.0.tar"
-  register: nfs_portainer_local
-  when: nfs_mount_success
+- name: NFS content upload
+  when: nfs_ping_result.rc == 0
+  block:
+    - name: Create temporary mount point
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: nfs_test_
+      register: nfs_temp_mount
 
-- name: Check remote portainer image size
-  ansible.builtin.stat:
-    path: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.39.0.tar"
-  register: nfs_portainer_remote
-  when: nfs_mount_success
+    - name: Test NFS mount and verify contents
+      ansible.builtin.shell:
+        cmd: "fuse-nfs -n 'nfs://{{ nfs_ip }}{{ nfs_export_root }}?rsize=1048576&wsize=1048576&readahead=1048576' -m {{ nfs_temp_mount.path }} -d"
+      register: nfs_mount_result
+      changed_when: true
+      failed_when: false
 
-- name: Upload portainer image to NFS
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.39.0.tar"
-    dest: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.39.0.tar"
-    mode: "0644"
-  when: nfs_mount_success and (not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size)
+    - name: Set NFS mount success fact
+      ansible.builtin.set_fact:
+        nfs_mount_success: "{{ nfs_mount_result.rc == 0 }}"
+
+    - name: Warn if NFS mount failed
+      ansible.builtin.debug:
+        msg: "WARNING: NFS mount failed (rc={{ nfs_mount_result.rc }}). Skipping NFS content upload. stderr: {{ nfs_mount_result.stderr | default('') }}"
+      when: not nfs_mount_success
+
+    - name: Check local portainer image size
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.39.0.tar"
+      register: nfs_portainer_local
+      when: nfs_mount_success
+
+    - name: Check remote portainer image size
+      ansible.builtin.stat:
+        path: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.39.0.tar"
+      register: nfs_portainer_remote
+      when: nfs_mount_success
+
+    - name: Upload portainer image to NFS
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.39.0.tar"
+        dest: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.39.0.tar"
+        mode: "0644"
+      when: nfs_mount_success and (not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size)

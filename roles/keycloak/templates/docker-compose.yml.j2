@@ -9,7 +9,7 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        while IFS= read -r _l || [[ -n "$$_l" ]]; do printf '%s\n' "$$_l"; done > /opt/keycloak/data/import/sophon-realm.json <<'REALMEOF'
+        while IFS= read -r _l || [[ -n "$$_l" ]]; do printf '%s\n' "$$_l"; done > /opt/keycloak/data/import/{{ keycloak_realm }}-realm.json <<'REALMEOF'
         {{ lookup('template', 'realm-export.json.j2') | replace('$', '$$') | indent(8) }}
         REALMEOF
         exec /opt/keycloak/bin/kc.sh start \
@@ -18,20 +18,14 @@ services:
           --http-enabled=true \
           --import-realm
     environment:
-      - KEYCLOAK_ADMIN={{ keycloak_admin_user | default('admin') }}
-      - KEYCLOAK_ADMIN_PASSWORD={{ keycloak_admin_password | default('admin') }}
+      - KC_BOOTSTRAP_ADMIN_USERNAME={{ keycloak_admin_user }}
+      - KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
       - KC_DB={{ keycloak_db_type }}
       - KC_HOSTNAME={{ keycloak_hostname }}.{{ keycloak_domain }}
       - KC_HOSTNAME_STRICT=false
       - KC_HTTP_ENABLED=true
-      # Client secrets for realm import (Keycloak ${VAR} substitution in realm-export.json)
-{% for client in keycloak_clients | default([]) %}
-{% if not client.public_client | default(false) %}
-      - {{ client.client_id | upper }}_CLIENT_SECRET={{ client.client_secret | default('') }}
-{% endif %}
-{% endfor %}
 {% if keycloak_ldap_enabled %}
-      - LDAP_BIND_PASSWORD={{ openldap_admin_password | default('') }}
+      - LDAP_BIND_PASSWORD={{ openldap_admin_password }}
 {% endif %}
     volumes:
       - keycloak_data:/opt/keycloak/data
