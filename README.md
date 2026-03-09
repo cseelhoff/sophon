@@ -105,7 +105,7 @@ For each image in `prestage_container_images`:
    - `podman save -o /mnt/nfs/containers/{{ image_basename }}.tar {{ image }}`
 
 Container image list:
-- `docker.io/portainer/portainer-ce:2.27.1`
+- `docker.io/portainer/portainer-ce:2.39.0`
 - `docker.io/coredns/coredns:1.12.0`
 - `docker.io/osixia/openldap:1.5.0`
 - `docker.io/quay.io/keycloak/keycloak:26.0`

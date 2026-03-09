@@ -2,17 +2,26 @@
 services:
   coredns:
     image: {{ coredns_image_name }}:{{ coredns_image_tag }}
-    container_name: coredns
-    restart: unless-stopped
-    ports:
-      - "{{ coredns_dns_port }}:53/udp"
-      - "{{ coredns_dns_port }}:53/tcp"
+    network_mode: host
+    restart: always
+    security_opt:
+      - label:disable
     volumes:
       - {{ coredns_config_dir }}/Corefile:/Corefile:ro
       - {{ coredns_config_dir }}/zones:/zones:rw
     networks:
       - dns
-
-networks:
-  dns:
-    driver: bridge
+    volumes:
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
+    environment:
+      - TRAEFIK_IP=10.0.60.3
+      - TRAEFIK_HOST=traefik.177cpt.com
+      - DOCKER_DOMAIN=177cpt.com
+      - CF_TARGET=traefik.177cpt.com
+      - CF_TOKEN=cyVIn9iCqiKOGQpjgLAU-Yj6wVodMHoX_zLfqtfe
+      - CF_ZONE_DOMAIN=177cpt.com
+      - CF_ZONE_ID=
+      - CF_ACCOUNT_ID=
+      - CF_TUNNEL_ID=
+      - FORWARD_DNS=1.1.1.1 8.8.8.8
+      - CACHE_TTL=30

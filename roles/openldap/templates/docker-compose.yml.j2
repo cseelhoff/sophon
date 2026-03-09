@@ -2,7 +2,7 @@ services:
 {% if openldap_tls_enabled %}
   certs-dumper:
     image: docker.io/{{ openldap_certs_dumper_image_name }}:{{ openldap_certs_dumper_image_tag }}
-    container_name: ldap-certs-dumper
+    container_name: certs-dumper
     restart: unless-stopped
     networks:
       - proxy
@@ -19,13 +19,13 @@ services:
 
 {% endif %}
   ldap:
-    image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
     container_name: ldap
+    image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
     restart: always
-    ports:
-      - "{{ openldap_port_ldaps }}:{{ openldap_port_ldaps }}"
     networks:
       - proxy
+    ports:
+      - "{{ openldap_port_ldaps }}:636"
     healthcheck:
       test: ["CMD-SHELL", "ldapsearch -Q -Y EXTERNAL -H ldapi://%2Fopt%2Fbitnami%2Fopenldap%2Fvar%2Frun%2Fldapi -b '' -s base namingContexts 2>/dev/null | grep -q namingContexts"]
       interval: 10s
@@ -40,7 +40,7 @@ services:
     environment:
       - LDAP_ROOT={{ openldap_base_dn }}
       - LDAP_ADMIN_USERNAME=admin
-      - LDAP_ADMIN_PASSWORD={{ openldap_admin_password | default('admin') }}
+      - LDAP_ADMIN_PASSWORD={{ openldap_admin_password }}
       - LDAP_LOGLEVEL={{ openldap_log_level }}
       - LDAP_PORT_NUMBER={{ openldap_port_ldap }}
       - LDAP_LDAPS_PORT_NUMBER={{ openldap_port_ldaps }}
@@ -54,7 +54,7 @@ services:
 {% endif %}
       - LDAP_CONFIG_ADMIN_ENABLED=yes
       - LDAP_CONFIG_ADMIN_USERNAME=configadmin
-      - LDAP_CONFIG_ADMIN_PASSWORD={{ openldap_config_password | default(openldap_admin_password | default('admin')) }}
+      - LDAP_CONFIG_ADMIN_PASSWORD={{ openldap_config_password | default(openldap_admin_password) }}
       - LDAP_SKIP_DEFAULT_TREE=no
       - LDAP_USERS=
       - LDAP_PASSWORDS=
@@ -100,38 +100,41 @@ services:
         fi
 
         wait $$SLAPD_PID
-
-  phpldapadmin:
-    image: docker.io/{{ openldap_phpldapadmin_image_name }}:{{ openldap_phpldapadmin_image_tag }}
-    container_name: phpldapadmin
-    restart: always
-    networks:
-      - proxy
-    environment:
-      - PHPLDAPADMIN_HTTPS=false
-      - PHPLDAPADMIN_SERVER_ADMIN=admin@{{ openldap_domain }}
-{% if openldap_tls_enabled %}
-      - PHPLDAPADMIN_LDAP_HOSTS={{ 'ldaps://' ~ openldap_tls_domain }}
-      - PHPLDAPADMIN_LDAP_CLIENT_TLS=true
-      - PHPLDAPADMIN_LDAP_CLIENT_TLS_REQCERT=demand
-{% else %}
-      - PHPLDAPADMIN_LDAP_HOSTS={{ 'ldap' }}
-      - PHPLDAPADMIN_LDAP_CLIENT_TLS=false
-{% endif %}
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ldapadmin.rule=Host(`ldapadmin.{{ openldap_domain }}`)"
-      - "traefik.http.routers.ldapadmin.entrypoints=websecure"
-      - "traefik.http.routers.ldapadmin.tls=true"
-      - "traefik.http.routers.ldapadmin.tls.certresolver=letsencrypt"
-      - "traefik.http.services.ldapadmin.loadbalancer.server.port={{ openldap_port_admin }}"
-      - "coredns.dockerdiscovery.cf_tunnel=https://traefik.{{ openldap_domain }}"
+      - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
 {% if openldap_tls_enabled %}
       - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
       - "traefik.http.routers.ldap-certs.entrypoints=websecure"
       - "traefik.http.routers.ldap-certs.tls=true"
       - "traefik.http.routers.ldap-certs.tls.certresolver=letsencrypt"
 {% endif %}
+
+  lam:
+    image: ghcr.io/{{ openldap_lam_image_name }}:{{ openldap_lam_image_tag }}
+    container_name: lam
+    restart: always
+    networks:
+      - proxy
+    environment:
+      - LAM_SKIP_PRECONFIGURE=false
+      - LDAP_DOMAIN={{ openldap_domain }}
+      - LDAP_BASE_DN={{ openldap_base_dn }}
+      - LDAP_ADMIN_PASSWORD={{ openldap_admin_password }}
+{% if openldap_tls_enabled %}
+      - LDAP_SERVER=ldaps://{{ openldap_tls_domain }}
+{% else %}
+      - LDAP_SERVER=ldap://ldap
+{% endif %}
+      - LAM_LANG=en_US
+      - LAM_PASSWORD={{ openldap_admin_password }}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lam.rule=Host(`lam.{{ openldap_domain }}`)"
+      - "traefik.http.routers.lam.entrypoints=websecure"
+      - "traefik.http.routers.lam.tls=true"
+      - "traefik.http.routers.lam.tls.certresolver=letsencrypt"
+      - "traefik.http.services.lam.loadbalancer.server.port=80"
+      - "coredns.dockerdiscovery.cf_tunnel=https://lam.{{ openldap_domain }}"
 
 volumes:
   openldap_data:

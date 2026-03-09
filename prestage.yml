@@ -13,7 +13,7 @@
   vars:
     prestage_containers_dir: "{{ playbook_dir }}/artifacts/containers"
     prestage_container_images:
-      - "docker.io/portainer/portainer-ce:2.27.1"
+      - "docker.io/portainer/portainer-ce:2.39.0"
       - "docker.io/library/traefik:v3.2"
       - "docker.io/gitea/gitea:1.21"
       - "docker.io/sonatype/nexus3:3.72.0"

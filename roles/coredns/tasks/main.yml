@@ -65,7 +65,7 @@
                 - CF_ZONE_ID={{ coredns_cf_zone_id }}
                 - CF_ACCOUNT_ID={{ coredns_cf_account_id }}
                 - CF_TUNNEL_ID={{ coredns_cf_tunnel_id }}
-                - FORWARD_DNS=1.1.1.1 8.8.8.8
+                - FORWARD_DNS=9.9.9.9
                 - CACHE_TTL=30
           networks:
             proxy:
