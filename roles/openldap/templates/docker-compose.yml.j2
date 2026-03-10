@@ -47,8 +47,8 @@ services:
       - LDAP_ALLOW_ANON_BINDING=no
 {% if openldap_tls_enabled %}
       - LDAP_ENABLE_TLS=yes
-      # REQUIRE_TLS=no: olcSecurity tls=1 blocks ldapi:// (Unix socket can't do TLS).
-      # TLS is still enforced externally — only port 636 (LDAPS) is published.
+      # REQUIRE_TLS=no is required when using ldapi:// socket auth in init scripts.
+      # External clients should use ldaps:// or starttls on 389 if exposed.
       - LDAP_REQUIRE_TLS=no
       - LDAP_TLS_CERT_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
       - LDAP_TLS_KEY_FILE=/opt/bitnami/openldap/certs/private/{{ openldap_tls_domain }}.key
@@ -66,8 +66,6 @@ services:
       - ldap_certs:/opt/bitnami/openldap/certs:ro
 {% endif %}
     entrypoint: ["/bin/bash", "-c"]
-
-
     command:
       - |
         /opt/bitnami/scripts/openldap/entrypoint.sh /opt/bitnami/scripts/openldap/run.sh &
@@ -81,6 +79,15 @@ services:
           echo "Attempt $$i/40..."
           sleep 2
         done
+
+        # ────────────────────────────────────────────────────────────────
+        # Remove Bitnami default test users (security hygiene)
+        # ────────────────────────────────────────────────────────────────
+        echo "Removing default test users if present..."
+        for user in user01 user02; do
+          ldapdelete -Q -Y EXTERNAL -H "$$LDAPI_URL" "cn=$user,ou=users,{{ openldap_base_dn }}" >/dev/null 2>&1 || true
+        done
+        echo "Default test users cleanup complete."
 
         EXISTING=$$(ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b "olcDatabase={2}mdb,cn=config" -LLL olcAccess 2>/dev/null | grep -c olcAccess || true)
         if [ "$$EXISTING" -gt 0 ]; then
@@ -135,33 +142,27 @@ services:
         memberUid: admin
         EOF
 
-        # Optional: If you want the default Bitnami 'readers' group to also be POSIX-capable,
-        # you could add gidNumber to it here, but since Bitnami uses groupOfNames by default,
-        # it's cleaner to keep separate posixGroups for LAM/UNIX use.
-
         echo "POSIX groups setup complete."
 
         # ────────────────────────────────────────────────────────────────
         # Enable memberof overlay for reverse group membership (memberOf attr on users)
         # ────────────────────────────────────────────────────────────────
 
-        echo "Loading memberof module if not already loaded..."
-        ldapmodify -Q -Y EXTERNAL -H "$LDAPI_URL" <<EOF || true
+        echo "Loading memberof + refint modules if needed..."
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: cn=module{0},cn=config
         changetype: modify
         add: olcModuleLoad
         olcModuleLoad: memberof
         -
         add: olcModuleLoad
-        olcModuleLoad: refint   # Optional but recommended: referential integrity for clean deletes
+        olcModuleLoad: refint
         EOF
 
-        # If module{0} already exists and load fails, try as module{1} or higher (Bitnami may have refint/refint already)
-        # Alternative safe idempotent way: check first
-        MODULE_LOADED=$$(ldapsearch -Q -Y EXTERNAL -H "$LDAPI_URL" -b "cn=module{0},cn=config" -LLL olcModuleLoad 2>/dev/null | grep -c memberof || true)
+        MODULE_LOADED=$$(ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b "cn=module{0},cn=config" -LLL olcModuleLoad 2>/dev/null | grep -c memberof || true)
         if [ "$$MODULE_LOADED" -eq 0 ]; then
           echo "Adding memberof to module list..."
-          ldapmodify -Q -Y EXTERNAL -H "$LDAPI_URL" <<EOF || true
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: cn=module{0},cn=config
         changetype: modify
         add: olcModuleLoad
@@ -170,17 +171,18 @@ services:
         fi
 
         echo "Enabling memberof overlay on database if missing..."
-        ldapadd -Q -Y EXTERNAL -H "$LDAPI_URL" <<EOF || true
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: olcOverlay=memberof,olcDatabase={2}mdb,cn=config
         objectClass: olcOverlayConfig
         objectClass: olcMemberOf
         objectClass: top
         olcOverlay: memberof
-        olcMemberOfDangling: ignore          # Don't error on dangling refs (safe default)
-        olcMemberOfRefInt: TRUE              # Enable referential integrity (clean up on delete)
-        olcMemberOfGroupOC: groupOfNames     # Trigger on this group class (your app groups)
-        olcMemberOfMemberAD: member          # Membership attr in groups
-        olcMemberOfMemberOfAD: memberOf      # Reverse attr on users
+        olcMemberOfDangling: drop
+        olcMemberOfRefInt: TRUE
+        olcMemberOfGroupOC: groupOfNames
+        olcMemberOfGroupOC: posixGroup
+        olcMemberOfMemberAD: member
+        olcMemberOfMemberOfAD: memberOf
         EOF
 
         echo "memberof overlay setup attempted (check logs for errors)."
