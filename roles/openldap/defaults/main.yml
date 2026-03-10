@@ -19,6 +19,9 @@ openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.
 openldap_admin_password: "admin"
 # openldap_config_password: ""  # defaults to openldap_admin_password if unset
 
+# Keycloak service account (bind DN for LDAP federation)
+openldap_keycloak_password: "{{ openldap_admin_password }}"
+
 # TLS settings
 openldap_tls_enabled: true
 openldap_tls_enforce: true

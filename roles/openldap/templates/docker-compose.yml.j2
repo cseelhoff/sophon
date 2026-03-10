@@ -81,14 +81,8 @@ services:
         done
 
         # ────────────────────────────────────────────────────────────────
-        # Remove Bitnami default test users (security hygiene)
+        # ACL rules (must be first so ldapi socket has manage access)
         # ────────────────────────────────────────────────────────────────
-        echo "Removing default test users if present..."
-        for user in user01 user02; do
-          ldapdelete -Q -Y EXTERNAL -H "$$LDAPI_URL" "cn=$user,ou=users,{{ openldap_base_dn }}" >/dev/null 2>&1 || true
-        done
-        echo "Default test users cleanup complete."
-
         EXISTING=$$(ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b "olcDatabase={2}mdb,cn=config" -LLL olcAccess 2>/dev/null | grep -c olcAccess || true)
         if [ "$$EXISTING" -gt 0 ]; then
           echo "ACLs already configured, skipping."
@@ -99,8 +93,9 @@ services:
         changetype: modify
         add: olcAccess
         olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=1001,cn=peercred,cn=external,cn=auth manage by * break
-        olcAccess: {1}to attrs=userPassword,shadowLastChange by self write by dn="cn=admin,{{ openldap_base_dn }}" write by anonymous auth by * none
-        olcAccess: {2}to * by self read by dn="cn=admin,{{ openldap_base_dn }}" write by * read
+        olcAccess: {1}to attrs=userPassword,shadowLastChange by self write by dn="cn=admin,{{ openldap_base_dn }}" write by dn="cn=keycloak,ou=users,{{ openldap_base_dn }}" write by anonymous auth by * none
+        olcAccess: {2}to dn.subtree="ou=groups,{{ openldap_base_dn }}" by dn="cn=admin,{{ openldap_base_dn }}" write by dn="cn=keycloak,ou=users,{{ openldap_base_dn }}" write by users read
+        olcAccess: {3}to * by self read by dn="cn=admin,{{ openldap_base_dn }}" write by dn="cn=keycloak,ou=users,{{ openldap_base_dn }}" read by users read
         EOF
 
           if [ $$? -eq 0 ]; then
@@ -111,9 +106,31 @@ services:
         fi
 
         # ────────────────────────────────────────────────────────────────
-        # Add POSIX groups so LAM's Unix module detects them (fixes "no unix groups exist")
+        # Fix root entry: replace Bitnami default o=example
         # ────────────────────────────────────────────────────────────────
+        echo "Fixing root entry organization name..."
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: {{ openldap_base_dn }}
+        changetype: modify
+        replace: o
+        o: {{ openldap_domain }}
+        EOF
 
+        # ────────────────────────────────────────────────────────────────
+        # Remove Bitnami default test users and groups (security hygiene)
+        # ────────────────────────────────────────────────────────────────
+        echo "Removing default test users if present..."
+        for user in user01 user02; do
+          ldapdelete -Q -Y EXTERNAL -H "$$LDAPI_URL" "cn=$$user,ou=users,{{ openldap_base_dn }}" >/dev/null 2>&1 || true
+        done
+
+        echo "Removing Bitnami default 'readers' group if present..."
+        ldapdelete -Q -Y EXTERNAL -H "$$LDAPI_URL" "cn=readers,ou=groups,{{ openldap_base_dn }}" >/dev/null 2>&1 || true
+        echo "Default entries cleanup complete."
+
+        # ────────────────────────────────────────────────────────────────
+        # Ensure OUs exist
+        # ────────────────────────────────────────────────────────────────
         echo "Ensuring ou=groups exists..."
         ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: ou=groups,{{ openldap_base_dn }}
@@ -121,71 +138,91 @@ services:
         ou: groups
         EOF
 
-        echo "Creating default posixGroup 'users' (gid 10000) if missing..."
+        # ────────────────────────────────────────────────────────────────
+        # Create service accounts
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating keycloak service account if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=keycloak,ou=users,{{ openldap_base_dn }}
+        objectClass: inetOrgPerson
+        cn: keycloak
+        sn: Service Account
+        description: Keycloak LDAP federation service account
+        userPassword: {{ openldap_keycloak_password }}
+        EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Create groupOfNames groups with "member" attribute
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating groupOfNames 'users' group if missing..."
         ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: cn=users,ou=groups,{{ openldap_base_dn }}
-        objectClass: posixGroup
+        objectClass: groupOfNames
         objectClass: top
         cn: users
-        gidNumber: 10000
-        description: Default POSIX users group for UNIX/LAM integration
+        description: Default users group
+        member: cn=admin,{{ openldap_base_dn }}
         EOF
 
-        echo "Creating posixGroup 'admins' (gid 10001) if missing + add admin as member..."
+        echo "Creating groupOfNames 'admins' group if missing..."
         ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: cn=admins,ou=groups,{{ openldap_base_dn }}
-        objectClass: posixGroup
+        objectClass: groupOfNames
         objectClass: top
         cn: admins
-        gidNumber: 10001
-        description: POSIX admins group
-        memberUid: admin
+        description: Administrators group
+        member: cn=admin,{{ openldap_base_dn }}
+        member: cn=keycloak,ou=users,{{ openldap_base_dn }}
         EOF
 
-        echo "POSIX groups setup complete."
+        echo "Groups setup complete."
+
+        # ────────────────────────────────────────────────────────────────
+        # Default POSIX group for LAM Unix module (separate from groupOfNames)
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating default posixGroup for LAM Unix module if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
+        objectClass: posixGroup
+        objectClass: top
+        cn: posix-users
+        gidNumber: 10000
+        description: Default POSIX group for LAM Unix module
+        EOF
 
         # ────────────────────────────────────────────────────────────────
         # Enable memberof overlay for reverse group membership (memberOf attr on users)
         # ────────────────────────────────────────────────────────────────
 
-        echo "Loading memberof + refint modules if needed..."
-        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
-        dn: cn=module{0},cn=config
-        changetype: modify
-        add: olcModuleLoad
-        olcModuleLoad: memberof
-        -
-        add: olcModuleLoad
-        olcModuleLoad: refint
-        EOF
-
-        MODULE_LOADED=$$(ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b "cn=module{0},cn=config" -LLL olcModuleLoad 2>/dev/null | grep -c memberof || true)
-        if [ "$$MODULE_LOADED" -eq 0 ]; then
-          echo "Adding memberof to module list..."
-          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
-        dn: cn=module{0},cn=config
-        changetype: modify
-        add: olcModuleLoad
+        echo "Setting up memberof overlay..."
+        MEMBEROF_SO=$$(find /opt/bitnami/openldap/lib -name "memberof*" -type f 2>/dev/null | head -1)
+        if [ -n "$$MEMBEROF_SO" ]; then
+          MODDIR=$$(dirname "$$MEMBEROF_SO")
+          echo "Found memberof module: $$MEMBEROF_SO (dir: $$MODDIR)"
+          ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=module,cn=config
+        objectClass: olcModuleList
+        olcModulePath: $$MODDIR
         olcModuleLoad: memberof
         EOF
+        else
+          echo "No memberof module file found, overlay may be built-in or unavailable."
         fi
 
         echo "Enabling memberof overlay on database if missing..."
         ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: olcOverlay=memberof,olcDatabase={2}mdb,cn=config
         objectClass: olcOverlayConfig
-        objectClass: olcMemberOf
-        objectClass: top
+        objectClass: olcMemberOfConfig
         olcOverlay: memberof
         olcMemberOfDangling: drop
         olcMemberOfRefInt: TRUE
         olcMemberOfGroupOC: groupOfNames
-        olcMemberOfGroupOC: posixGroup
         olcMemberOfMemberAD: member
         olcMemberOfMemberOfAD: memberOf
         EOF
 
-        echo "memberof overlay setup attempted (check logs for errors)."
+        echo "memberof overlay setup complete (check logs for errors)."
 
         wait $$SLAPD_PID
     labels:
