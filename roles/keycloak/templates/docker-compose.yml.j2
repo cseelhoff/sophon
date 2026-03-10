@@ -24,9 +24,7 @@ services:
       - KC_HOSTNAME={{ keycloak_hostname }}.{{ keycloak_domain }}
       - KC_HOSTNAME_STRICT=false
       - KC_HTTP_ENABLED=true
-{% if keycloak_ldap_enabled %}
-      - LDAP_BIND_PASSWORD={{ openldap_admin_password }}
-{% endif %}
+      - LDAP_BIND_PASSWORD={{ openldap_keycloak_password }}
     volumes:
       - keycloak_data:/opt/keycloak/data
       - keycloak_import:/opt/keycloak/data/import

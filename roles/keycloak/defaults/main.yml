@@ -20,13 +20,15 @@ keycloak_admin_password: "admin"
 keycloak_db_type: "dev-mem"
 
 # LDAP integration (requires openldap role deployed first)
-keycloak_ldap_enabled: false
+openldap_domain: "{{ domain_name }}"
+openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
+openldap_keycloak_password: "{{ openldap_admin_password | default('admin') }}"
 keycloak_ldap_url: "ldaps://ldap.{{ openldap_domain }}:636"
-keycloak_ldap_bind_dn: "cn=keycloak,ou=users,dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
+keycloak_ldap_bind_dn: "cn=keycloak-bind,ou=services,{{ openldap_base_dn }}"
 
 # Realm configuration
 keycloak_realm: "177cpt"
-keycloak_realm_display_name: "177CPT"
+keycloak_realm_display_name: "177th Cyber Protection Team"
 
 # OIDC Clients (auto-provisioned)
 keycloak_clients:

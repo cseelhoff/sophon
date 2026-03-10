@@ -1,5 +1,6 @@
 {
   "realm": "{{ keycloak_realm }}",
+  "displayName": "{{ keycloak_realm_display_name }}",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,
@@ -9,55 +10,144 @@
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
 
-  "clients": [ ... your clients ... ],
+  "groups": [
+    {
+      "name": "keycloak-admins",
+      "path": "/keycloak-admins",
+      "clientRoles": {
+        "realm-management": ["realm-admin"]
+      }
+    }
+  ],
 
-{% if keycloak_ldap_enabled %}
   "components": {
     "org.keycloak.storage.UserStorageProvider": [
       {
-        "name": "openldap-federation",
+        "name": "ldap",
         "providerId": "ldap",
         "subComponents": {
           "org.keycloak.storage.ldap.mappers.LDAPStorageMapper": [
-            // Optional: Add explicit mappers here if needed (e.g. custom givenName)
             {
-              "name": "givenName-mapper",
+              "name": "username",
               "providerId": "user-attribute-ldap-mapper",
               "config": {
-                "user.model.attribute": ["firstName"],
+                "ldap.attribute": ["uid"],
+                "is.mandatory.in.ldap": ["true"],
+                "read.only": ["false"],
+                "always.read.value.from.ldap": ["false"],
+                "user.model.attribute": ["username"]
+              }
+            },
+            {
+              "name": "first name",
+              "providerId": "user-attribute-ldap-mapper",
+              "config": {
                 "ldap.attribute": ["givenName"],
+                "attribute.force.default": ["true"],
+                "is.mandatory.in.ldap": ["true"],
+                "is.binary.attribute": ["false"],
+                "read.only": ["false"],
+                "always.read.value.from.ldap": ["true"],
+                "user.model.attribute": ["firstName"]
+              }
+            },
+            {
+              "name": "last name",
+              "providerId": "user-attribute-ldap-mapper",
+              "config": {
+                "ldap.attribute": ["sn"],
+                "is.mandatory.in.ldap": ["true"],
+                "read.only": ["false"],
+                "always.read.value.from.ldap": ["true"],
+                "user.model.attribute": ["lastName"]
+              }
+            },
+            {
+              "name": "email",
+              "providerId": "user-attribute-ldap-mapper",
+              "config": {
+                "ldap.attribute": ["mail"],
+                "is.mandatory.in.ldap": ["false"],
+                "always.read.value.from.ldap": ["false"],
+                "read.only": ["false"],
+                "user.model.attribute": ["email"]
+              }
+            },
+            {
+              "name": "creation date",
+              "providerId": "user-attribute-ldap-mapper",
+              "config": {
+                "ldap.attribute": ["createTimestamp"],
+                "is.mandatory.in.ldap": ["false"],
+                "always.read.value.from.ldap": ["true"],
+                "read.only": ["true"],
+                "user.model.attribute": ["createTimestamp"]
+              }
+            },
+            {
+              "name": "modify date",
+              "providerId": "user-attribute-ldap-mapper",
+              "config": {
+                "ldap.attribute": ["modifyTimestamp"],
+                "is.mandatory.in.ldap": ["false"],
                 "read.only": ["true"],
                 "always.read.value.from.ldap": ["true"],
-                "sync.period": ["-1"]
+                "user.model.attribute": ["modifyTimestamp"]
+              }
+            },
+            {
+              "name": "group-ldap-mapper",
+              "providerId": "group-ldap-mapper",
+              "config": {
+                "mode": ["LDAP_ONLY"],
+                "membership.attribute.type": ["DN"],
+                "user.roles.retrieve.strategy": ["GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE"],
+                "group.name.ldap.attribute": ["cn"],
+                "membership.ldap.attribute": ["member"],
+                "ignore.missing.groups": ["false"],
+                "preserve.group.inheritance": ["true"],
+                "membership.user.ldap.attribute": ["uid"],
+                "group.object.classes": ["groupOfNames"],
+                "memberof.ldap.attribute": ["memberOf"],
+                "groups.dn": ["ou=groups,{{ openldap_base_dn }}"],
+                "drop.non.existing.groups.during.sync": ["false"],
+                "groups.path": ["/"]
               }
             }
-            // Add more for email, lastName (sn), etc. if defaults are wrong
           ]
         },
         "config": {
           "enabled": ["true"],
           "vendor": ["other"],
-          "connectionUrl": ["{{ keycloak_ldap_url }}"],  // e.g. ldaps://ldap.yourdomain:636
+          "connectionUrl": ["{{ keycloak_ldap_url }}"],
           "bindDn": ["{{ keycloak_ldap_bind_dn }}"],
           "bindCredential": ["${LDAP_BIND_PASSWORD}"],
-          "usersDn": ["{{ openldap_user_dn | default('ou=users,' ~ openldap_base_dn) }}"],
+          "usersDn": ["ou=users,{{ openldap_base_dn }}"],
           "usernameLDAPAttribute": ["uid"],
           "rdnLDAPAttribute": ["uid"],
           "uuidLDAPAttribute": ["entryUUID"],
-          "userObjectClasses": ["inetOrgPerson","posixAccount","shadowAccount"],
-          "editMode": ["READ_ONLY"],
-          "importUsers": ["true"],               // or "false" for live-only
-          "syncRegistrations": ["false"],
-          "trustEmail": ["true"],
+          "userObjectClasses": ["inetOrgPerson,posixAccount,shadowAccount"],
+          "editMode": ["WRITABLE"],
+          "importEnabled": ["true"],
+          "syncRegistrations": ["true"],
+          "trustEmail": ["false"],
           "validatePasswordPolicy": ["false"],
-          "useKerberosForPasswordAuthentication": ["false"]
-          // Add if using groups: "groupsDn": ["ou=groups,{{ openldap_base_dn }}"], etc.
+          "useKerberosForPasswordAuthentication": ["false"],
+          "allowKerberosAuthentication": ["false"],
+          "authType": ["simple"],
+          "connectionPooling": ["true"],
+          "connectionTimeout": ["3000"],
+          "readTimeout": ["3000"],
+          "startTls": ["false"],
+          "useTruststoreSpi": ["always"],
+          "usePasswordModifyExtendedOp": ["false"],
+          "pagination": ["true"],
+          "searchScope": ["1"],
+          "cachePolicy": ["DEFAULT"]
         }
       }
     ]
-  }
-{% endif %}
+  },
 
-  "roles": { ... },
-  "defaultRoles": ["user"]
+  "requiredCredentials": ["password"]
 }
