@@ -47,7 +47,9 @@ services:
       - LDAP_ALLOW_ANON_BINDING=no
 {% if openldap_tls_enabled %}
       - LDAP_ENABLE_TLS=yes
-      - LDAP_REQUIRE_TLS={{ 'yes' if openldap_tls_enforce else 'no' }}
+      # REQUIRE_TLS=no: olcSecurity tls=1 blocks ldapi:// (Unix socket can't do TLS).
+      # TLS is still enforced externally — only port 636 (LDAPS) is published.
+      - LDAP_REQUIRE_TLS=no
       - LDAP_TLS_CERT_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
       - LDAP_TLS_KEY_FILE=/opt/bitnami/openldap/certs/private/{{ openldap_tls_domain }}.key
       - LDAP_TLS_CA_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
@@ -64,6 +66,8 @@ services:
       - ldap_certs:/opt/bitnami/openldap/certs:ro
 {% endif %}
     entrypoint: ["/bin/bash", "-c"]
+
+
     command:
       - |
         /opt/bitnami/scripts/openldap/entrypoint.sh /opt/bitnami/scripts/openldap/run.sh &
@@ -98,6 +102,88 @@ services:
             echo "Failed to apply ACLs."
           fi
         fi
+
+        # ────────────────────────────────────────────────────────────────
+        # Add POSIX groups so LAM's Unix module detects them (fixes "no unix groups exist")
+        # ────────────────────────────────────────────────────────────────
+
+        echo "Ensuring ou=groups exists..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: ou=groups,{{ openldap_base_dn }}
+        objectClass: organizationalUnit
+        ou: groups
+        EOF
+
+        echo "Creating default posixGroup 'users' (gid 10000) if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=users,ou=groups,{{ openldap_base_dn }}
+        objectClass: posixGroup
+        objectClass: top
+        cn: users
+        gidNumber: 10000
+        description: Default POSIX users group for UNIX/LAM integration
+        EOF
+
+        echo "Creating posixGroup 'admins' (gid 10001) if missing + add admin as member..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: posixGroup
+        objectClass: top
+        cn: admins
+        gidNumber: 10001
+        description: POSIX admins group
+        memberUid: admin
+        EOF
+
+        # Optional: If you want the default Bitnami 'readers' group to also be POSIX-capable,
+        # you could add gidNumber to it here, but since Bitnami uses groupOfNames by default,
+        # it's cleaner to keep separate posixGroups for LAM/UNIX use.
+
+        echo "POSIX groups setup complete."
+
+        # ────────────────────────────────────────────────────────────────
+        # Enable memberof overlay for reverse group membership (memberOf attr on users)
+        # ────────────────────────────────────────────────────────────────
+
+        echo "Loading memberof module if not already loaded..."
+        ldapmodify -Q -Y EXTERNAL -H "$LDAPI_URL" <<EOF || true
+        dn: cn=module{0},cn=config
+        changetype: modify
+        add: olcModuleLoad
+        olcModuleLoad: memberof
+        -
+        add: olcModuleLoad
+        olcModuleLoad: refint   # Optional but recommended: referential integrity for clean deletes
+        EOF
+
+        # If module{0} already exists and load fails, try as module{1} or higher (Bitnami may have refint/refint already)
+        # Alternative safe idempotent way: check first
+        MODULE_LOADED=$$(ldapsearch -Q -Y EXTERNAL -H "$LDAPI_URL" -b "cn=module{0},cn=config" -LLL olcModuleLoad 2>/dev/null | grep -c memberof || true)
+        if [ "$$MODULE_LOADED" -eq 0 ]; then
+          echo "Adding memberof to module list..."
+          ldapmodify -Q -Y EXTERNAL -H "$LDAPI_URL" <<EOF || true
+        dn: cn=module{0},cn=config
+        changetype: modify
+        add: olcModuleLoad
+        olcModuleLoad: memberof
+        EOF
+        fi
+
+        echo "Enabling memberof overlay on database if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$LDAPI_URL" <<EOF || true
+        dn: olcOverlay=memberof,olcDatabase={2}mdb,cn=config
+        objectClass: olcOverlayConfig
+        objectClass: olcMemberOf
+        objectClass: top
+        olcOverlay: memberof
+        olcMemberOfDangling: ignore          # Don't error on dangling refs (safe default)
+        olcMemberOfRefInt: TRUE              # Enable referential integrity (clean up on delete)
+        olcMemberOfGroupOC: groupOfNames     # Trigger on this group class (your app groups)
+        olcMemberOfMemberAD: member          # Membership attr in groups
+        olcMemberOfMemberOfAD: memberOf      # Reverse attr on users
+        EOF
+
+        echo "memberof overlay setup attempted (check logs for errors)."
 
         wait $$SLAPD_PID
     labels:

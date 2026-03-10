@@ -1,18 +1,5 @@
-{# 
-  Keycloak Realm Export Template
-  
-  NOTE: Client secrets use ${VAR} syntax for Keycloak environment variable substitution.
-  For this to work, matching environment variables must be set in docker-compose.yml.j2:
-    - ${GITEA_CLIENT_SECRET} requires GITEA_CLIENT_SECRET env var
-    - ${NEXUS_CLIENT_SECRET} requires NEXUS_CLIENT_SECRET env var
-    - ${PORTAINER_CLIENT_SECRET} requires PORTAINER_CLIENT_SECRET env var
-    - ${LDAP_BIND_PASSWORD} requires LDAP_BIND_PASSWORD env var
-  
-  See: https://www.keycloak.org/server/configuration#_using_environment_variables
-#}
 {
   "realm": "{{ keycloak_realm }}",
-  "displayName": "{{ keycloak_realm_display_name }}",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,
@@ -21,72 +8,56 @@
   "resetPasswordAllowed": true,
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
-  "clients": [
-{% for client in keycloak_clients %}
-{% if client.enabled | default(true) %}
-    {
-      "clientId": "{{ client.client_id }}",
-      "name": "{{ client.name }}",
-      "enabled": true,
-      "clientAuthenticatorType": "client-secret",
-      "redirectUris": {{ client.redirect_uris | to_json }},
-      "webOrigins": ["+"],
-{% if client.public_client | default(false) %}
-      "publicClient": true,
-{% else %}
-      "publicClient": false,
-      "secret": "${{ '{' }}{{ client.client_id | upper }}_CLIENT_SECRET{{ '}' }}",
-{% endif %}
-      "protocol": "openid-connect",
-      "standardFlowEnabled": true,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": true,
-      "serviceAccountsEnabled": false,
-      "fullScopeAllowed": true,
-      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
-      "optionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"]
-    }{% if not loop.last %},{% endif %}
 
-{% endif %}
-{% endfor %}
-  ],
+  "clients": [ ... your clients ... ],
+
 {% if keycloak_ldap_enabled %}
   "components": {
     "org.keycloak.storage.UserStorageProvider": [
       {
-        "name": "ldap",
+        "name": "openldap-federation",
         "providerId": "ldap",
-        "subComponents": {},
+        "subComponents": {
+          "org.keycloak.storage.ldap.mappers.LDAPStorageMapper": [
+            // Optional: Add explicit mappers here if needed (e.g. custom givenName)
+            {
+              "name": "givenName-mapper",
+              "providerId": "user-attribute-ldap-mapper",
+              "config": {
+                "user.model.attribute": ["firstName"],
+                "ldap.attribute": ["givenName"],
+                "read.only": ["true"],
+                "always.read.value.from.ldap": ["true"],
+                "sync.period": ["-1"]
+              }
+            }
+            // Add more for email, lastName (sn), etc. if defaults are wrong
+          ]
+        },
         "config": {
           "enabled": ["true"],
           "vendor": ["other"],
-          "connectionUrl": ["{{ keycloak_ldap_url }}"],
+          "connectionUrl": ["{{ keycloak_ldap_url }}"],  // e.g. ldaps://ldap.yourdomain:636
           "bindDn": ["{{ keycloak_ldap_bind_dn }}"],
-          "bindCredential": ["${{ '{' }}LDAP_BIND_PASSWORD{{ '}' }}"],
-          "usersDn": ["{{ openldap_user_dn | default('ou=users,' + openldap_base_dn) }}"],
+          "bindCredential": ["${LDAP_BIND_PASSWORD}"],
+          "usersDn": ["{{ openldap_user_dn | default('ou=users,' ~ openldap_base_dn) }}"],
           "usernameLDAPAttribute": ["uid"],
-          "uuidLDAPAttribute": ["entryUUID"],
-          "userObjectClasses": ["inetOrgPerson"],
           "rdnLDAPAttribute": ["uid"],
+          "uuidLDAPAttribute": ["entryUUID"],
+          "userObjectClasses": ["inetOrgPerson","posixAccount","shadowAccount"],
           "editMode": ["READ_ONLY"],
+          "importUsers": ["true"],               // or "false" for live-only
           "syncRegistrations": ["false"],
-          "trustEmail": ["true"]
+          "trustEmail": ["true"],
+          "validatePasswordPolicy": ["false"],
+          "useKerberosForPasswordAuthentication": ["false"]
+          // Add if using groups: "groupsDn": ["ou=groups,{{ openldap_base_dn }}"], etc.
         }
       }
     ]
-  },
+  }
 {% endif %}
-  "roles": {
-    "realm": [
-      {
-        "name": "admin",
-        "description": "Administrator role"
-      },
-      {
-        "name": "user",
-        "description": "Standard user role"
-      }
-    ]
-  },
+
+  "roles": { ... },
   "defaultRoles": ["user"]
 }

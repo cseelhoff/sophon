@@ -31,7 +31,7 @@ services:
       - keycloak_data:/opt/keycloak/data
       - keycloak_import:/opt/keycloak/data/import
     ports:
-      - "{{ keycloak_port }}:8080"
+      - "8080"
     networks:
       - proxy
     labels:

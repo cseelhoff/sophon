@@ -4,7 +4,7 @@ keycloak_image_name: "quay.io/keycloak/keycloak"
 keycloak_image_tag: "26.5"
 
 # Network
-keycloak_port: 8180
+keycloak_port: 8080
 
 # Domain
 keycloak_hostname: "auth"
