@@ -39,6 +39,14 @@ storage:
       contents:
         inline: ""
 
+    # Disable Zincati auto-reboot (updates still download, but won't apply until manual reboot)
+    - path: /etc/zincati/config.d/90-disable-auto-reboot.toml
+      mode: 0644
+      contents:
+        inline: |
+          [updates]
+          strategy = "none"
+
     # Disable systemd-resolved stub listener so CoreDNS can bind port 53
     - path: /etc/systemd/resolved.conf.d/nostub.conf
       mode: 0644

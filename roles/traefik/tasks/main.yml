@@ -59,12 +59,15 @@
                 - --entrypoints.websecure.http.tls.certResolver=letsencrypt
                 - --certificatesresolvers.letsencrypt.acme.email={{ traefik_acme_email }}
                 - --certificatesresolvers.letsencrypt.acme.storage=/data/acme.json
+                - --certificatesresolvers.letsencrypt.acme.caserver={{ traefik_acme_server }}
                 - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
                 - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
                 - --certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+                - --certificatesresolvers.letsencrypt.acme.dnschallenge.delayBeforeCheck=30
                 - --providers.docker=true
                 - --providers.docker.exposedbydefault=false
                 - --providers.docker.network=proxy
+                - --providers.docker.watch=true
                 - --providers.file.directory=/etc/traefik
                 - --providers.file.watch=true
                 - --log.level={{ traefik_log_level }}

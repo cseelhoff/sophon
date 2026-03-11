@@ -8,13 +8,41 @@ services:
     volumes:
       - acme_data:/data:ro
       - ldap_certs:/output
-    command: file --source /data/acme.json --dest /output --version v2 --watch --post-hook "chmod -R a+r /output/private/"
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /output/certs/{{ openldap_tls_domain }}.crt"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
+      - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
+      - "traefik.http.routers.ldap-certs.entrypoints=websecure"
+      - "traefik.http.routers.ldap-certs.tls=true"
+      - "traefik.http.routers.ldap-certs.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ldap-certs.loadbalancer.server.port=8666"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "certs-dumper: waiting for acme.json to contain certificate data..."
+        echo "certs-dumper: checking /data directory..."
+        ls -la /data/ 2>&1 || echo "certs-dumper: /data directory does not exist!"
+        attempt=0
+        while true; do
+          attempt=$$((attempt + 1))
+          if [ ! -f /data/acme.json ]; then
+            echo "certs-dumper: [attempt $$attempt] /data/acme.json does not exist, retrying in 10s..."
+          elif [ ! -s /data/acme.json ]; then
+            echo "certs-dumper: [attempt $$attempt] /data/acme.json exists but is empty (0 bytes), retrying in 10s..."
+          elif grep -q '"Certificates"' /data/acme.json 2>/dev/null; then
+            SIZE=$$(wc -c < /data/acme.json)
+            echo "certs-dumper: acme.json has certificate data ($$SIZE bytes, attempt $$attempt), starting dump..."
+            break
+          else
+            SIZE=$$(wc -c < /data/acme.json)
+            echo "certs-dumper: [attempt $$attempt] /data/acme.json has data ($$SIZE bytes) but no Certificates key yet, retrying in 10s..."
+            if [ $$((attempt % 6)) -eq 0 ]; then
+              echo "certs-dumper: acme.json preview: $$(head -c 200 /data/acme.json)..."
+            fi
+          fi
+          sleep 10
+        done
+        exec traefik-certs-dumper file --source /data/acme.json --dest /output --version v2 --watch --post-hook "chmod -R a+r /output/private/"
 
   ldap:
     container_name: ldap
@@ -32,7 +60,7 @@ services:
       start_period: 15s
     depends_on:
       certs-dumper:
-        condition: service_healthy
+        condition: service_started
     environment:
       - LDAP_ROOT={{ openldap_base_dn }}
       - LDAP_ADMIN_USERNAME=admin
@@ -60,6 +88,15 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
+        echo "ldap: waiting for TLS certificate from certs-dumper..."
+        cert_attempt=0
+        while [ ! -f /opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt ]; do
+          cert_attempt=$$((cert_attempt + 1))
+          echo "ldap: [attempt $$cert_attempt] TLS cert not ready yet, waiting 10s..."
+          sleep 10
+        done
+        echo "ldap: TLS certificate found, starting OpenLDAP..."
+
         /opt/bitnami/scripts/openldap/entrypoint.sh /opt/bitnami/scripts/openldap/run.sh &
         SLAPD_PID=$$!
 
@@ -324,12 +361,6 @@ services:
         EOF
 
         wait $$SLAPD_PID
-    labels:
-      - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
-      - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
-      - "traefik.http.routers.ldap-certs.entrypoints=websecure"
-      - "traefik.http.routers.ldap-certs.tls=true"
-      - "traefik.http.routers.ldap-certs.tls.certresolver=letsencrypt"
 
 volumes:
   openldap_data:
