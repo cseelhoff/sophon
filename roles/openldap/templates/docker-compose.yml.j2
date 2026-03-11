@@ -10,7 +10,6 @@ services:
       - ldap_certs:/output
     labels:
       - "traefik.enable=true"
-      - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
       - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
       - "traefik.http.routers.ldap-certs.entrypoints=websecure"
       - "traefik.http.routers.ldap-certs.tls=true"
@@ -71,7 +70,7 @@ services:
       - LDAP_ALLOW_ANON_BINDING=no
       - LDAP_ENABLE_TLS=yes
       # REQUIRE_TLS=no is required when using ldapi:// socket auth in init scripts.
-      # External clients should use ldaps:// or starttls on 389 if exposed.
+      # External clients should use ldaps:// with TLS required for security, but the init scripts need to be able to bind without TLS to configure the server before certs are available.
       - LDAP_REQUIRE_TLS=no
       - LDAP_TLS_CERT_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
       - LDAP_TLS_KEY_FILE=/opt/bitnami/openldap/certs/private/{{ openldap_tls_domain }}.key
@@ -82,6 +81,8 @@ services:
       - LDAP_SKIP_DEFAULT_TREE=no
       - LDAP_USERS=
       - LDAP_PASSWORDS=
+    labels:
+      - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
     volumes:
       - openldap_data:/bitnami/openldap
       - ldap_certs:/opt/bitnami/openldap/certs:ro
