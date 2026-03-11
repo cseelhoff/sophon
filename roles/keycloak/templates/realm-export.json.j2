@@ -149,5 +149,77 @@
     ]
   },
 
+  "clientScopes": [
+    {
+      "name": "groups",
+      "description": "Group memberships",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "full.path": "false",
+            "introspection.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "portainer",
+      "name": "Portainer",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ keycloak_portainer_client_secret }}",
+      "redirectUris": [
+        "https://portainer.{{ keycloak_domain }}/*"
+      ],
+      "webOrigins": [
+        "https://portainer.{{ keycloak_domain }}"
+      ],
+      "bearerOnly": false,
+      "consentRequired": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "publicClient": false,
+      "frontchannelLogout": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "post.logout.redirect.uris": "https://portainer.{{ keycloak_domain }}"
+      },
+      "fullScopeAllowed": true,
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "groups",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access",
+        "organization",
+        "microprofile-jwt"
+      ]
+    }
+  ],
+
   "requiredCredentials": ["password"]
 }

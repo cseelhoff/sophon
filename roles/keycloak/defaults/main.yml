@@ -47,3 +47,7 @@ keycloak_clients:
     redirect_uris:
       - "https://nexus.{{ domain_name }}/*"
     enabled: "{{ nexus_enabled | default(false) }}"
+
+# Portainer OAuth integration
+# Set to false to skip configuring Portainer's OAuth settings via API
+keycloak_configure_portainer_oauth: true
