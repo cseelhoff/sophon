@@ -1,1 +1,26 @@
 ---
+# =============================================================================
+# Sophon — Global Variables
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Portainer image / edition
+# -----------------------------------------------------------------------------
+# Default is Business Edition (EE). Set portainer_license_key to activate.
+# To revert to Community Edition, override:
+#   portainer_image_repo: "docker.io/portainer/portainer-ce"
+#   portainer_image_tag:  "2.39.0"
+#   portainer_license_key: ""
+portainer_image_repo: "docker.io/portainer/portainer-ee"
+portainer_image_tag: "2.21.5"
+portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
+
+# Portainer Business Edition license key. Required when running EE images.
+# Obtain a free 5-node Business Starter license from portainer.io.
+# Pass via -e portainer_license_key=... or vault.
+portainer_license_key: ""
+
+# Tarball filename for prestage / NFS upload / infravm boot loader.
+# Mirrors the naming convention in prestage.yml:
+#   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.21.5.tar
+portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"

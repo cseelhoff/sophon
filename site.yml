@@ -65,6 +65,9 @@
     - name: Deploy Keycloak
       ansible.builtin.include_role: { name: keycloak }
 
+    - name: Deploy Gitea
+      ansible.builtin.include_role: { name: gitea }
+
 
     # - name: Display final IP configuration
     #   ansible.builtin.debug:

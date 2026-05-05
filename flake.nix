@@ -80,6 +80,8 @@
             buildah
             mkpasswd
             dig
+            bubblewrap
+            socat
           ];
 
           shellHook = ''

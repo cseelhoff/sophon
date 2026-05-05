@@ -1,42 +1,48 @@
 ---
-# Gitea configuration
-gitea_enabled: false  # TODO: Rewrite to use portainer_stack
+# =============================================================================
+# Gitea role defaults
+# =============================================================================
+
+gitea_enabled: true
+
+# Image
 gitea_image_name: "gitea/gitea"
 gitea_image_tag: "1.22"
+gitea_image: "docker.io/{{ gitea_image_name }}:{{ gitea_image_tag }}"
 
-# Database - using SQLite for simplicity (can switch to PostgreSQL)
+# Database — built-in SQLite (sufficient for small teams)
 gitea_db_type: "sqlite3"
 
-# Directories
-gitea_data_dir: "/opt/gitea"
-
 # Network
-gitea_port_http: 3001
+gitea_port_http: 3000
 gitea_port_ssh: 222
 
-# Domain
+# Domain / URLs
 gitea_hostname: "git"
-gitea_domain: "{{ traefik_domain | default('example.local') }}"
-gitea_root_url: "https://{{ gitea_hostname }}.{{ gitea_domain }}"
-
-# SSH
+gitea_domain: "{{ domain_name }}"
+gitea_root_url: "https://{{ gitea_hostname }}.{{ gitea_domain }}/"
 gitea_ssh_domain: "{{ gitea_hostname }}.{{ gitea_domain }}"
 
 # App settings
 gitea_app_name: "Sophon Git"
 gitea_run_mode: "prod"
+gitea_disable_registration: true
 
-# Disable registration after initial setup (security)
-gitea_disable_registration: false
-
-# Actions runner support
+# Actions runner
 gitea_actions_enabled: true
 
-# Keycloak OIDC Integration
-gitea_oauth_enabled: false
-gitea_oauth_provider: "openidConnect"
+# Initial admin (created by gitea-init sidecar on first deploy).
+# NOTE: Gitea reserves 'admin' as a username; use a different name.
+gitea_admin_user: "siteadmin"
+gitea_admin_email: "siteadmin@{{ gitea_domain }}"
+gitea_admin_password: "{{ portainer_admin_password | default('changeme1234') }}"
+
+# Keycloak OIDC integration
+# These reference the keycloak role's vars directly; the keycloak role must
+# run before gitea (it does in site.yml) so these resolve correctly.
+gitea_oauth_enabled: true
 gitea_oauth_name: "Keycloak"
-gitea_oauth_icon: "gitea"
-# gitea_oauth_client_id: "gitea"
-# gitea_oauth_client_secret: "{{ vault_keycloak_gitea_client_secret }}"
-# gitea_oauth_auto_discover_url: "https://keycloak.{{ domain_name }}/realms/{{ keycloak_realm }}/.well-known/openid-configuration"
+gitea_oauth_client_id: "gitea"
+gitea_oauth_client_secret: "{{ keycloak_gitea_client_secret | default('') }}"
+gitea_oauth_discovery_url: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/.well-known/openid-configuration"
+gitea_oauth_scopes: "openid profile email groups"

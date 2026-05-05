@@ -36,7 +36,7 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 │   └── iso/                    # Proxmox ISO storage (VM images)
 │       └── fedora-coreos-*.qcow2.iso
 └── containers/                 # Container image tarballs
-    ├── portainer-ce.tar
+    ├── portainer-portainer-ee_<tag>.tar
     ├── coredns.tar
     ├── traefik.tar
     └── ...
@@ -49,7 +49,7 @@ Infrastructure as Code for deploying homelab services on Fedora CoreOS with Podm
 **Condition:** Only when `proxmox_airgapped=true`
 
 Bootstrap downloads all artifacts for offline deployment:
-- Container images: `portainer-ce.tar`, `coredns.tar`, `traefik.tar`, `gitea.tar`, `nexus.tar`
+- Container images: `portainer-portainer-ee_<tag>.tar`, `coredns.tar`, `traefik.tar`, `gitea.tar`, `nexus.tar`
 - VM images: `fedora-coreos-*.qcow2`, `alpine-virt-*.qcow2`
 - Builds `alpine-nfs.qcow2` with NFS packages pre-installed
 
@@ -105,7 +105,7 @@ For each image in `prestage_container_images`:
    - `podman save -o /mnt/nfs/containers/{{ image_basename }}.tar {{ image }}`
 
 Container image list:
-- `docker.io/portainer/portainer-ce:2.39.0`
+- `docker.io/portainer/portainer-ee:2.21.5` (configurable via `portainer_image_repo` / `portainer_image_tag`)
 - `docker.io/coredns/coredns:1.12.0`
 - `docker.io/osixia/openldap:1.5.0`
 - `docker.io/quay.io/keycloak/keycloak:26.0`
@@ -117,7 +117,7 @@ Container image list:
 
 **Execution:** Via SSH to InfraVM
 
-1. Create Portainer systemd service running `podman run portainer/portainer-ce`
+1. Create Portainer systemd service running `podman run portainer/portainer-ee` (Business Edition; license key registered via `POST /api/licenses/add` after admin init when `portainer_license_key` is set)
 2. Wait for Portainer API at `https://{{ infravm_ip }}:9443`
 3. Initialize admin user with `portainer_admin_password`
 4. *(Future)* Restore from backup if `/mnt/nfs/backups/current/portainer/portainer_data.tgz` exists
@@ -340,7 +340,7 @@ When variables are not set, `site.yml` will prompt for:
 openssl rand -hex 32
 ```
 
-4. The realm is auto-provisioned via `realm-export.json.j2`
+4. The realm, LDAP federation, and OIDC clients are provisioned post-deploy via the Keycloak Admin REST API (see `roles/keycloak/tasks/configure.yml`)
 
 ## Deployment Order
 

@@ -401,19 +401,19 @@
 
     - name: Check local portainer image size
       ansible.builtin.stat:
-        path: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.39.0.tar"
+        path: "{{ playbook_dir }}/artifacts/containers/{{ portainer_image_tarname }}"
       register: nfs_portainer_local
       when: nfs_mount_success
 
     - name: Check remote portainer image size
       ansible.builtin.stat:
-        path: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.39.0.tar"
+        path: "{{ nfs_temp_mount.path }}/containers/{{ portainer_image_tarname }}"
       register: nfs_portainer_remote
       when: nfs_mount_success
 
     - name: Upload portainer image to NFS
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/artifacts/containers/portainer-portainer-ce_2.39.0.tar"
-        dest: "{{ nfs_temp_mount.path }}/containers/portainer-portainer-ce_2.39.0.tar"
+        src: "{{ playbook_dir }}/artifacts/containers/{{ portainer_image_tarname }}"
+        dest: "{{ nfs_temp_mount.path }}/containers/{{ portainer_image_tarname }}"
         mode: "0644"
       when: nfs_mount_success and (not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size)

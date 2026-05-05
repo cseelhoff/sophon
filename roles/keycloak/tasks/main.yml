@@ -6,6 +6,14 @@
     keycloak_portainer_client_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
   when: keycloak_portainer_client_secret is not defined
 
+# Publish key Keycloak vars as facts so they survive past role scope and are
+# visible to downstream roles (gitea, etc.) that reference them.
+- name: Publish Keycloak coordinates as facts
+  ansible.builtin.set_fact:
+    keycloak_hostname: "{{ keycloak_hostname }}"
+    keycloak_domain: "{{ keycloak_domain }}"
+    keycloak_realm: "{{ keycloak_realm }}"
+
 - name: Deploy Keycloak stack via Portainer
   ansible.builtin.include_role:
     name: portainer_stack
@@ -18,22 +26,19 @@
     msg: "Keycloak ready at https://{{ keycloak_hostname }}.{{ keycloak_domain }} (port {{ keycloak_port }})"
 
 # =========================================================================
+# Configure realm, LDAP, clients, groups via Keycloak Admin REST API
+# =========================================================================
+- name: Configure Keycloak via Admin REST API
+  vars:
+    _kc_base: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}"
+  ansible.builtin.include_tasks: configure.yml
+
+# =========================================================================
 # Configure Portainer OAuth via Portainer API
 # =========================================================================
 - name: Configure Portainer OAuth with Keycloak
   when: keycloak_configure_portainer_oauth | default(true)
   block:
-    - name: Wait for Keycloak realm to be available
-      ansible.builtin.uri:
-        url: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}"
-        method: GET
-        validate_certs: false
-        status_code: 200
-      register: keycloak_realm_check
-      until: keycloak_realm_check.status == 200
-      retries: 30
-      delay: 10
-
     - name: Authenticate with Portainer for OAuth configuration
       ansible.builtin.uri:
         url: "{{ infravm_portainer_url }}/api/auth"
@@ -80,11 +85,22 @@
             RedirectURI: "https://portainer.{{ keycloak_domain }}"
             LogoutURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/logout"
             UserIdentifier: "preferred_username"
-            Scopes: "openid profile email"
+            Scopes: "openid profile email groups"
             OAuthAutoCreateUsers: true
             DefaultTeamID: 0
             SSO: true
             AuthStyle: 0
+            # ----- Portainer Business Edition: auto-promote LDAP group members to admin
+            # Members of the 'portainer-admins' LDAP group flow into Keycloak via the
+            # LDAP user federation + group mapper, then into the OIDC token's 'groups'
+            # claim. Portainer EE matches that claim against AdminGroupClaimsRegexList
+            # and assigns admin role on each login. Ignored by CE.
+            OAuthAutoMapTeamMemberships: true
+            TeamMemberships:
+              OAuthClaimName: "groups"
+              AdminAutoPopulate: true
+              AdminGroupClaimsRegexList:
+                - "portainer-admins"
 
     - name: Display Portainer OAuth status
       ansible.builtin.debug:

@@ -126,7 +126,7 @@ systemd:
 
         # Start Portainer (rootless, restart=always for linger persistence)
         ExecStart=/bin/sh -c '\
-          podman load -i /var/mnt/nfs/containers/portainer-portainer-ce_2.39.0.tar || true; \
+          podman load -i /var/mnt/nfs/containers/{{ portainer_image_tarname }} || true; \
           if podman ps --format "{% raw %}{{.Names}}{% endraw %}" | grep -q "^portainer$"; then \
             echo "PORTAINER_ALREADY_RUNNING"; \
           else \
@@ -139,8 +139,8 @@ systemd:
               -p {{ infravm_portainer_port }}:9443 \
               -v /run/user/1000/podman/podman.sock:/var/run/docker.sock \
               -v portainer_data:/data:Z \
-              docker.io/portainer/portainer-ce:2.39.0 && \
-            echo "PORTAINER_STARTED"; \
+              {{ portainer_image }} \
+              && echo "PORTAINER_STARTED"; \
           fi'
 
         [Install]

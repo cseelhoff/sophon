@@ -327,6 +327,16 @@ services:
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
         EOF
 
+        echo "Creating groupOfNames 'portainer-admins' group if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=portainer-admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        objectClass: top
+        cn: portainer-admins
+        description: Members are auto-promoted to Portainer administrators via Keycloak OIDC groups claim
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        EOF
+
         echo "Groups setup complete."
 
         # ────────────────────────────────────────────────────────────────

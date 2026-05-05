@@ -1,0 +1,420 @@
+---
+# Configure Keycloak via Admin REST API
+# Replaces the realm-export.json approach with idempotent API calls
+
+- name: Wait for Keycloak master realm to be reachable
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/realms/master/.well-known/openid-configuration"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: _kc_ready
+  until: _kc_ready.status == 200
+  retries: 60
+  delay: 5
+
+- name: Obtain Keycloak admin access token
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: password
+      client_id: admin-cli
+      username: "{{ keycloak_admin_user }}"
+      password: "{{ keycloak_admin_password }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_token
+  changed_when: false
+  no_log: true
+
+- name: Set admin auth header fact
+  ansible.builtin.set_fact:
+    _kc_headers:
+      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Content-Type: "application/json"
+
+- name: Check if realm exists
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _kc_realm_check
+  changed_when: false
+
+- name: Create realm
+  when: _kc_realm_check.status == 404
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      realm: "{{ keycloak_realm }}"
+      displayName: "{{ keycloak_realm_display_name }}"
+      enabled: true
+      sslRequired: external
+      registrationAllowed: false
+      loginWithEmailAllowed: true
+      duplicateEmailsAllowed: false
+      resetPasswordAllowed: true
+      editUsernameAllowed: false
+      bruteForceProtected: true
+    validate_certs: false
+    status_code: [201, 409]
+
+# -------- LDAP user federation --------
+- name: List existing user-storage components
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/components?type=org.keycloak.storage.UserStorageProvider"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_storage_components
+  changed_when: false
+
+- name: Create LDAP user federation provider
+  when: _kc_storage_components.json | selectattr('name', 'equalto', 'ldap') | list | length == 0
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/components"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      name: ldap
+      providerId: ldap
+      providerType: org.keycloak.storage.UserStorageProvider
+      config:
+        enabled: ["true"]
+        vendor: ["other"]
+        connectionUrl: ["{{ keycloak_ldap_url }}"]
+        bindDn: ["{{ keycloak_ldap_bind_dn }}"]
+        bindCredential: ["{{ openldap_keycloak_password }}"]
+        usersDn: ["ou=users,{{ openldap_base_dn }}"]
+        usernameLDAPAttribute: ["uid"]
+        rdnLDAPAttribute: ["uid"]
+        uuidLDAPAttribute: ["entryUUID"]
+        userObjectClasses: ["inetOrgPerson,posixAccount,shadowAccount"]
+        editMode: ["WRITABLE"]
+        importEnabled: ["true"]
+        syncRegistrations: ["true"]
+        authType: ["simple"]
+        searchScope: ["1"]
+        useTruststoreSpi: ["always"]
+        pagination: ["true"]
+        connectionPooling: ["true"]
+        usePasswordModifyExtendedOp: ["true"]
+    validate_certs: false
+    status_code: 201
+
+- name: Refresh user-storage components list
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/components?type=org.keycloak.storage.UserStorageProvider"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_storage_components
+  changed_when: false
+
+- name: Set LDAP component id fact
+  ansible.builtin.set_fact:
+    _kc_ldap_id: "{{ (_kc_storage_components.json | selectattr('name', 'equalto', 'ldap') | list | first).id }}"
+
+- name: List existing LDAP mappers
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/components?parent={{ _kc_ldap_id }}&type=org.keycloak.storage.ldap.mappers.LDAPStorageMapper"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_ldap_mappers
+  changed_when: false
+
+- name: Create missing LDAP mappers
+  when: item.name not in (_kc_ldap_mappers.json | map(attribute='name') | list)
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/components"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      providerId: "{{ item.providerId }}"
+      providerType: org.keycloak.storage.ldap.mappers.LDAPStorageMapper
+      parentId: "{{ _kc_ldap_id }}"
+      config: "{{ item.config }}"
+    validate_certs: false
+    status_code: 201
+  loop: "{{ keycloak_ldap_mappers }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# -------- "groups" client scope --------
+- name: List existing client scopes
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/client-scopes"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_scopes
+  changed_when: false
+
+- name: Create "groups" client scope
+  when: _kc_scopes.json | selectattr('name', 'equalto', 'groups') | list | length == 0
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/client-scopes"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      name: groups
+      description: Group memberships
+      protocol: openid-connect
+      attributes:
+        include.in.token.scope: "true"
+        display.on.consent.screen: "true"
+      protocolMappers:
+        - name: groups
+          protocol: openid-connect
+          protocolMapper: oidc-group-membership-mapper
+          config:
+            full.path: "false"
+            id.token.claim: "true"
+            access.token.claim: "true"
+            userinfo.token.claim: "true"
+            introspection.token.claim: "true"
+            claim.name: groups
+    validate_certs: false
+    status_code: 201
+
+# -------- keycloak-admins group with realm-admin role --------
+- name: List groups (filtered)
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/groups?search=keycloak-admins"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_groups
+  changed_when: false
+
+- name: Create keycloak-admins group
+  when: _kc_groups.json | selectattr('name', 'equalto', 'keycloak-admins') | list | length == 0
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/groups"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      name: keycloak-admins
+    validate_certs: false
+    status_code: [201, 409]
+
+- name: Lookup keycloak-admins group id
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/groups?search=keycloak-admins"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_groups
+  changed_when: false
+
+- name: Lookup realm-management client id
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=realm-management"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_realm_mgmt
+  changed_when: false
+
+- name: Lookup realm-admin role
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_realm_mgmt.json[0].id }}/roles/realm-admin"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_realm_admin_role
+  changed_when: false
+
+- name: Set group/client/role id facts
+  ansible.builtin.set_fact:
+    _kc_admins_group_id: "{{ (_kc_groups.json | selectattr('name', 'equalto', 'keycloak-admins') | list | first).id }}"
+    _kc_realm_mgmt_id: "{{ _kc_realm_mgmt.json[0].id }}"
+
+- name: Assign realm-admin role to keycloak-admins group
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/groups/{{ _kc_admins_group_id }}/role-mappings/clients/{{ _kc_realm_mgmt_id }}"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      - id: "{{ _kc_realm_admin_role.json.id }}"
+        name: "{{ _kc_realm_admin_role.json.name }}"
+        containerId: "{{ _kc_realm_mgmt_id }}"
+        clientRole: true
+    validate_certs: false
+    status_code: [204, 409]
+  changed_when: false
+
+# -------- portainer OIDC client --------
+- name: Lookup portainer client
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=portainer"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_portainer_client
+  changed_when: false
+
+- name: Create portainer client
+  when: _kc_portainer_client.json | length == 0
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      clientId: portainer
+      name: Portainer
+      enabled: true
+      protocol: openid-connect
+      clientAuthenticatorType: client-secret
+      secret: "{{ keycloak_portainer_client_secret }}"
+      redirectUris:
+        - "https://portainer.{{ keycloak_domain }}/*"
+      webOrigins:
+        - "https://portainer.{{ keycloak_domain }}"
+      publicClient: false
+      standardFlowEnabled: true
+      implicitFlowEnabled: false
+      directAccessGrantsEnabled: false
+      serviceAccountsEnabled: false
+      frontchannelLogout: true
+      fullScopeAllowed: true
+      attributes:
+        post.logout.redirect.uris: "https://portainer.{{ keycloak_domain }}"
+    validate_certs: false
+    status_code: [201, 409]
+
+- name: Refresh portainer client lookup
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=portainer"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_portainer_client
+  changed_when: false
+
+- name: Lookup "groups" scope id
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/client-scopes"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_scopes
+  changed_when: false
+
+- name: Add "groups" scope as default scope on portainer client
+  vars:
+    _kc_groups_scope_id: "{{ (_kc_scopes.json | selectattr('name', 'equalto', 'groups') | list | first).id }}"
+    _kc_portainer_id: "{{ _kc_portainer_client.json[0].id }}"
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_portainer_id }}/default-client-scopes/{{ _kc_groups_scope_id }}"
+    method: PUT
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: [204, 409]
+  changed_when: false
+
+# =========================================================================
+# gitea OIDC client
+# =========================================================================
+- name: Lookup gitea client
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=gitea"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_gitea_client
+  changed_when: false
+
+- name: Create gitea client
+  when: _kc_gitea_client.json | length == 0
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      clientId: gitea
+      name: Gitea
+      enabled: true
+      protocol: openid-connect
+      clientAuthenticatorType: client-secret
+      redirectUris:
+        - "https://{{ gitea_hostname | default('git') }}.{{ gitea_domain | default(keycloak_domain) }}/*"
+      webOrigins:
+        - "https://{{ gitea_hostname | default('git') }}.{{ gitea_domain | default(keycloak_domain) }}"
+      publicClient: false
+      standardFlowEnabled: true
+      implicitFlowEnabled: false
+      directAccessGrantsEnabled: false
+      serviceAccountsEnabled: false
+      frontchannelLogout: true
+      fullScopeAllowed: true
+      attributes:
+        post.logout.redirect.uris: "https://{{ gitea_hostname | default('git') }}.{{ gitea_domain | default(keycloak_domain) }}"
+    validate_certs: false
+    status_code: [201, 409]
+
+- name: Refresh gitea client lookup
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=gitea"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_gitea_client
+  changed_when: false
+
+- name: Read gitea client secret
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_gitea_client.json[0].id }}/client-secret"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_gitea_secret
+  changed_when: false
+  no_log: true
+
+- name: Set keycloak_gitea_client_secret fact
+  ansible.builtin.set_fact:
+    keycloak_gitea_client_secret: "{{ _kc_gitea_secret.json.value }}"
+  no_log: true
+
+- name: Add "groups" scope as default scope on gitea client
+  vars:
+    _kc_groups_scope_id: "{{ (_kc_scopes.json | selectattr('name', 'equalto', 'groups') | list | first).id }}"
+    _kc_gitea_id: "{{ _kc_gitea_client.json[0].id }}"
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_gitea_id }}/default-client-scopes/{{ _kc_groups_scope_id }}"
+    method: PUT
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: [204, 409]
+  changed_when: false

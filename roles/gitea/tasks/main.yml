@@ -1,8 +1,21 @@
 ---
-# Deploy Gitea Git Server
-# TODO: Rewrite to use portainer_stack approach (no delegate_to)
+# Deploy Gitea via Portainer Stack
 
-- name: Skip gitea deployment (disabled)
-  ansible.builtin.debug:
-    msg: "Gitea role is disabled (gitea_enabled=false)"
-  when: not (gitea_enabled | default(false))
+- name: Deploy Gitea
+  when: gitea_enabled | default(false)
+  block:
+    - name: Deploy Gitea stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_name: "gitea"
+        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_deploy_timeout: 300
+
+    - name: Display Gitea status
+      ansible.builtin.debug:
+        msg: |
+          Gitea deployed at {{ gitea_root_url }}
+          Admin user:     {{ gitea_admin_user }}
+          Admin password: {{ gitea_admin_password }}
+          OIDC SSO:       {{ 'enabled (Keycloak)' if gitea_oauth_enabled else 'disabled' }}

@@ -1,7 +1,10 @@
+# Gitea deployed via Portainer Stacks API
+# Admin user + Keycloak OIDC auth source are bootstrapped by the gitea-init
+# sidecar (one-shot) using the gitea CLI against the shared data volume.
 
 services:
   gitea:
-    image: {{ gitea_image_name }}:{{ gitea_image_tag }}
+    image: {{ gitea_image }}
     container_name: gitea
     restart: unless-stopped
     environment:
@@ -9,38 +12,112 @@ services:
       - USER_GID=1000
       - GITEA__database__DB_TYPE={{ gitea_db_type }}
       - GITEA__database__PATH=/data/gitea/gitea.db
+      - GITEA__server__DOMAIN={{ gitea_hostname }}.{{ gitea_domain }}
       - GITEA__server__ROOT_URL={{ gitea_root_url }}
       - GITEA__server__SSH_DOMAIN={{ gitea_ssh_domain }}
       - GITEA__server__SSH_PORT={{ gitea_port_ssh }}
+      - GITEA__server__SSH_LISTEN_PORT=22
+      - GITEA__server__HTTP_PORT=3000
       - GITEA__server__LFS_START_SERVER=true
+      - GITEA__service__DISABLE_REGISTRATION={{ gitea_disable_registration | lower }}
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__security__REVERSE_PROXY_LIMIT=1
+      - GITEA__security__REVERSE_PROXY_TRUSTED_PROXIES=*
 {% if gitea_actions_enabled %}
       - GITEA__actions__ENABLED=true
 {% endif %}
+{% if gitea_oauth_enabled %}
+      - GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION=true
+      - GITEA__oauth2_client__ACCOUNT_LINKING=auto
+      - GITEA__oauth2_client__USERNAME=nickname
+      - GITEA__oauth2_client__OPENID_CONNECT_SCOPES={{ gitea_oauth_scopes }}
+{% endif %}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     volumes:
-      - {{ gitea_data_dir }}/data:/data
-      - {{ gitea_data_dir }}/config/app.ini:/data/gitea/conf/app.ini
-      - /etc/localtime:/etc/localtime:ro
+      - gitea_data:/data
     ports:
-      - "{{ gitea_port_http }}:3000"
       - "{{ gitea_port_ssh }}:22"
     networks:
       - proxy
-      - gitea
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.gitea.entrypoints=https"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.gitea.entrypoints=websecure"
       - "traefik.http.routers.gitea.rule=Host(`{{ gitea_hostname }}.{{ gitea_domain }}`)"
       - "traefik.http.routers.gitea.tls=true"
       - "traefik.http.routers.gitea.tls.certresolver=letsencrypt"
       - "traefik.http.services.gitea.loadbalancer.server.port=3000"
-      - "homepage.group=Services"
-      - "homepage.name=Gitea"
-      - "homepage.icon=gitea"
-      - "homepage.href={{ gitea_root_url }}"
-      - "homepage.description=Git Server"
+      - "coredns.dockerdiscovery.host={{ gitea_hostname }}.{{ gitea_domain }}"
+      - "coredns.dockerdiscovery.cf_tunnel=https://{{ gitea_hostname }}.{{ gitea_domain }}"
+
+  # One-shot bootstrap: creates the admin user and Keycloak OIDC auth source.
+  # Idempotent — exits cleanly if both already exist. Re-runs harmlessly on
+  # stack updates because the gitea CLI returns nonzero on duplicate creation,
+  # which we swallow.
+  gitea-init:
+    image: {{ gitea_image }}
+    container_name: gitea-init
+    restart: "no"
+    depends_on:
+      gitea:
+        condition: service_healthy
+    user: "1000:1000"
+    environment:
+      - GITEA_WORK_DIR=/data/gitea
+      - GITEA_CUSTOM=/data/gitea
+      - GITEA_APP_INI=/data/gitea/conf/app.ini
+    volumes:
+      - gitea_data:/data
+    networks:
+      - proxy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "gitea-init: waiting for app.ini..."
+        for i in $$(seq 1 60); do
+          [ -f /data/gitea/conf/app.ini ] && break
+          sleep 2
+        done
+
+        echo "gitea-init: ensuring admin user '{{ gitea_admin_user }}' exists..."
+        if gitea admin user list 2>/dev/null | awk 'NR>1 {print $$2}' | grep -qx '{{ gitea_admin_user }}'; then
+          echo "gitea-init: admin user already exists."
+        else
+          gitea admin user create \
+            --username '{{ gitea_admin_user }}' \
+            --password '{{ gitea_admin_password }}' \
+            --email '{{ gitea_admin_email }}' \
+            --admin --must-change-password=false || \
+          echo "gitea-init: admin user create returned nonzero (possibly already exists)."
+        fi
+
+{% if gitea_oauth_enabled %}
+        echo "gitea-init: ensuring Keycloak OIDC auth source..."
+        if gitea admin auth list 2>/dev/null | awk 'NR>1 {print $$2}' | grep -qx '{{ gitea_oauth_name }}'; then
+          echo "gitea-init: OIDC auth source already present."
+        else
+          gitea admin auth add-oauth \
+            --name '{{ gitea_oauth_name }}' \
+            --provider openidConnect \
+            --key '{{ gitea_oauth_client_id }}' \
+            --secret '{{ gitea_oauth_client_secret }}' \
+            --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
+            --scopes '{{ gitea_oauth_scopes }}' || \
+          echo "gitea-init: add-oauth returned nonzero (possibly already exists)."
+        fi
+{% endif %}
+
+        echo "gitea-init: done."
+
+volumes:
+  gitea_data:
 
 networks:
   proxy:
     external: true
-  gitea:
-    driver: bridge

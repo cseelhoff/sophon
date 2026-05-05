@@ -51,3 +51,72 @@ keycloak_clients:
 # Portainer OAuth integration
 # Set to false to skip configuring Portainer's OAuth settings via API
 keycloak_configure_portainer_oauth: true
+
+# LDAP attribute / group mappers attached to the LDAP user federation provider
+keycloak_ldap_mappers:
+  - name: username
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["uid"]
+      is.mandatory.in.ldap: ["true"]
+      read.only: ["false"]
+      always.read.value.from.ldap: ["false"]
+      user.model.attribute: ["username"]
+  - name: first name
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["givenName"]
+      attribute.force.default: ["true"]
+      is.mandatory.in.ldap: ["true"]
+      is.binary.attribute: ["false"]
+      read.only: ["false"]
+      always.read.value.from.ldap: ["true"]
+      user.model.attribute: ["firstName"]
+  - name: last name
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["sn"]
+      is.mandatory.in.ldap: ["true"]
+      read.only: ["false"]
+      always.read.value.from.ldap: ["true"]
+      user.model.attribute: ["lastName"]
+  - name: email
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["mail"]
+      is.mandatory.in.ldap: ["false"]
+      always.read.value.from.ldap: ["false"]
+      read.only: ["false"]
+      user.model.attribute: ["email"]
+  - name: creation date
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["createTimestamp"]
+      is.mandatory.in.ldap: ["false"]
+      always.read.value.from.ldap: ["true"]
+      read.only: ["true"]
+      user.model.attribute: ["createTimestamp"]
+  - name: modify date
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["modifyTimestamp"]
+      is.mandatory.in.ldap: ["false"]
+      read.only: ["true"]
+      always.read.value.from.ldap: ["true"]
+      user.model.attribute: ["modifyTimestamp"]
+  - name: group-ldap-mapper
+    providerId: group-ldap-mapper
+    config:
+      mode: ["LDAP_ONLY"]
+      membership.attribute.type: ["DN"]
+      user.roles.retrieve.strategy: ["GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE"]
+      group.name.ldap.attribute: ["cn"]
+      membership.ldap.attribute: ["member"]
+      ignore.missing.groups: ["false"]
+      preserve.group.inheritance: ["true"]
+      membership.user.ldap.attribute: ["uid"]
+      group.object.classes: ["groupOfNames"]
+      memberof.ldap.attribute: ["memberOf"]
+      groups.dn: ["ou=groups,{{ openldap_base_dn }}"]
+      drop.non.existing.groups.during.sync: ["false"]
+      groups.path: ["/"]
