@@ -16,6 +16,9 @@ proxmox_airgapped: false
 # Certificate validation (set to true in production with valid certs)
 proxmox_validate_certs: false
 
-# Proxmox storage for the CoreOS image
+# Proxmox storage for the CoreOS image.
+# `proxmox_iso_storage_path` (the on-disk ISO directory) is auto-discovered
+# at runtime from the Proxmox API for the given storage ID. The value below
+# is only a last-resort fallback matching the built-in `local` storage.
 proxmox_iso_storage_id: "local"
 proxmox_iso_storage_path: "/var/lib/vz/template/iso"

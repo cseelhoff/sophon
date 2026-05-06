@@ -14,6 +14,9 @@
     status_code: 200
   register: portainer_stack_auth_response
   changed_when: false
+  retries: "{{ portainer_stack_api_retries }}"
+  delay: "{{ portainer_stack_api_delay }}"
+  until: portainer_stack_auth_response.status == 200
 
 - name: Set auth token
   ansible.builtin.set_fact:
@@ -29,6 +32,9 @@
     status_code: 200
   register: portainer_stack_endpoints_response
   changed_when: false
+  retries: "{{ portainer_stack_api_retries }}"
+  delay: "{{ portainer_stack_api_delay }}"
+  until: portainer_stack_endpoints_response.status == 200
 
 - name: Set endpoints fact
   ansible.builtin.set_fact:
@@ -75,6 +81,9 @@
     status_code: 200
   register: portainer_stack_list_response
   changed_when: false
+  retries: "{{ portainer_stack_api_retries }}"
+  delay: "{{ portainer_stack_api_delay }}"
+  until: portainer_stack_list_response.status == 200
 
 - name: Check if stack already exists
   ansible.builtin.set_fact:

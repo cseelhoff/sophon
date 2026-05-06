@@ -12,7 +12,7 @@
 #   portainer_image_tag:  "2.39.0"
 #   portainer_license_key: ""
 portainer_image_repo: "docker.io/portainer/portainer-ee"
-portainer_image_tag: "2.21.5"
+portainer_image_tag: "2.41.0"
 portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
 
 # Portainer Business Edition license key. Required when running EE images.

@@ -18,8 +18,37 @@
   when: infravm_existing_vm is none
   block:
     # -------------------------------------------------------------------------
-    # CoreOS Image: Check if exists on Proxmox
+    # Discover the on-disk path for the configured ISO storage
     # -------------------------------------------------------------------------
+    # Avoids hardcoding /var/lib/vz/template/iso. The /storage/{id} endpoint
+    # returns a `path` field for dir/nfs/cifs storage types (NFS auto-mounts
+    # at /mnt/pve/<id>). The ISO subdir is always <path>/template/iso per
+    # Proxmox convention.
+    - name: Look up Proxmox storage configuration
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/storage/{{ proxmox_iso_storage_id }}"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: _iso_storage_cfg
+
+    - name: Resolve ISO storage on-disk path
+      ansible.builtin.set_fact:
+        # Use the storage's `path` field when present (dir storage and
+        # auto-mounted nfs/cifs both expose it); otherwise derive the PVE
+        # NFS/CIFS auto-mount path; otherwise keep the role-default fallback.
+        proxmox_iso_storage_path: >-
+          {{
+            (_iso_storage_cfg.json.data.path ~ '/template/iso')
+            if _iso_storage_cfg.json.data.path is defined
+            else (
+              ('/mnt/pve/' ~ proxmox_iso_storage_id ~ '/template/iso')
+              if _iso_storage_cfg.json.data.type in ['nfs', 'cifs']
+              else proxmox_iso_storage_path
+            )
+          }}
+
     - name: Check if CoreOS image exists in Proxmox storage
       ansible.builtin.uri:
         url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage/{{ proxmox_iso_storage_id }}/content"

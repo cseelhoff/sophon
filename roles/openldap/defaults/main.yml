@@ -15,12 +15,30 @@ openldap_port_admin: 80
 openldap_domain: "{{ domain_name }}"
 openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
 
-# Credentials (set via vault in production)
+# Credentials (set via vault in production, or auto-generated in site.yml)
 openldap_admin_password: "admin"
 # openldap_config_password: ""  # defaults to openldap_admin_password if unset
 
 # Keycloak service account (bind DN for LDAP federation)
 openldap_keycloak_password: "{{ openldap_admin_password }}"
+
+# -----------------------------------------------------------------------------
+# Example/seed users created during LDAP bootstrap
+# -----------------------------------------------------------------------------
+# Two stereotypical accounts are seeded so SSO and Linux logins are testable
+# out of the box. Passwords are auto-generated in site.yml; override on the
+# CLI with -e openldap_example_user_password=... if needed.
+openldap_example_user_uid: "john.doe"
+openldap_example_user_givenname: "John"
+openldap_example_user_sn: "Doe"
+openldap_example_user_uidnumber: 10001
+openldap_example_user_password: "changeme-user"
+
+openldap_example_admin_uid: "jane.doe.admin"
+openldap_example_admin_givenname: "Jane"
+openldap_example_admin_sn: "Doe"
+openldap_example_admin_uidnumber: 10002
+openldap_example_admin_password: "changeme-admin"
 
 # TLS settings
 openldap_tls_enabled: true

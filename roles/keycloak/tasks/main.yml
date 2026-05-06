@@ -70,7 +70,12 @@
         headers:
           Authorization: "Bearer {{ keycloak_portainer_auth.json.jwt }}"
         body_format: json
-        body: "{{ keycloak_portainer_settings.json | combine(keycloak_portainer_oauth_settings, recursive=true) }}"
+        # NOTE: send only the fields we want to change. Echoing back the full
+        # GET response triggers Portainer 2.41+ validation errors on unrelated
+        # fields (e.g. "Invalid auto-patch cron expression" when an empty
+        # EdgeAutoUpdate cron is round-tripped). PUT /api/settings accepts
+        # partial updates.
+        body: "{{ keycloak_portainer_oauth_settings }}"
         validate_certs: false
         status_code: 200
       vars:

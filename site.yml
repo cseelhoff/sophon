@@ -44,6 +44,37 @@
 - name: Deploy Sophon
   hosts: localhost
   tasks:
+    # =========================================================================
+    # Generate random admin / seed-user passwords once per run.
+    # `set_fact` is overridden by `-e var=...` extra-vars (highest precedence)
+    # but overrides any role default, so passing -e on the CLI still wins.
+    # `lookup('password', '/dev/null ...')` is invoked once here and the
+    # resulting fact is reused everywhere else in the play.
+    # Portainer's admin password is generated inside the infravm role.
+    # =========================================================================
+    - name: Generate random admin and seed-user passwords
+      ansible.builtin.set_fact:
+        keycloak_admin_password: >-
+          {{ keycloak_admin_password
+             if (keycloak_admin_password | default('')) not in ['', 'admin']
+             else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+        gitea_admin_password: >-
+          {{ gitea_admin_password
+             if (gitea_admin_password | default('')) != ''
+             else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+        openldap_admin_password: >-
+          {{ openldap_admin_password
+             if (openldap_admin_password | default('')) not in ['', 'admin']
+             else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+        openldap_example_user_password: >-
+          {{ openldap_example_user_password
+             if (openldap_example_user_password | default('')) not in ['', 'changeme-user']
+             else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}
+        openldap_example_admin_password: >-
+          {{ openldap_example_admin_password
+             if (openldap_example_admin_password | default('')) not in ['', 'changeme-admin']
+             else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}
+
     - name: Authenticate with Proxmox
       ansible.builtin.include_role: { name: proxmox }
 
@@ -112,6 +143,12 @@
             Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
             Nexus Admin:         {{ nexus_admin_password | default('not generated') }}
             OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
+
+          LDAP Example Users (auto-seeded):
+            Standard user:       uid={{ openldap_example_user_uid | default('jdoe') }}  password: {{ openldap_example_user_password | default('not generated') }}
+              groups:            cn=users, cn=posix-users
+            Admin user:          uid={{ openldap_example_admin_uid | default('jadmin') }}  password: {{ openldap_example_admin_password | default('not generated') }}
+              groups:            cn=users, cn=ldap-admins, cn=portainer-admins, cn=posix-users
 
           ============================================================================
           Store these credentials in your password manager!

@@ -273,6 +273,13 @@ services:
         ou: policies
         EOF
 
+        echo "Ensuring ou=people exists..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: ou=people,{{ openldap_base_dn }}
+        objectClass: organizationalUnit
+        ou: people
+        EOF
+
         # ────────────────────────────────────────────────────────────────
         # Remove Bitnami default test users and groups (security hygiene)
         # Delete the group first so memberof can clean up memberOf attrs on users
@@ -370,6 +377,91 @@ services:
         gidNumber: 10000
         description: Default POSIX group for LAM Unix module
         EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Example/seed users (one standard user, one admin)
+        #   - inetOrgPerson + posixAccount + shadowAccount
+        #   - userPassword is sent in cleartext; ppolicy hashes it on write
+        #     (olcPPolicyHashCleartext: TRUE configured above).
+        #   - Group memberships added via separate ldapmodify so re-runs are
+        #     idempotent (`|| true` swallows "already exists" errors).
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating example standard user '{{ openldap_example_user_uid }}' if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
+        objectClass: top
+        objectClass: person
+        objectClass: organizationalPerson
+        objectClass: inetOrgPerson
+        objectClass: posixAccount
+        objectClass: shadowAccount
+        uid: {{ openldap_example_user_uid }}
+        cn: {{ openldap_example_user_givenname }} {{ openldap_example_user_sn }}
+        sn: {{ openldap_example_user_sn }}
+        givenName: {{ openldap_example_user_givenname }}
+        displayName: {{ openldap_example_user_givenname }} {{ openldap_example_user_sn }}
+        mail: {{ openldap_example_user_uid }}@{{ openldap_domain }}
+        uidNumber: {{ openldap_example_user_uidnumber }}
+        gidNumber: 10000
+        homeDirectory: /home/{{ openldap_example_user_uid }}
+        loginShell: /bin/bash
+        userPassword: {{ openldap_example_user_password }}
+        EOF
+
+        echo "Creating example admin user '{{ openldap_example_admin_uid }}' if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+        objectClass: top
+        objectClass: person
+        objectClass: organizationalPerson
+        objectClass: inetOrgPerson
+        objectClass: posixAccount
+        objectClass: shadowAccount
+        uid: {{ openldap_example_admin_uid }}
+        cn: {{ openldap_example_admin_givenname }} {{ openldap_example_admin_sn }}
+        sn: {{ openldap_example_admin_sn }}
+        givenName: {{ openldap_example_admin_givenname }}
+        displayName: {{ openldap_example_admin_givenname }} {{ openldap_example_admin_sn }}
+        mail: {{ openldap_example_admin_uid }}@{{ openldap_domain }}
+        uidNumber: {{ openldap_example_admin_uidnumber }}
+        gidNumber: 10000
+        homeDirectory: /home/{{ openldap_example_admin_uid }}
+        loginShell: /bin/bash
+        userPassword: {{ openldap_example_admin_password }}
+        EOF
+
+        echo "Adding example users to groups (idempotent)..."
+        # Standard user: cn=users (app SSO) + cn=posix-users (Linux nss)
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=users,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: member
+        member: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
+        EOF
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: memberUid
+        memberUid: {{ openldap_example_user_uid }}
+        EOF
+
+        # Admin user: cn=users + cn=ldap-admins + cn=portainer-admins + cn=posix-users
+        for grp in users ldap-admins portainer-admins; do
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=$$grp,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: member
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+        EOF
+        done
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: memberUid
+        memberUid: {{ openldap_example_admin_uid }}
+        EOF
+
+        echo "Example users setup complete."
 
         wait $$SLAPD_PID
 

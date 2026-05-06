@@ -54,7 +54,11 @@ infravm_portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"
 # CoreOS Image
 # =============================================================================
 infravm_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/\
-  43.20260119.3.1/x86_64/fedora-coreos-43.20260119.3.1-qemu.x86_64.qcow2.xz"
+  43.20260413.3.2/x86_64/fedora-coreos-43.20260413.3.2-qemu.x86_64.qcow2.xz"
 infravm_coreos_xz_filename: "{{ infravm_coreos_url | basename }}"
 infravm_coreos_qcow2_filename: "{{ infravm_coreos_xz_filename | regex_replace('\\.xz$', '') }}"
 infravm_coreos_iso_filename: "{{ infravm_coreos_qcow2_filename }}.iso"
+
+# Local directory used for fallback download/upload of the CoreOS image when
+# the Proxmox host cannot fetch it directly (e.g. air-gapped or no egress).
+coreos_local_download_dir: "{{ lookup('env', 'HOME') }}/.cache/sophon/coreos"
