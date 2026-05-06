@@ -98,10 +98,24 @@ services:
         fi
 
 {% if gitea_oauth_enabled %}
-        echo "gitea-init: ensuring Keycloak OIDC auth source..."
-        if gitea admin auth list 2>/dev/null | awk 'NR>1 {print $$2}' | grep -qx '{{ gitea_oauth_name }}'; then
-          echo "gitea-init: OIDC auth source already present."
+        echo "gitea-init: syncing Keycloak OIDC auth source..."
+        # Look up existing source by name. `gitea admin auth list` columns:
+        #   ID  Name  Type  Enabled
+        EXISTING_ID=$$(gitea admin auth list 2>/dev/null | awk -v n='{{ gitea_oauth_name }}' 'NR>1 && $$2==n {print $$1; exit}')
+
+        if [ -n "$$EXISTING_ID" ]; then
+          echo "gitea-init: updating existing OIDC source id=$$EXISTING_ID (keeps secret in sync with Keycloak)."
+          gitea admin auth update-oauth \
+            --id "$$EXISTING_ID" \
+            --name '{{ gitea_oauth_name }}' \
+            --provider openidConnect \
+            --key '{{ gitea_oauth_client_id }}' \
+            --secret '{{ gitea_oauth_client_secret }}' \
+            --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
+            --scopes '{{ gitea_oauth_scopes }}' || \
+          echo "gitea-init: update-oauth returned nonzero."
         else
+          echo "gitea-init: creating new OIDC auth source."
           gitea admin auth add-oauth \
             --name '{{ gitea_oauth_name }}' \
             --provider openidConnect \
@@ -109,7 +123,7 @@ services:
             --secret '{{ gitea_oauth_client_secret }}' \
             --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
             --scopes '{{ gitea_oauth_scopes }}' || \
-          echo "gitea-init: add-oauth returned nonzero (possibly already exists)."
+          echo "gitea-init: add-oauth returned nonzero."
         fi
 {% endif %}
 

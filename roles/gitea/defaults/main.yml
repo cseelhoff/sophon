@@ -35,7 +35,7 @@ gitea_actions_enabled: true
 # NOTE: Gitea reserves 'admin' as a username; use a different name.
 gitea_admin_user: "siteadmin"
 gitea_admin_email: "siteadmin@{{ gitea_domain }}"
-gitea_admin_password: "{{ portainer_admin_password | default('changeme1234') }}"
+gitea_admin_password: "{{ portainer_admin_password }}"
 
 # Keycloak OIDC integration
 # These reference the keycloak role's vars directly; the keycloak role must
