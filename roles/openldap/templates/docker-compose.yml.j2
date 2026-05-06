@@ -314,13 +314,13 @@ services:
         # ────────────────────────────────────────────────────────────────
         # Create groupOfNames groups with "member" attribute
         # ────────────────────────────────────────────────────────────────
-        echo "Creating groupOfNames 'users' group if missing..."
+        echo "Creating groupOfNames 'people' group if missing..."
         ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
-        dn: cn=users,ou=groups,{{ openldap_base_dn }}
+        dn: cn=people,ou=groups,{{ openldap_base_dn }}
         objectClass: groupOfNames
         objectClass: top
-        cn: users
-        description: Default users group
+        cn: people
+        description: Default people group
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
         EOF
 
@@ -430,10 +430,10 @@ services:
         userPassword: {{ openldap_example_admin_password }}
         EOF
 
-        echo "Adding example users to groups (idempotent)..."
-        # Standard user: cn=users (app SSO) + cn=posix-users (Linux nss)
+        echo "Adding example people to groups (idempotent)..."
+        # Standard user: cn=people (app SSO) + cn=posix-users (Linux nss)
         ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
-        dn: cn=users,ou=groups,{{ openldap_base_dn }}
+        dn: cn=people,ou=groups,{{ openldap_base_dn }}
         changetype: modify
         add: member
         member: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
@@ -445,8 +445,8 @@ services:
         memberUid: {{ openldap_example_user_uid }}
         EOF
 
-        # Admin user: cn=users + cn=ldap-admins + cn=portainer-admins + cn=posix-users
-        for grp in users ldap-admins portainer-admins; do
+        # Admin user: cn=people + cn=ldap-admins + cn=portainer-admins + cn=posix-users
+        for grp in people ldap-admins portainer-admins; do
           ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
         dn: cn=$$grp,ou=groups,{{ openldap_base_dn }}
         changetype: modify
@@ -461,7 +461,7 @@ services:
         memberUid: {{ openldap_example_admin_uid }}
         EOF
 
-        echo "Example users setup complete."
+        echo "Example people setup complete."
 
         wait $$SLAPD_PID
 

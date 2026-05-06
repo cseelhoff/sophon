@@ -25,3 +25,11 @@ services:
       - CF_TUNNEL_ID=
       - FORWARD_DNS=9.9.9.9
       - CACHE_TTL=30
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.coredns.rule=Host(`dns.177cpt.com`)
+      - traefik.http.routers.coredns.entrypoints=websecure
+      - traefik.http.routers.coredns.tls=true
+      - traefik.http.routers.coredns.tls.certresolver=letsencrypt
+      - traefik.http.routers.coredns.service=coredns
+      - traefik.http.services.coredns.loadbalancer.server.port=8081

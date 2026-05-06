@@ -24,3 +24,17 @@ portainer_license_key: ""
 # Mirrors the naming convention in prestage.yml:
 #   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.21.5.tar
 portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
+
+# -----------------------------------------------------------------------------
+# Portainer URL (used by infravm, coredns, portainer_stack, keycloak roles)
+# -----------------------------------------------------------------------------
+# The Ansible controller talks to Portainer via the dedicated bootstrap
+# Cloudflare tunnel hostname (portainer-bootstrap.<domain> -> direct IP,
+# noTLSVerify) so it works before any in-cluster DNS / Traefik / sync sidecar
+# is up. End users still access portainer.<domain> via the dockerdiscovery-
+# managed tunnel ingress + Traefik. Falls back to direct IP if no domain.
+infravm_portainer_port: 9443
+infravm_portainer_domain: "{{ coredns_domain_name | default(domain_name | default('', true), true) }}"
+infravm_portainer_url: "{{ 'https://portainer-bootstrap.' ~ infravm_portainer_domain
+  if infravm_portainer_domain | length > 0
+  else 'https://' ~ infravm_ip | default('') ~ ':' ~ infravm_portainer_port }}"

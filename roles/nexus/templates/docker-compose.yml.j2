@@ -5,9 +5,6 @@ services:
     container_name: nexus
     restart: unless-stopped
     user: "200"
-    ports:
-      - "{{ nexus_port }}:8081"
-      - "{{ nexus_docker_registry_port }}:5000"
     volumes:
       - {{ nexus_data_dir }}/data:/nexus-data
     environment:

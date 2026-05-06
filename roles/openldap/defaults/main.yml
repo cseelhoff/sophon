@@ -32,13 +32,13 @@ openldap_example_user_uid: "john.doe"
 openldap_example_user_givenname: "John"
 openldap_example_user_sn: "Doe"
 openldap_example_user_uidnumber: 10001
-openldap_example_user_password: "changeme-user"
+openldap_example_user_password: "testpass1234"
 
-openldap_example_admin_uid: "jane.doe.admin"
-openldap_example_admin_givenname: "Jane"
+openldap_example_admin_uid: "john.doe.admin"
+openldap_example_admin_givenname: "John"
 openldap_example_admin_sn: "Doe"
 openldap_example_admin_uidnumber: 10002
-openldap_example_admin_password: "changeme-admin"
+openldap_example_admin_password: "testpass1234"
 
 # TLS settings
 openldap_tls_enabled: true

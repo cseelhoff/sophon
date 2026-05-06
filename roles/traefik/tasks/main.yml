@@ -10,74 +10,7 @@
         name: portainer_stack
       vars:
         portainer_stack_name: "traefik"
-        portainer_stack_compose_content: |
-          services:
-            traefik-init:
-              image: docker.io/library/traefik:{{ traefik_image_tag }}
-              entrypoint:
-                - /bin/sh
-                - -c
-                - |
-                  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/traefik/resolv.conf
-                  touch /etc/traefik/dynamic.yml
-              volumes:
-                - traefik_config:/etc/traefik
-            traefik:
-              image: docker.io/library/traefik:{{ traefik_image_tag }}
-              container_name: traefik
-              restart: always
-              security_opt:
-                - label=disable
-              networks:
-                - proxy
-              environment:
-                - CF_DNS_API_TOKEN={{ coredns_cf_token }}
-              ports:
-                - "{{ traefik_port_http }}:80"
-                - "{{ traefik_port_https }}:443"
-                - "{{ traefik_port_ui }}:8080"
-              depends_on:
-                traefik-init:
-                  condition: service_completed_successfully
-              entrypoint:
-                - /bin/sh
-                - -c
-                - "cat /etc/traefik/resolv.conf > /etc/resolv.conf && exec traefik $$@"
-                - --
-              volumes:
-                - traefik_config:/etc/traefik:ro
-                - traefik_data:/data
-                - /run/user/1000/podman/podman.sock:/var/run/docker.sock
-              command:
-                - --api.dashboard=true
-                - --api.insecure=true
-                - --entrypoints.web.address=:80
-                - --entrypoints.web.http.redirections.entrypoint.to=websecure
-                - --entrypoints.web.http.redirections.entrypoint.scheme=https
-                - --entrypoints.websecure.address=:443
-                - --entrypoints.websecure.http.tls=true
-                - --entrypoints.websecure.http.tls.certResolver=letsencrypt
-                - --certificatesresolvers.letsencrypt.acme.email={{ traefik_acme_email }}
-                - --certificatesresolvers.letsencrypt.acme.storage=/data/acme.json
-                - --certificatesresolvers.letsencrypt.acme.caserver={{ traefik_acme_server }}
-                - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
-                - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
-                - --certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
-                - --certificatesresolvers.letsencrypt.acme.dnschallenge.delayBeforeCheck=30
-                - --providers.docker=true
-                - --providers.docker.exposedbydefault=false
-                - --providers.docker.network=proxy
-                - --providers.docker.watch=true
-                - --providers.file.directory=/etc/traefik
-                - --providers.file.watch=true
-                - --log.level={{ traefik_log_level }}
-          volumes:
-            traefik_config:
-            traefik_data:
-          networks:
-            proxy:
-              name: proxy
-              driver: bridge
+        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
 
     # - name: Wait for Traefik to be ready
     #   ansible.builtin.uri:

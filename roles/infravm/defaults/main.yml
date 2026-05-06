@@ -45,9 +45,9 @@ infravm_nfs_mount_options: "ro,noatime,vers=4.1"
 # =============================================================================
 # List of container images to load on InfraVM
 # These are cached on NFS at /export/containers/<basename>.tar
-infravm_portainer_port: 9443
-# infravm_portainer_fqdn: "portainer.{{ sophon_domain }}"
-infravm_portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"
+# Portainer URL is defined in group_vars/all.yml so it is visible to all
+# roles (infravm, coredns, portainer_stack, keycloak) regardless of which
+# play includes them.
 
 
 # =============================================================================

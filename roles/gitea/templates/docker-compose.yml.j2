@@ -52,8 +52,6 @@ services:
       - "traefik.http.routers.gitea.tls=true"
       - "traefik.http.routers.gitea.tls.certresolver=letsencrypt"
       - "traefik.http.services.gitea.loadbalancer.server.port=3000"
-      - "coredns.dockerdiscovery.host={{ gitea_hostname }}.{{ gitea_domain }}"
-      - "coredns.dockerdiscovery.cf_tunnel=https://{{ gitea_hostname }}.{{ gitea_domain }}"
 
   # One-shot bootstrap: creates the admin user and Keycloak OIDC auth source.
   # Idempotent — exits cleanly if both already exist. Re-runs harmlessly on

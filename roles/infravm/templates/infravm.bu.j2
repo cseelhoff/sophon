@@ -137,8 +137,6 @@ systemd:
               --restart always \
               --security-opt label=disable \
               --network proxy \
-              --label "coredns.dockerdiscovery.host=portainer.{{ domain_name }}" \
-              --label "coredns.dockerdiscovery.cf_tunnel=https://portainer.{{ domain_name }}" \
               --label "traefik.enable=true" \
               --label "traefik.http.routers.portainer.entrypoints=websecure" \
               --label "traefik.http.routers.portainer.rule=Host(\`portainer.{{ domain_name }}\`)" \

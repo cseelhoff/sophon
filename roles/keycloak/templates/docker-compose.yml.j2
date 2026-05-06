@@ -20,8 +20,6 @@ services:
       - KC_HTTP_ENABLED=true
     volumes:
       - keycloak_data:/opt/keycloak/data
-    ports:
-      - "8080"
     networks:
       - proxy
     labels:
@@ -31,7 +29,6 @@ services:
       - "traefik.http.routers.keycloak.tls=true"
       - "traefik.http.routers.keycloak.tls.certresolver=letsencrypt"
       - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
-      - "coredns.dockerdiscovery.cf_tunnel=https://{{ keycloak_hostname }}.{{ keycloak_domain }}"
 
 volumes:
   keycloak_data:

@@ -7,5 +7,5 @@ portainer_stack_env_vars: []
 portainer_stack_validate_certs: false
 portainer_stack_compose_content: ""
 portainer_stack_deploy_timeout: 120
-portainer_stack_api_retries: 10
+portainer_stack_api_retries: 60
 portainer_stack_api_delay: 5
