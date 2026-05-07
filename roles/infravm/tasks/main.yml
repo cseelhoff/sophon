@@ -91,13 +91,13 @@
           block:
             - name: Ensure local download directory exists
               ansible.builtin.file:
-                path: "{{ coreos_local_download_dir }}"
+                path: "{{ infravm_local_download_dir }}"
                 state: directory
                 mode: "0755"
 
             - name: Check if local CoreOS ISO exists
               ansible.builtin.stat:
-                path: "{{ coreos_local_download_dir }}/{{ infravm_coreos_iso_filename }}"
+                path: "{{ infravm_local_download_dir }}/{{ infravm_coreos_iso_filename }}"
               register: local_iso_stat
 
             - name: Download and prepare CoreOS image locally
@@ -105,30 +105,30 @@
               block:
                 - name: Check if compressed image exists locally
                   ansible.builtin.stat:
-                    path: "{{ coreos_local_download_dir }}/{{ infravm_coreos_xz_filename }}"
+                    path: "{{ infravm_local_download_dir }}/{{ infravm_coreos_xz_filename }}"
                   register: local_xz_stat
 
                 - name: Download CoreOS compressed image
                   ansible.builtin.get_url:
                     url: "{{ infravm_coreos_url }}"
-                    dest: "{{ coreos_local_download_dir }}/{{ infravm_coreos_xz_filename }}"
+                    dest: "{{ infravm_local_download_dir }}/{{ infravm_coreos_xz_filename }}"
                     mode: "0644"
                   when: not local_xz_stat.stat.exists
 
                 - name: Check if uncompressed qcow2 exists
                   ansible.builtin.stat:
-                    path: "{{ coreos_local_download_dir }}/{{ infravm_coreos_qcow2_filename }}"
+                    path: "{{ infravm_local_download_dir }}/{{ infravm_coreos_qcow2_filename }}"
                   register: local_qcow2_stat
 
                 - name: Extract CoreOS image
                   ansible.builtin.command:
-                    cmd: "xz -dk {{ coreos_local_download_dir }}/{{ infravm_coreos_xz_filename }}"
+                    cmd: "xz -dk {{ infravm_local_download_dir }}/{{ infravm_coreos_xz_filename }}"
                   when: not local_qcow2_stat.stat.exists
 
                 - name: Create ISO-named copy for Proxmox visibility
                   ansible.builtin.copy:
-                    src: "{{ coreos_local_download_dir }}/{{ infravm_coreos_qcow2_filename }}"
-                    dest: "{{ coreos_local_download_dir }}/{{ infravm_coreos_iso_filename }}"
+                    src: "{{ infravm_local_download_dir }}/{{ infravm_coreos_qcow2_filename }}"
+                    dest: "{{ infravm_local_download_dir }}/{{ infravm_coreos_iso_filename }}"
                     remote_src: true
                     mode: "0644"
 
@@ -139,7 +139,7 @@
                   -H "Cookie: PVEAuthCookie={{ proxmox_ticket }}"
                   -H "CSRFPreventionToken: {{ proxmox_csrf }}"
                   -F "content=iso"
-                  -F "filename=@{{ coreos_local_download_dir }}/{{ infravm_coreos_iso_filename }};type=application/octet-stream;filename={{ infravm_coreos_iso_filename }}"
+                  -F "filename=@{{ infravm_local_download_dir }}/{{ infravm_coreos_iso_filename }};type=application/octet-stream;filename={{ infravm_coreos_iso_filename }}"
                   "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage/{{ proxmox_iso_storage_id }}/upload"
               register: upload_result
               changed_when: "'UPID' in upload_result.stdout"

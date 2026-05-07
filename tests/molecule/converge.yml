@@ -1,9 +1,0 @@
----
-# Converge playbook for molecule tests
-- name: Converge
-  hosts: all
-  gather_facts: true
-  tasks:
-    - name: Include role under test
-      ansible.builtin.include_role:
-        name: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"

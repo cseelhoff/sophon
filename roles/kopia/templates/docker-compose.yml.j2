@@ -1,0 +1,117 @@
+# Kopia deployed via Portainer Stacks API.
+#
+# Architecture:
+#   - kopia-init  : one-shot. Creates or connects to the encrypted filesystem
+#                   repository on NFS, then registers a snapshot policy on
+#                   {{ kopia_backups_source }} with a cron schedule. Idempotent
+#                   on subsequent stack updates.
+#   - kopia       : long-running. Runs `kopia server` (Web UI + REST API) and
+#                   the in-process scheduler that fires the policy above.
+#
+# Service-specific backup sidecars (e.g. gitea-backup) write consistent dumps
+# under {{ kopia_backups_source }}/<service>/. Kopia handles encryption,
+# deduplication, compression, and retention.
+
+services:
+  kopia-init:
+    image: {{ kopia_image }}
+    container_name: kopia-init
+    restart: "no"
+    user: "0:0"
+    environment:
+      - KOPIA_PASSWORD={{ kopia_repository_password }}
+      - KOPIA_CHECK_FOR_UPDATES=false
+    volumes:
+      - kopia_config:/app/config
+      - kopia_cache:/app/cache
+      - kopia_logs:/app/logs
+      - {{ kopia_repo_path }}:/repository:z
+      - {{ kopia_backups_source }}:/source:z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mkdir -p /repository /source
+
+        if [ -f /repository/kopia.repository.f ]; then
+          echo "kopia-init: existing repo detected, connecting..."
+          kopia repository connect filesystem --path=/repository
+        else
+          echo "kopia-init: no repo found, creating new encrypted repository..."
+          kopia repository create filesystem --path=/repository
+        fi
+
+        echo "kopia-init: applying global retention policy..."
+        kopia policy set --global \
+          --keep-latest={{ kopia_keep_latest }} \
+          --keep-hourly={{ kopia_keep_hourly }} \
+          --keep-daily={{ kopia_keep_daily }} \
+          --keep-weekly={{ kopia_keep_weekly }} \
+          --keep-monthly={{ kopia_keep_monthly }} \
+          --keep-annual={{ kopia_keep_annual }}
+
+        echo "kopia-init: scheduling snapshots of /source ({{ kopia_snapshot_cron }})..."
+        # Register /source as a known snapshot source (creates an initial
+        # snapshot if /source has any content) then attach a cron policy.
+        # Both calls are idempotent.
+        kopia snapshot create /source || \
+          echo "kopia-init: initial snapshot failed (likely empty source); policy will still apply."
+        kopia policy set /source --snapshot-time="cron:{{ kopia_snapshot_cron }}"
+
+        echo "kopia-init: done."
+
+  kopia:
+    image: {{ kopia_image }}
+    container_name: kopia
+    restart: unless-stopped
+    user: "0:0"
+    depends_on:
+      kopia-init:
+        condition: service_completed_successfully
+    environment:
+      - KOPIA_PASSWORD={{ kopia_repository_password }}
+      - KOPIA_CHECK_FOR_UPDATES=false
+      # `kopia server start` requires explicit credentials (no random ones)
+      # because we put it behind Traefik with TLS and disable kopia's own TLS.
+      - KOPIA_SERVER_USERNAME={{ kopia_admin_user }}
+      - KOPIA_SERVER_PASSWORD={{ kopia_admin_password }}
+    volumes:
+      - kopia_config:/app/config
+      - kopia_cache:/app/cache
+      - kopia_logs:/app/logs
+      - {{ kopia_repo_path }}:/repository:z
+      - {{ kopia_backups_source }}:/source:z
+    networks:
+      - proxy
+    command:
+      - server
+      - start
+      - --insecure
+      - --address=0.0.0.0:{{ kopia_port }}
+      - --server-username={{ kopia_admin_user }}
+      - --server-password={{ kopia_admin_password }}
+      - --server-control-username={{ kopia_admin_user }}
+      - --server-control-password={{ kopia_admin_password }}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "http://127.0.0.1:{{ kopia_port }}/api/v1/repo/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.kopia.entrypoints=websecure"
+      - "traefik.http.routers.kopia.rule=Host(`{{ kopia_hostname }}.{{ kopia_domain }}`)"
+      - "traefik.http.routers.kopia.tls=true"
+      - "traefik.http.routers.kopia.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kopia.loadbalancer.server.port={{ kopia_port }}"
+
+volumes:
+  kopia_config:
+  kopia_cache:
+  kopia_logs:
+
+networks:
+  proxy:
+    external: true

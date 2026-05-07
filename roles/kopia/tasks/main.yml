@@ -1,0 +1,24 @@
+---
+# Deploy Kopia snapshot server via Portainer Stack
+
+- name: Deploy Kopia
+  when: kopia_enabled | default(false)
+  block:
+    - name: Deploy Kopia stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        portainer_stack_name: "kopia"
+        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_deploy_timeout: 300
+
+    - name: Display Kopia status
+      ansible.builtin.debug:
+        msg: |
+          Kopia deployed at {{ kopia_root_url }}
+          UI user:        {{ kopia_admin_user }}
+          UI password:    {{ kopia_admin_password }}
+          Repo password:  {{ kopia_repository_password }}
+          Repo path:      {{ kopia_repo_path }} (NFS)
+          Source watched: {{ kopia_backups_source }}
+          Schedule:       {{ kopia_snapshot_cron }}

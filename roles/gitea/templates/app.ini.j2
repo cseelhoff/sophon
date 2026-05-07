@@ -27,12 +27,12 @@ LFS_JWT_SECRET   =
 OFFLINE_MODE     = false
 
 [database]
-PATH     = /data/gitea/gitea.db
 DB_TYPE  = {{ gitea_db_type }}
-HOST     = localhost:3306
-NAME     = gitea
-USER     = gitea
-PASSWD   = 
+HOST     = {{ gitea_db_host }}
+NAME     = {{ gitea_db_name }}
+USER     = {{ gitea_db_user }}
+PASSWD   = {{ gitea_db_password }}
+SSL_MODE = disable
 LOG_SQL  = false
 SCHEMA   = 
 

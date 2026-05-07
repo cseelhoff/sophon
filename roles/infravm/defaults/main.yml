@@ -61,4 +61,4 @@ infravm_coreos_iso_filename: "{{ infravm_coreos_qcow2_filename }}.iso"
 
 # Local directory used for fallback download/upload of the CoreOS image when
 # the Proxmox host cannot fetch it directly (e.g. air-gapped or no egress).
-coreos_local_download_dir: "{{ lookup('env', 'HOME') }}/.cache/sophon/coreos"
+infravm_local_download_dir: "{{ lookup('env', 'HOME') }}/.cache/sophon/coreos"

@@ -10,8 +10,18 @@ gitea_image_name: "gitea/gitea"
 gitea_image_tag: "1.22"
 gitea_image: "docker.io/{{ gitea_image_name }}:{{ gitea_image_tag }}"
 
-# Database — built-in SQLite (sufficient for small teams)
-gitea_db_type: "sqlite3"
+# Database — bundled PostgreSQL (recommended for production).
+# A `gitea-db` Postgres container is deployed alongside Gitea on an internal
+# network. To point at an external DB, override gitea_db_host and remove the
+# postgres service from the compose template.
+gitea_db_type: "postgres"
+gitea_db_host: "gitea-db:5432"
+gitea_db_name: "gitea"
+gitea_db_user: "gitea"
+gitea_db_password: "{{ portainer_admin_password }}"
+
+# Postgres image used for the bundled DB container.
+gitea_postgres_image: "docker.io/postgres:16-alpine"
 
 # Network
 gitea_port_http: 3000

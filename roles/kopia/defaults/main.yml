@@ -1,0 +1,53 @@
+---
+# =============================================================================
+# Kopia role defaults
+# =============================================================================
+# Kopia is the encrypted, deduplicated, content-addressed snapshot engine
+# Sophon uses as the *transport + retention* layer for service backups.
+# Service-specific consistent dumps (e.g. `gitea dump`) land in
+# /var/mnt/nfs/backups/<service>/ on the InfraVM; kopia snapshots that tree
+# into an encrypted filesystem repository on /var/mnt/nfs/kopia/repo and
+# enforces retention.
+
+kopia_enabled: true
+
+# Image
+kopia_image_name: "docker.io/kopia/kopia"
+kopia_image_tag: "0.21.1"
+kopia_image: "{{ kopia_image_name }}:{{ kopia_image_tag }}"
+
+# Domain / URLs
+kopia_hostname: "kopia"
+kopia_domain: "{{ domain_name }}"
+kopia_root_url: "https://{{ kopia_hostname }}.{{ kopia_domain }}/"
+
+# Web UI auth (kopia server username/password). Independent of repo password.
+kopia_admin_user: "admin"
+kopia_admin_password: "{{ portainer_admin_password }}"
+
+# Repository encryption password. Anyone with this passphrase can read all
+# snapshots; treat as a vault-managed secret in production. Defaults to the
+# generated portainer admin password so a fresh deploy "just works".
+kopia_repository_password: "{{ portainer_admin_password }}"
+
+# Filesystem layout on the NFS share (mounted into InfraVM at /var/mnt/nfs).
+kopia_nfs_root: "/var/mnt/nfs/kopia"
+kopia_repo_path: "{{ kopia_nfs_root }}/repo"
+kopia_backups_source: "/var/mnt/nfs/backups"
+
+# Server listen port (proxied by Traefik).
+kopia_port: 51515
+
+# Snapshot policy applied to {{ kopia_backups_source }}. The kopia server's
+# in-process scheduler honors this cron expression.
+kopia_snapshot_cron: "0 */6 * * *"        # every 6h
+kopia_keep_latest: 10
+kopia_keep_hourly: 24
+kopia_keep_daily: 14
+kopia_keep_weekly: 8
+kopia_keep_monthly: 12
+kopia_keep_annual: 3
+
+# Maintenance (compaction / GC) — run by kopia's owner client.
+kopia_maintenance_full_cron: "0 3 * * 0"  # Sunday 03:00
+kopia_maintenance_quick_cron: "0 3 * * *" # daily 03:00

@@ -101,6 +101,9 @@
     - name: Deploy Gitea
       ansible.builtin.include_role: { name: gitea }
 
+    - name: Deploy Kopia
+      ansible.builtin.include_role: { name: kopia }
+
 
     # - name: Display final IP configuration
     #   ansible.builtin.debug:
@@ -143,7 +146,7 @@
           Other Credentials:
             Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
             Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
-            Nexus Admin:         {{ nexus_admin_password | default('not generated') }}
+            Kopia UI / Repo:     {{ kopia_admin_password | default(portainer_admin_password) | default('not generated') }}
             OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
 
           LDAP Example Users (auto-seeded):
