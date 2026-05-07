@@ -23,7 +23,6 @@ services:
     ports:
       - "{{ traefik_port_http }}:80"
       - "{{ traefik_port_https }}:443"
-      - "{{ traefik_port_ui }}:8080"
     depends_on:
       traefik-init:
         condition: service_completed_successfully

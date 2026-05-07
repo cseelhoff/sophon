@@ -9,7 +9,6 @@ traefik_image_tag: "v3.2"
 # Network ports
 traefik_port_http: 80
 traefik_port_https: 443
-traefik_port_ui: 8080
 
 # Domain configuration
 traefik_domain: "{{ domain_name | default('example.local') }}"

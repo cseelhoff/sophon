@@ -14,9 +14,8 @@ Deploys Traefik reverse proxy with automatic SSL via Let's Encrypt.
 |----------|---------|-------------|
 | `traefik_enabled` | `true` | Enable/disable this role |
 | `traefik_image_tag` | `v3.2` | Traefik Docker image tag |
-| `traefik_port_http` | `80` | HTTP port |
-| `traefik_port_https` | `443` | HTTPS port |
-| `traefik_port_ui` | `8080` | Dashboard port |
+| `traefik_port_http` | `80` | HTTP entrypoint port |
+| `traefik_port_https` | `443` | HTTPS entrypoint port |
 | `traefik_domain` | `example.local` | Base domain |
 | `traefik_acme_email` | - | Let's Encrypt email |
 | `traefik_dns_provider` | `cloudflare` | ACME DNS provider |

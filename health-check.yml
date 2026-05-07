@@ -26,8 +26,9 @@
 
     - name: Check Traefik
       ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ traefik_port_ui | default(8080) }}/api/overview"
+        url: "https://{{ traefik_fqdn | default('traefik.' ~ (domain_name | default('example.local'))) }}/api/overview"
         method: GET
+        validate_certs: false
         timeout: "{{ health_check_timeout }}"
       register: traefik_health
       failed_when: false
@@ -90,7 +91,7 @@
           ║ CoreDNS       │ {{ '✅ UP  ' if coredns_health.rc | default(1) == 0 else '❌ DOWN' }} │ Port 53
           ║ OpenLDAP      │ {{ '✅ UP  ' if openldap_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ openldap_port_admin | default(8089) }}
           ║ Keycloak      │ {{ '✅ UP  ' if keycloak_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ keycloak_port | default(8180) }}
-          ║ Traefik       │ {{ '✅ UP  ' if traefik_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ traefik_port_ui | default(8080) }}
+          ║ Traefik       │ {{ '✅ UP  ' if traefik_health.status | default(0) == 200 else '❌ DOWN' }} │ {{ traefik_fqdn | default('traefik.' ~ (domain_name | default('example.local'))) }}
           ║ Nexus         │ {{ '✅ UP  ' if nexus_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ nexus_port | default(8081) }}
           ║ Gitea         │ {{ '✅ UP  ' if gitea_health.status | default(0) == 200 else '❌ DOWN' }} │ Port {{ gitea_port_http | default(3001) }}
           ╚══════════════════════════════════════════════════════════════╝

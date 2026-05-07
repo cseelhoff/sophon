@@ -26,4 +26,4 @@
 
     - name: Display Traefik status
       ansible.builtin.debug:
-        msg: "Traefik ready at http://{{ infravm_ip }}:{{ traefik_port_ui }} (dashboard)"
+        msg: "Traefik ready at https://{{ traefik_fqdn }} (dashboard)"
