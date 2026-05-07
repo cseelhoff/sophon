@@ -209,7 +209,7 @@
               net0: "virtio,bridge={{ vnet_interface }},tag={{ vnet_vlan }}"
             virtio:
               virtio0: >-
-                {{ proxmox_disk_storage_id }}:0,import-from={{ nfs_image_storage_path }}/{{ nfs_image_filename }}.iso,size={{ nfs_os_disk_size }}
+                {{ proxmox_disk_storage_id }}:0,import-from={{ proxmox_iso_storage_path }}/{{ nfs_image_filename }}.iso,size={{ nfs_os_disk_size }}
               virtio1: "{{ proxmox_disk_storage_id }}:{{ nfs_data_disk_size | regex_replace('[Gg]$', '') }}"
             boot: "order=virtio0"
             state: present

@@ -74,6 +74,8 @@
           {{ openldap_example_admin_password
              if (openldap_example_admin_password | default('')) not in ['', 'changeme-admin']
              else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}
+        openldap_example_user_uid: "{{ openldap_example_user_uid | default('john.doe') }}"
+        openldap_example_admin_uid: "{{ openldap_example_admin_uid | default('john.doe.admin') }}"
 
     - name: Authenticate with Proxmox
       ansible.builtin.include_role: { name: proxmox }

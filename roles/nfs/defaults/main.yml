@@ -54,8 +54,9 @@ nfs_alpine_make_vm_image_url: "https://raw.githubusercontent.com/alpinelinux/alp
 nfs_alpine_make_vm_image_path: "{{ nfs_build_dir }}/alpine-make-vm-image"
 
 # Proxmox storage paths
-nfs_image_storage: "local"
-nfs_image_storage_path: "/var/lib/vz/template/iso"
+# nfs_image_storage_path is auto-discovered by the proxmox role as
+# `proxmox_iso_storage_path` based on `proxmox_iso_storage_id`.
+nfs_image_storage: "{{ proxmox_iso_storage_id }}"
 
 # =============================================================================
 # NFS Export Configuration

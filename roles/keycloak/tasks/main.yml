@@ -23,7 +23,16 @@
 
 - name: Display Keycloak status
   ansible.builtin.debug:
-    msg: "Keycloak ready at https://{{ keycloak_hostname }}.{{ keycloak_domain }} (port {{ keycloak_port }})"
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      Keycloak Deployed
+      ═══════════════════════════════════════════════════════════════════
+
+        URL:      https://{{ keycloak_hostname }}.{{ keycloak_domain }} (port {{ keycloak_port }})
+        Username: {{ keycloak_admin_user }}
+        Password: {{ keycloak_admin_password }}
+
+      ═══════════════════════════════════════════════════════════════════
 
 # =========================================================================
 # Configure realm, LDAP, clients, groups via Keycloak Admin REST API

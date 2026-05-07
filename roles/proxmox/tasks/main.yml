@@ -73,3 +73,32 @@
   ansible.builtin.set_fact:
     proxmox_iso_content: "{{ _proxmox_iso_content }}"
   when: proxmox_iso_content is not defined
+
+# Auto-discover the on-disk ISO directory for the configured storage. Dir
+# storage exposes `path` directly; PVE auto-mounts NFS/CIFS storages at
+# /mnt/pve/<id>. The ISO subdir is always <path>/template/iso per Proxmox
+# convention. Falls back to the role default if neither is available.
+- name: Look up Proxmox ISO storage configuration
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/storage/{{ proxmox_iso_storage_id }}"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: _proxmox_iso_storage_cfg
+  when: proxmox_iso_storage_path_resolved is not defined
+
+- name: Resolve ISO storage on-disk path
+  ansible.builtin.set_fact:
+    proxmox_iso_storage_path: >-
+      {{
+        (_proxmox_iso_storage_cfg.json.data.path ~ '/template/iso')
+        if _proxmox_iso_storage_cfg.json.data.path is defined
+        else (
+          ('/mnt/pve/' ~ proxmox_iso_storage_id ~ '/template/iso')
+          if _proxmox_iso_storage_cfg.json.data.type in ['nfs', 'cifs']
+          else proxmox_iso_storage_path
+        )
+      }}
+    proxmox_iso_storage_path_resolved: true
+  when: proxmox_iso_storage_path_resolved is not defined

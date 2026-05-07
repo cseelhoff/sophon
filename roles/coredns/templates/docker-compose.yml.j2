@@ -1,35 +1,39 @@
-
 services:
   coredns:
-    image: {{ coredns_image_name }}:{{ coredns_image_tag }}
-    network_mode: host
+    image: coredns-dockerdiscovery:latest
+    container_name: coredns
     restart: always
+    cap_add:
+      - NET_BIND_SERVICE
     security_opt:
       - label:disable
-    volumes:
-      - {{ coredns_config_dir }}/Corefile:/Corefile:ro
-      - {{ coredns_config_dir }}/zones:/zones:rw
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
     networks:
-      - dns
+      - proxy
     volumes:
       - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
     environment:
-      - TRAEFIK_IP=10.0.60.3
-      - TRAEFIK_HOST=traefik.177cpt.com
-      - DOCKER_DOMAIN=177cpt.com
-      - CF_TARGET=traefik.177cpt.com
-      - CF_TOKEN=cyVIn9iCqiKOGQpjgLAU-Yj6wVodMHoX_zLfqtfe
-      - CF_ZONE_DOMAIN=177cpt.com
-      - CF_ZONE_ID=
-      - CF_ACCOUNT_ID=
-      - CF_TUNNEL_ID=
-      - FORWARD_DNS=9.9.9.9
+      - TRAEFIK_CNAME=traefik.{{ coredns_domain_name }}
+      - HOST_IP={{ infravm_ip }}
+      - CF_TOKEN={{ coredns_cf_token }}
+      - CF_ACCOUNT_ID={{ coredns_cf_account_id }}
+      - CF_TUNNEL_ID={{ coredns_cf_tunnel_id }}
+      - CF_ZONE_ID={{ coredns_cf_zone_id }}
+      - CF_ZONE_DOMAIN={{ coredns_domain_name }}
+      - CF_TUNNEL_TARGET=https://traefik.{{ coredns_domain_name }}
+      - INVENTORY_ADDR=:8081
+      - FORWARD_DNS=9.9.9.9 1.1.1.1
       - CACHE_TTL=30
     labels:
       - traefik.enable=true
-      - traefik.http.routers.coredns.rule=Host(`dns.177cpt.com`)
+      - traefik.http.routers.coredns.rule=Host(`dns.{{ coredns_domain_name }}`)
       - traefik.http.routers.coredns.entrypoints=websecure
       - traefik.http.routers.coredns.tls=true
       - traefik.http.routers.coredns.tls.certresolver=letsencrypt
       - traefik.http.routers.coredns.service=coredns
       - traefik.http.services.coredns.loadbalancer.server.port=8081
+networks:
+  proxy:
+    external: true

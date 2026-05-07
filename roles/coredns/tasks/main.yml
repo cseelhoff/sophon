@@ -40,44 +40,7 @@
         name: portainer_stack
       vars:
         portainer_stack_name: "coredns"
-        portainer_stack_compose_content: |
-          services:
-            coredns:
-              image: coredns-dockerdiscovery:latest
-              container_name: coredns
-              restart: always
-              cap_add:
-                - NET_BIND_SERVICE
-              security_opt:
-                - label:disable
-              ports:
-                - "53:53/udp"
-                - "53:53/tcp"
-              networks:
-                - proxy
-              volumes:
-                - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
-              environment:
-                - TRAEFIK_CNAME=traefik.{{ coredns_domain_name }}
-                - HOST_IP={{ infravm_ip }}
-                - CF_TOKEN={{ coredns_cf_token }}
-                - CF_ACCOUNT_ID={{ coredns_cf_account_id }}
-                - CF_TUNNEL_ID={{ coredns_cf_tunnel_id }}
-                - CF_TUNNEL_TARGET=https://traefik.{{ coredns_domain_name }}
-                - INVENTORY_ADDR=:8081
-                - FORWARD_DNS=9.9.9.9 1.1.1.1
-                - CACHE_TTL=30
-              labels:
-                - traefik.enable=true
-                - traefik.http.routers.coredns.rule=Host(`dns.177cpt.com`)
-                - traefik.http.routers.coredns.entrypoints=websecure
-                - traefik.http.routers.coredns.tls=true
-                - traefik.http.routers.coredns.tls.certresolver=letsencrypt
-                - traefik.http.routers.coredns.service=coredns
-                - traefik.http.services.coredns.loadbalancer.server.port=8081
-          networks:
-            proxy:
-              external: true
+        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
 
     # - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
     #   ansible.builtin.wait_for:
