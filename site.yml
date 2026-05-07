@@ -145,9 +145,9 @@
             OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
 
           LDAP Example Users (auto-seeded):
-            Standard user:       uid={{ openldap_example_user_uid | default('jdoe') }}  password: {{ openldap_example_user_password | default('not generated') }}
+            Standard user:       uid={{ openldap_example_user_uid }}  password: {{ openldap_example_user_password }}
               groups:            cn=users, cn=posix-users
-            Admin user:          uid={{ openldap_example_admin_uid | default('jadmin') }}  password: {{ openldap_example_admin_password | default('not generated') }}
+            Admin user:          uid={{ openldap_example_admin_uid }}  password: {{ openldap_example_admin_password }}
               groups:            cn=users, cn=ldap-admins, cn=portainer-admins, cn=posix-users
 
           ============================================================================
