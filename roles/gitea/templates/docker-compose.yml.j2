@@ -48,7 +48,6 @@ services:
       - "{{ gitea_port_ssh }}:22"
     networks:
       - proxy
-      - gitea_db
     depends_on:
       gitea-db:
         condition: service_healthy
@@ -61,8 +60,10 @@ services:
       - "traefik.http.routers.gitea.tls.certresolver=letsencrypt"
       - "traefik.http.services.gitea.loadbalancer.server.port=3000"
 
-  # Bundled PostgreSQL — internal-only, reachable from gitea/gitea-init via the
-  # `gitea_db` network. Not exposed on the proxy network.
+  # Bundled PostgreSQL on the shared `proxy` network. Postgres binds no host
+  # port and has no traefik labels, so co-locating with proxy adds no exposure.
+  # Single-network setup keeps DNS resolution simple (only one nameserver in
+  # gitea's resolv.conf), which sidesteps Go-resolver/aardvark interactions.
   gitea-db:
     image: {{ gitea_postgres_image }}
     container_name: gitea-db
@@ -74,7 +75,7 @@ services:
     volumes:
       - gitea_db_data:/var/lib/postgresql/data
     networks:
-      - gitea_db
+      - proxy
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U {{ gitea_db_user }} -d {{ gitea_db_name }}"]
       interval: 10s
@@ -102,7 +103,6 @@ services:
       - gitea_data:/data
     networks:
       - proxy
-      - gitea_db
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -164,5 +164,3 @@ volumes:
 networks:
   proxy:
     external: true
-  gitea_db:
-    driver: bridge

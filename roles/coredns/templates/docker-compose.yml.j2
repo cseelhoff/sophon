@@ -7,9 +7,16 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - label:disable
+    # Bind CoreDNS only to the host's external IP and loopback. We MUST NOT
+    # publish on 0.0.0.0:53 because that captures the rootless podman bridge
+    # gateway IP (10.89.0.1:53), which is where aardvark-dns needs to listen
+    # for container-to-container name resolution. Two daemons can't share
+    # that socket; aardvark loses and silently exits, breaking in-stack DNS.
     ports:
-      - "53:53/udp"
-      - "53:53/tcp"
+      - "127.0.0.1:53:53/udp"
+      - "127.0.0.1:53:53/tcp"
+      - "{{ infravm_ip }}:53:53/udp"
+      - "{{ infravm_ip }}:53:53/tcp"
     networks:
       - proxy
     volumes:

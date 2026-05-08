@@ -108,3 +108,27 @@
   register: portainer_stack_deploy_result
   when: portainer_stack_existing is none
   changed_when: portainer_stack_existing is none
+
+# When the stack already exists, push the latest compose content. Portainer
+# diffs the file server-side and recreates only the affected services.
+# `prune: true` removes containers/networks no longer declared in the compose
+# (e.g. a removed sidecar, or a renamed network), which is what we want for
+# declarative Ansible-driven deploys.
+- name: Update existing stack in Portainer
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/stacks/{{ portainer_stack_existing.Id }}?endpointId={{ portainer_stack_endpoint_id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    body_format: json
+    body:
+      stackFileContent: "{{ portainer_stack_compose_content }}"
+      env: "{{ portainer_stack_env_vars | default([]) }}"
+      prune: true
+      pullImage: false
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: [200]
+    timeout: "{{ portainer_stack_deploy_timeout }}"
+  register: portainer_stack_update_result
+  when: portainer_stack_existing is not none
+  changed_when: portainer_stack_update_result.status == 200
