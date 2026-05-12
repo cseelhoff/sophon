@@ -32,3 +32,33 @@ traefik_log_level: "INFO"
 
 # Validate backend certs (set to false for self-signed)
 traefik_insecure_skip_verify: true
+
+# -----------------------------------------------------------------------------
+# ACME / acme.json persistence
+# -----------------------------------------------------------------------------
+# Local controller-side copy of acme.json. Used to seed a freshly-created
+# traefik_data volume so we don't burn through Let's Encrypt's "duplicate
+# certificate" quota (5 / week per identical SAN set) on every redeploy.
+# `artifacts/` is gitignored — file contains the ACME account private key
+# and issued cert private keys, treat as a secret and back it up via kopia.
+traefik_acme_artifacts_dir: "{{ playbook_dir }}/artifacts/traefik"
+traefik_acme_backup_path: "{{ traefik_acme_artifacts_dir }}/acme.json"
+
+# Compose project name -> podman volume name is "<project>_<volume>".
+# Portainer uses the stack name as the project name.
+traefik_compose_project: "traefik"
+traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
+
+# When true and a local backup exists, seed traefik_data BEFORE the stack
+# starts so traefik reuses the existing account + certs instead of issuing new.
+traefik_acme_restore_on_deploy: true
+
+# When true, snapshot acme.json from the running traefik container after
+# every deploy. Safe no-op (404) until the first cert has been issued.
+traefik_acme_backup_after_deploy: true
+
+# Image used for the short-lived seed helper container that mounts the
+# traefik_data volume so acme.json can be uploaded into it via the
+# Portainer-proxied Docker archive API. Reuses the traefik image (already
+# present on the host, including air-gapped) to avoid extra image loads.
+traefik_acme_helper_image: "docker.io/library/traefik:{{ traefik_image_tag }}"

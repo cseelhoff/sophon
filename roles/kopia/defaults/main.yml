@@ -4,10 +4,15 @@
 # =============================================================================
 # Kopia is the encrypted, deduplicated, content-addressed snapshot engine
 # Sophon uses as the *transport + retention* layer for service backups.
-# Service-specific consistent dumps (e.g. `gitea dump`) land in
-# /var/mnt/nfs/backups/<service>/ on the InfraVM; kopia snapshots that tree
-# into an encrypted filesystem repository on /var/mnt/nfs/kopia/repo and
-# enforces retention.
+# Service-specific consistent dumps (e.g. `gitea dump`) land in a podman
+# named volume on the InfraVM (`kopia_backups`) which kopia mounts at
+# /source. Kopia snapshots that tree into an encrypted SFTP repository on
+# the NFS VM at {{ nfs_kopia_repo_path }} and enforces retention.
+#
+# SFTP — not NFS bind-mount — is the storage backend, because the kernel
+# downgrades NFS bind-mounts to read-only inside any non-init user namespace
+# (which rootless containers always live in). SFTP is a kopia-native backend
+# and avoids the entire userns/permissions class of bug.
 
 kopia_enabled: true
 
@@ -30,16 +35,24 @@ kopia_admin_password: "{{ portainer_admin_password }}"
 # generated portainer admin password so a fresh deploy "just works".
 kopia_repository_password: "{{ portainer_admin_password }}"
 
-# Filesystem layout on the NFS share (mounted into InfraVM at /var/mnt/nfs).
-kopia_nfs_root: "/var/mnt/nfs/kopia"
-kopia_repo_path: "{{ kopia_nfs_root }}/repo"
-kopia_backups_source: "/var/mnt/nfs/backups"
+# -----------------------------------------------------------------------------
+# SFTP backend (provisioned by the nfs role)
+# -----------------------------------------------------------------------------
+# These wire kopia to the SFTP user/keypair/repo-path created by the nfs
+# role. The private key and known_hosts are surfaced as Ansible facts by the
+# nfs role at deploy time and substituted into the compose template here.
+kopia_sftp_host: "{{ nfs_ip }}"
+kopia_sftp_port: 22
+kopia_sftp_username: "{{ nfs_kopia_username }}"
+kopia_sftp_path: "{{ nfs_kopia_repo_path }}"
+kopia_sftp_private_key: "{{ nfs_kopia_ssh_private_key }}"
+kopia_sftp_known_hosts: "{{ nfs_kopia_known_hosts }}"
 
 # Server listen port (proxied by Traefik).
 kopia_port: 51515
 
-# Snapshot policy applied to {{ kopia_backups_source }}. The kopia server's
-# in-process scheduler honors this cron expression.
+# Snapshot policy applied to /source. The kopia server's in-process
+# scheduler honors this cron expression.
 kopia_snapshot_cron: "0 */6 * * *"        # every 6h
 kopia_keep_latest: 10
 kopia_keep_hourly: 24

@@ -38,7 +38,10 @@ infravm_cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
 # NFS Settings
 # =============================================================================
 # NFS mount options for InfraVM
-infravm_nfs_mount_options: "ro,noatime,vers=4.1"
+# rw is required so backup containers (kopia) can write into /var/mnt/nfs.
+# The NFS server squashes all client uids to 1000:100 (see nfs role), which
+# matches the rootless podman user on this VM, so writes land cleanly.
+infravm_nfs_mount_options: "rw,noatime,vers=4.1"
 
 # =============================================================================
 # Container Images (loaded at boot via sophon-init.service in Butane/Ignition)

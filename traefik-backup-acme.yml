@@ -1,0 +1,34 @@
+---
+# =============================================================================
+# Sophon — Traefik ACME Backup
+# =============================================================================
+# Snapshots /data/acme.json from the running `traefik` container on the
+# infravm to ./artifacts/traefik/acme.json on the controller.
+#
+# Why: avoids burning Let's Encrypt's "5 duplicate certs / week" rate limit
+# when the traefik_data podman volume is recreated. The next deploy will
+# pick this file up via roles/traefik/tasks/restore_acme.yml and seed the
+# fresh volume with the existing ACME account + certs.
+#
+# Required vars (pass with -e or set in inventory):
+#   domain_name              - e.g. example.com (drives infravm_portainer_url)
+#   infravm_ip               - fallback if portainer-bootstrap.<domain> unreachable
+#   portainer_admin_password - same value used during deploy
+#
+# Usage:
+#   ansible-playbook traefik-backup-acme.yml \
+#     -e domain_name=example.com \
+#     -e infravm_ip=10.0.60.3 \
+#     -e portainer_admin_password=<password>
+#
+# Safe to run repeatedly. A 404 from Portainer means traefik has not yet
+# written acme.json (no cert issued); the task is a no-op in that case.
+
+- name: Backup traefik acme.json to local artifacts
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run traefik backup_acme task
+      ansible.builtin.include_role:
+        name: traefik
+        tasks_from: backup_acme.yml

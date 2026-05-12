@@ -1,0 +1,41 @@
+---
+# Portainer authentication helper for the traefik role's acme backup/restore
+# tasks. Sets the following facts on success:
+#   _traefik_portainer_token         - JWT bearer token
+#   _traefik_portainer_endpoint_id   - Numeric Portainer endpoint ID
+#
+# Kept separate from portainer_stack/tasks/main.yml so the acme tasks can
+# call the Docker proxy API directly without going through stack create/update.
+
+- name: Authenticate with Portainer (traefik acme)
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    validate_certs: false
+    status_code: 200
+  register: _traefik_pt_auth
+  changed_when: false
+  no_log: true
+  retries: 30
+  delay: 5
+  until: _traefik_pt_auth.status == 200
+
+- name: Get Portainer endpoints (traefik acme)
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _traefik_pt_auth.json.jwt }}"
+    validate_certs: false
+    status_code: 200
+  register: _traefik_pt_endpoints
+  changed_when: false
+
+- name: Set Portainer auth facts (traefik acme)
+  ansible.builtin.set_fact:
+    _traefik_portainer_token: "{{ _traefik_pt_auth.json.jwt }}"
+    _traefik_portainer_endpoint_id: "{{ _traefik_pt_endpoints.json[0].Id }}"

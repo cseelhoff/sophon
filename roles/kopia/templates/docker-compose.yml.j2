@@ -1,38 +1,62 @@
 # Kopia deployed via Portainer Stacks API.
 #
-# Single-service deployment: a small entrypoint wrapper does the canonical
+# Single-service deployment: a small entrypoint wrapper writes the SFTP key
+# + known_hosts to a tmpfs from env vars, does the canonical
 # `connect || create` repository bootstrap, applies retention + cron policy
 # (idempotent — replays harmlessly on every restart), then exec's into
 # `kopia server`. Service-specific backup sidecars (e.g. gitea-backup) write
-# consistent dumps under {{ kopia_backups_source }}/<service>/; kopia's
-# in-process scheduler handles snapshotting, encryption, dedup, and retention.
+# consistent dumps into the `kopia_backups` named volume; kopia mounts that
+# at /source and its in-process scheduler handles snapshotting, encryption,
+# dedup, and retention into the SFTP repo on the NFS VM.
 
 services:
   kopia:
     image: {{ kopia_image }}
     container_name: kopia
     restart: unless-stopped
-    user: "0:0"
     environment:
-      - KOPIA_PASSWORD={{ kopia_repository_password }}
-      - KOPIA_SERVER_USERNAME={{ kopia_admin_user }}
-      - KOPIA_SERVER_PASSWORD={{ kopia_admin_password }}
-      - KOPIA_CHECK_FOR_UPDATES=false
+      KOPIA_PASSWORD: "{{ kopia_repository_password }}"
+      KOPIA_SERVER_USERNAME: "{{ kopia_admin_user }}"
+      KOPIA_SERVER_PASSWORD: "{{ kopia_admin_password }}"
+      KOPIA_CHECK_FOR_UPDATES: "false"
+      # SFTP credentials passed as multi-line env vars; the entrypoint
+      # writes them to a tmpfs with mode 0600 before invoking kopia.
+      KOPIA_SFTP_KEY: |
+{{ kopia_sftp_private_key | indent(8, true) }}
+      KOPIA_SFTP_KNOWN_HOSTS: |
+{{ kopia_sftp_known_hosts | indent(8, true) }}
     volumes:
       - kopia_config:/app/config
       - kopia_cache:/app/cache
       - kopia_logs:/app/logs
-      - {{ kopia_repo_path }}:/repository:z
-      - {{ kopia_backups_source }}:/source:z
+      - kopia_backups:/source
+    # Tmpfs for SSH key + known_hosts (never written to disk).
+    tmpfs:
+      - /run/kopia-ssh:mode=700,uid=0,gid=0
     networks:
       - proxy
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        mkdir -p /repository /source
-        kopia repository connect filesystem --path=/repository 2>/dev/null || \
-          kopia repository create  filesystem --path=/repository
+        umask 077
+        printf '%s' "$KOPIA_SFTP_KEY"          > /run/kopia-ssh/id_ed25519
+        printf '%s' "$KOPIA_SFTP_KNOWN_HOSTS"  > /run/kopia-ssh/known_hosts
+        chmod 600 /run/kopia-ssh/id_ed25519 /run/kopia-ssh/known_hosts
+        kopia repository connect sftp \
+          --host={{ kopia_sftp_host }} \
+          --port={{ kopia_sftp_port }} \
+          --username={{ kopia_sftp_username }} \
+          --keyfile=/run/kopia-ssh/id_ed25519 \
+          --known-hosts=/run/kopia-ssh/known_hosts \
+          --path={{ kopia_sftp_path }} 2>/dev/null || \
+        kopia repository create sftp \
+          --host={{ kopia_sftp_host }} \
+          --port={{ kopia_sftp_port }} \
+          --username={{ kopia_sftp_username }} \
+          --keyfile=/run/kopia-ssh/id_ed25519 \
+          --known-hosts=/run/kopia-ssh/known_hosts \
+          --path={{ kopia_sftp_path }}
         kopia policy set --global \
           --keep-latest={{ kopia_keep_latest }} \
           --keep-hourly={{ kopia_keep_hourly }} \
@@ -63,6 +87,9 @@ volumes:
   kopia_config:
   kopia_cache:
   kopia_logs:
+  # Shared with backup sidecars (e.g. gitea-backup) that dump consistent
+  # snapshots here for kopia to pick up.
+  kopia_backups:
 
 networks:
   proxy:

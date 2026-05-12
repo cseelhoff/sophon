@@ -9,6 +9,40 @@
 # Depends on: proxmox role (via meta/main.yml)
 
 # -----------------------------------------------------------------------------
+# Kopia SFTP keypair (generated once on the controller, persists across runs)
+# -----------------------------------------------------------------------------
+# Kopia connects to this VM via SFTP, not via an NFS bind-mount, because the
+# kernel forces NFS bind-mounts to read-only inside non-init user namespaces
+# (which rootless containers always live in). SFTP is a kopia-native backend
+# that sidesteps the entire userns/permissions class of bug. The keypair is
+# generated here on the controller and exposed to the kopia role as facts.
+- name: Ensure NFS build dir exists (for kopia SSH keys)
+  ansible.builtin.file:
+    path: "{{ nfs_build_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Generate kopia SFTP keypair if missing
+  ansible.builtin.command:
+    cmd: "ssh-keygen -t ed25519 -N '' -C kopia@sophon -f {{ nfs_kopia_ssh_keyfile }}"
+    creates: "{{ nfs_kopia_ssh_keyfile }}"
+
+- name: Read kopia SFTP private key
+  ansible.builtin.slurp:
+    src: "{{ nfs_kopia_ssh_keyfile }}"
+  register: nfs_kopia_priv_slurp
+
+- name: Read kopia SFTP public key
+  ansible.builtin.slurp:
+    src: "{{ nfs_kopia_ssh_keyfile }}.pub"
+  register: nfs_kopia_pub_slurp
+
+- name: Set kopia SSH key facts (consumed by kopia role)
+  ansible.builtin.set_fact:
+    nfs_kopia_ssh_private_key: "{{ nfs_kopia_priv_slurp.content | b64decode }}"
+    nfs_kopia_ssh_public_key: "{{ nfs_kopia_pub_slurp.content | b64decode | trim }}"
+
+# -----------------------------------------------------------------------------
 # NFS Connectivity Check (via Proxmox storage API)
 # -----------------------------------------------------------------------------
 - name: Check if NFS storage already exists and is online in Proxmox
@@ -82,6 +116,7 @@
                       rc-update add qemu-guest-agent default
                       rc-update add rpcbind default
                       rc-update add nfs default
+                      rc-update add sshd default
                       rc-update add networking boot
                       rc-update add hostname boot
 
@@ -112,7 +147,7 @@
                       --image-size {{ nfs_os_disk_size }}
                       --image-format qcow2
                       --branch v{{ nfs_alpine_version }}
-                      --packages "qemu-guest-agent nfs-utils parted e2fsprogs openrc util-linux"
+                      --packages "qemu-guest-agent nfs-utils openssh parted e2fsprogs openrc util-linux"
                       --script-chroot {{ nfs_build_dir }}/nfs-chroot-setup.sh
                       {{ nfs_build_dir }}/{{ nfs_image_filename }}
                     # creates: "{{ nfs_build_dir }}"
@@ -300,6 +335,31 @@
                 chmod -R 777 /export
                 chmod -R 777 /export/containers
 
+                # ---------------------------------------------------------
+                # Kopia SFTP user + repo directory
+                # ---------------------------------------------------------
+                # Ensure sshd is running (openssh is baked into the image
+                # via the chroot script, but service may need start on a
+                # cold boot).
+                rc-update add sshd default 2>/dev/null || true
+                service sshd start 2>/dev/null || true
+
+                # SFTP-only user: nologin shell, no password, key-only.
+                # OpenSSH's sftp-server subsystem does not require an
+                # interactive shell.
+                addgroup -S kopia 2>/dev/null || true
+                adduser -D -S -G kopia -s /sbin/nologin -h /home/kopia kopia 2>/dev/null || true
+                install -d -m 700 -o kopia -g kopia /home/kopia/.ssh
+                cat > /home/kopia/.ssh/authorized_keys <<'AKEYS'
+                {{ nfs_kopia_ssh_public_key }}
+                AKEYS
+                chmod 600 /home/kopia/.ssh/authorized_keys
+                chown kopia:kopia /home/kopia/.ssh/authorized_keys
+
+                # Repo directory: owned by kopia, only kopia can read/write.
+                install -d -m 700 -o kopia -g kopia /export/kopia
+                install -d -m 700 -o kopia -g kopia {{ nfs_kopia_repo_path }}
+
             status_code: [200]
           register: nfs_network_config
           retries: 5
@@ -373,6 +433,79 @@
   ansible.builtin.debug:
     msg: "NFS server {{ nfs_ip }} is not reachable — skipping NFS mount and content upload."
   when: nfs_ping_result.rc != 0
+
+# -----------------------------------------------------------------------------
+# Capture NFS server SSH host key for kopia known_hosts
+# -----------------------------------------------------------------------------
+# Runs whether the VM was just built or was already reachable; either way,
+# the kopia role needs a fresh known_hosts entry to verify the SFTP host.
+- name: Capture NFS server SSH host key
+  when: nfs_ping_result.rc == 0
+  block:
+    - name: Wait for sshd on NFS server
+      ansible.builtin.wait_for:
+        host: "{{ nfs_ip }}"
+        port: 22
+        timeout: 60
+
+    - name: Scan NFS server SSH host key
+      ansible.builtin.command:
+        cmd: "ssh-keyscan -t ed25519 -T 5 {{ nfs_ip }}"
+      register: nfs_ssh_keyscan
+      changed_when: false
+
+    - name: Set NFS known_hosts fact (consumed by kopia role)
+      ansible.builtin.set_fact:
+        nfs_kopia_known_hosts: "{{ nfs_ssh_keyscan.stdout }}"
+
+# -----------------------------------------------------------------------------
+# Ensure kopia SFTP user + repo dir exist on the NFS VM
+# -----------------------------------------------------------------------------
+# Idempotent: runs on every play whether the VM is brand new or already
+# existed before this role was updated. Uses QGA exec (no SSH-from-Ansible
+# dependency) and is safe to re-run.
+- name: Ensure kopia SFTP user and repo dir exist on NFS VM
+  when: nfs_ping_result.rc == 0
+  block:
+    - name: Look up NFS VM id via Proxmox API
+      ansible.builtin.set_fact:
+        nfs_kopia_vmid: >-
+          {{ (proxmox_existing_vms.json.data
+              | selectattr('name', 'eq', nfs_vm_name)
+              | list | first | default({})).vmid
+             | default(nfs_vmid | default('')) }}
+
+    - name: Provision kopia user, authorized_keys, and repo dir via guest agent
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ nfs_kopia_vmid }}/agent/exec"
+        method: POST
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+          CSRFPreventionToken: "{{ proxmox_csrf }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        body_format: form-urlencoded
+        body:
+          command: "/bin/sh"
+          input-data: |
+            set -e
+            # Ensure sshd is running (in case the image predates this change)
+            rc-update add sshd default 2>/dev/null || true
+            service sshd start 2>/dev/null || true
+
+            # SFTP-only user: nologin shell + key-only auth.
+            addgroup -S kopia 2>/dev/null || true
+            adduser -D -S -G kopia -s /sbin/nologin -h /home/kopia kopia 2>/dev/null || true
+            install -d -m 700 -o kopia -g kopia /home/kopia/.ssh
+            cat > /home/kopia/.ssh/authorized_keys <<'AKEYS'
+            {{ nfs_kopia_ssh_public_key }}
+            AKEYS
+            chmod 600 /home/kopia/.ssh/authorized_keys
+            chown kopia:kopia /home/kopia/.ssh/authorized_keys
+
+            install -d -m 700 -o kopia -g kopia /export/kopia
+            install -d -m 700 -o kopia -g kopia {{ nfs_kopia_repo_path }}
+        status_code: [200]
+      when: nfs_kopia_vmid != ''
 
 - name: NFS content upload
   when: nfs_ping_result.rc == 0

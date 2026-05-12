@@ -1,0 +1,77 @@
+---
+# Snapshot the live /data/acme.json from the running traefik container to
+# {{ traefik_acme_backup_path }} on the controller. Uses the Portainer-proxied
+# Docker Engine archive API. Idempotent; safe to run on every deploy.
+#
+# Run on demand:
+#   ansible-playbook site.yml --tags traefik-backup-acme
+#
+# A 404 from the archive endpoint means traefik has not written acme.json
+# yet (no cert has been issued / renewed). Treated as a no-op.
+
+- name: Authenticate with Portainer (acme backup)
+  ansible.builtin.include_tasks: _portainer_auth.yml
+
+- name: Ensure local acme artifacts directory exists
+  ansible.builtin.file:
+    path: "{{ traefik_acme_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+
+- name: Create temporary file for acme.json archive download
+  ansible.builtin.tempfile:
+    state: file
+    suffix: .tar
+    prefix: sophon-acme-backup-
+  register: _traefik_acme_dl_tar
+  delegate_to: localhost
+  changed_when: false
+
+- name: Download acme.json archive from traefik container
+  ansible.builtin.uri:
+    url: >-
+      {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik/archive?path=/data/acme.json
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _traefik_portainer_token }}"
+    validate_certs: false
+    status_code: [200, 404]
+    dest: "{{ _traefik_acme_dl_tar.path }}"
+  register: _traefik_acme_dl
+  changed_when: false
+
+- name: Skip acme.json backup (not yet present in container)
+  ansible.builtin.debug:
+    msg: >-
+      No /data/acme.json in traefik container yet — nothing to back up.
+      First cert issuance is asynchronous; rerun this task later.
+  when: _traefik_acme_dl.status == 404
+
+- name: Extract and persist acme.json
+  when: _traefik_acme_dl.status == 200
+  block:
+    # tar is used directly because ansible.builtin.unarchive on a localhost
+    # delegated task with remote_src reads odd in this no-managed-hosts play.
+    - name: Extract acme.json from downloaded archive # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: tar -xf {{ _traefik_acme_dl_tar.path }} -C {{ traefik_acme_artifacts_dir }} acme.json
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Set restrictive permissions on local acme.json
+      ansible.builtin.file:
+        path: "{{ traefik_acme_backup_path }}"
+        mode: "0600"
+      delegate_to: localhost
+
+    - name: Report acme.json backup success
+      ansible.builtin.debug:
+        msg: "Backed up acme.json to {{ traefik_acme_backup_path }}"
+
+- name: Remove temporary download tar
+  ansible.builtin.file:
+    path: "{{ _traefik_acme_dl_tar.path }}"
+    state: absent
+  delegate_to: localhost
+  changed_when: false

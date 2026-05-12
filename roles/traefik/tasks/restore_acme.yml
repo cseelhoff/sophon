@@ -1,0 +1,124 @@
+---
+# Seed traefik_data podman volume with a local acme.json backup BEFORE the
+# traefik stack starts. Avoids burning Let's Encrypt's "duplicate certificate"
+# rate limit (5 / week per identical SAN set) when the volume is recreated.
+#
+# Uses the Portainer-proxied Docker Engine archive API so no SSH access to
+# the infravm is required — same "API only" pattern as portainer_stack.
+#
+# Flow:
+#   1. Skip silently if no local backup exists (first-ever deploy).
+#   2. Authenticate with Portainer.
+#   3. Create a *stopped* helper container with the named volume mounted at
+#      /data. Mounting an undefined named volume implicitly creates it, so
+#      this works on a fresh infravm too.
+#   4. Tar acme.json on the controller and PUT it into /data via the
+#      `/containers/{id}/archive` endpoint.
+#   5. Remove the helper container. The traefik stack deploy that follows
+#      will see a populated /data/acme.json and reuse the existing account
+#      + certs instead of issuing new ones.
+
+- name: Check for local acme.json backup
+  ansible.builtin.stat:
+    path: "{{ traefik_acme_backup_path }}"
+  register: _traefik_acme_local
+  delegate_to: localhost
+
+- name: Skip acme.json restore (no local backup found)
+  ansible.builtin.debug:
+    msg: >-
+      No backup at {{ traefik_acme_backup_path }} — Let's Encrypt will issue
+      fresh certs on first request. Subsequent deploys will be seeded from
+      the post-deploy snapshot.
+  when: not _traefik_acme_local.stat.exists
+
+- name: Restore acme.json into traefik_data volume
+  when: _traefik_acme_local.stat.exists
+  block:
+    - name: Authenticate with Portainer (acme restore)
+      ansible.builtin.include_tasks: _portainer_auth.yml
+
+    - name: Create temporary tar of acme.json on controller
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .tar
+        prefix: sophon-acme-restore-
+      register: _traefik_acme_tar
+      delegate_to: localhost
+      changed_when: false
+
+    # tar is used directly so the archive root is `acme.json` (relative),
+    # which is what the Docker `PUT /containers/{id}/archive` endpoint expects.
+    - name: Pack acme.json into the temporary tar # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: tar -cf {{ _traefik_acme_tar.path }} -C {{ traefik_acme_artifacts_dir }} acme.json
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Remove any previous seed helper container
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed?force=true
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _traefik_portainer_token }}"
+        validate_certs: false
+        status_code: [204, 404, 409]
+      changed_when: false
+
+    - name: Create stopped seed helper container with traefik_data mounted
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/create?name=traefik-acme-seed
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _traefik_portainer_token }}"
+        body_format: json
+        body:
+          Image: "{{ traefik_acme_helper_image }}"
+          Entrypoint: ["/bin/true"]
+          Cmd: []
+          HostConfig:
+            Binds:
+              - "{{ traefik_acme_volume_name }}:/data"
+            AutoRemove: false
+        validate_certs: false
+        status_code: [201]
+
+    - name: Upload acme.json into traefik_data volume via Docker archive API
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed/archive?path=/data
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ _traefik_portainer_token }}"
+          Content-Type: "application/x-tar"
+        body_format: raw
+        src: "{{ _traefik_acme_tar.path }}"
+        validate_certs: false
+        status_code: [200]
+      changed_when: true
+
+    - name: Remove seed helper container
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed?force=true
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _traefik_portainer_token }}"
+        validate_certs: false
+        status_code: [204]
+      changed_when: false
+
+    - name: Remove temporary tar from controller
+      ansible.builtin.file:
+        path: "{{ _traefik_acme_tar.path }}"
+        state: absent
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Report acme.json restore success
+      ansible.builtin.debug:
+        msg: >-
+          Seeded acme.json from {{ traefik_acme_backup_path }} into
+          podman volume "{{ traefik_acme_volume_name }}".
