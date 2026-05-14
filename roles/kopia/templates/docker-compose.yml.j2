@@ -31,17 +31,28 @@ services:
       - kopia_logs:/app/logs
       - kopia_backups:/source
     # Tmpfs for SSH key + known_hosts (never written to disk).
+    # Compose short-form tmpfs only accepts `mode` and `size`; uid/gid are
+    # not valid here and the daemon rejects them with "invalid mount
+    # option". The container runs as root so uid=0/gid=0 is the default.
     tmpfs:
-      - /run/kopia-ssh:mode=700,uid=0,gid=0
+      - /run/kopia-ssh:mode=700
     networks:
       - proxy
     entrypoint: ["/bin/sh", "-c"]
+    # NOTE: every `$` that should reach the in-container shell must be
+    # written as `$$` here. Docker Compose performs variable interpolation
+    # on `command:` BEFORE submitting the stack to the daemon, using the
+    # DEPLOYING host's environment. `$KOPIA_SFTP_KEY` (single $) would be
+    # silently replaced with empty string at deploy time, producing an
+    # empty key file and a baffling "ssh: no key found" error from kopia.
+    # `$$VAR` is Compose's documented escape for a literal `$VAR` that
+    # should be expanded inside the running container instead.
     command:
       - |
         set -e
         umask 077
-        printf '%s' "$KOPIA_SFTP_KEY"          > /run/kopia-ssh/id_ed25519
-        printf '%s' "$KOPIA_SFTP_KNOWN_HOSTS"  > /run/kopia-ssh/known_hosts
+        printf '%s' "$$KOPIA_SFTP_KEY"          > /run/kopia-ssh/id_ed25519
+        printf '%s' "$$KOPIA_SFTP_KNOWN_HOSTS"  > /run/kopia-ssh/known_hosts
         chmod 600 /run/kopia-ssh/id_ed25519 /run/kopia-ssh/known_hosts
         kopia repository connect sftp \
           --host={{ kopia_sftp_host }} \

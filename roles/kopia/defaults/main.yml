@@ -7,14 +7,18 @@
 # Service-specific consistent dumps (e.g. `gitea dump`) land in a podman
 # named volume on the InfraVM (`kopia_backups`) which kopia mounts at
 # /source. Kopia snapshots that tree into an encrypted SFTP repository on
-# the NFS VM at {{ nfs_kopia_repo_path }} and enforces retention.
+# the NFS VM at {{ kopia_sftp_path }} and enforces retention.
 #
 # SFTP — not NFS bind-mount — is the storage backend, because the kernel
 # downgrades NFS bind-mounts to read-only inside any non-init user namespace
 # (which rootless containers always live in). SFTP is a kopia-native backend
 # and avoids the entire userns/permissions class of bug.
-
-kopia_enabled: true
+#
+# Most knobs that form the *integration contract* with the SFTP-provisioning
+# role (kopia_enabled, kopia_sftp_host/port/username/path, key + known_hosts
+# paths) live in group_vars/all.yml so both roles see the same values
+# regardless of include order. This file holds kopia's *operational*
+# defaults only.
 
 # Image
 kopia_image_name: "docker.io/kopia/kopia"
@@ -36,17 +40,23 @@ kopia_admin_password: "{{ portainer_admin_password }}"
 kopia_repository_password: "{{ portainer_admin_password }}"
 
 # -----------------------------------------------------------------------------
-# SFTP backend (provisioned by the nfs role)
+# SFTP backend
 # -----------------------------------------------------------------------------
-# These wire kopia to the SFTP user/keypair/repo-path created by the nfs
-# role. The private key and known_hosts are surfaced as Ansible facts by the
-# nfs role at deploy time and substituted into the compose template here.
-kopia_sftp_host: "{{ nfs_ip }}"
-kopia_sftp_port: 22
-kopia_sftp_username: "{{ nfs_kopia_username }}"
-kopia_sftp_path: "{{ nfs_kopia_repo_path }}"
-kopia_sftp_private_key: "{{ nfs_kopia_ssh_private_key }}"
-kopia_sftp_known_hosts: "{{ nfs_kopia_known_hosts }}"
+# The kopia role is loosely coupled from the storage backend. The shared
+# integration contract lives in group_vars/all.yml and defines:
+#   kopia_sftp_host / kopia_sftp_port / kopia_sftp_username / kopia_sftp_path
+#   kopia_ssh_keydir / kopia_ssh_keyfile / kopia_known_hosts_file
+#
+# The kopia role itself only READS those artifact files at runtime — it
+# does not provision the SFTP user, the repo dir, or the host key. For the
+# default Alpine NFS-VM backend the nfs role does that provisioning during
+# its own deployment. Swap it for a real SAN/NAS by setting
+# `nfs_provision_kopia_user: false` and populating the artifact files
+# out-of-band.
+#
+# kopia_sftp_private_key + kopia_sftp_known_hosts are facts the kopia
+# tasks set at runtime by slurping the artifact files; they are consumed
+# by the compose template.
 
 # Server listen port (proxied by Traefik).
 kopia_port: 51515

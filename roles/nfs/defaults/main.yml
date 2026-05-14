@@ -84,18 +84,3 @@ nfs_storage_name: "sophon-nfs"
 nfs_proxmox_content_types: "images,iso,backup,snippets"
 
 nfs_root_password: "{{ proxmox_password }}"
-
-# =============================================================================
-# Kopia SFTP backend
-# =============================================================================
-# Kopia connects to this NFS VM via SFTP rather than via an NFS bind-mount,
-# because the kernel downgrades NFS bind-mounts to read-only inside any
-# non-init user namespace (which rootless containers always live in). SFTP
-# is a kopia-native backend and sidesteps the userns/permissions issue
-# entirely. The keypair is generated on the Ansible controller at first run,
-# the public half is installed into the kopia user's authorized_keys at VM
-# build time, and the private half is exposed to the kopia role as an
-# Ansible fact (`nfs_kopia_ssh_private_key`).
-nfs_kopia_username: "kopia"
-nfs_kopia_repo_path: "/export/kopia/repo"
-nfs_kopia_ssh_keyfile: "{{ nfs_build_dir }}/kopia_sftp_id_ed25519"

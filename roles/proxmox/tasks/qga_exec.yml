@@ -22,18 +22,33 @@
       - qga_vmid is defined
       - qga_command is defined
       - proxmox_ticket is defined
-    fail_msg: "qga_exec requires qga_vmid, qga_command, and proxmox_ticket (run proxmox role first)"
+      # Proxmox's /agent/exec base64-encodes `input-data` with Perl's
+      # MIME::Base64::encode_base64, which dies with "Wide character in
+      # subroutine entry" on any non-ASCII byte. Catch it here so the
+      # caller fixes the script instead of debugging a 500 from Perl.
+      - qga_command == (qga_command | regex_replace('[^\\x00-\\x7F]', ''))
+    fail_msg: "qga_exec requires qga_vmid, qga_command, and proxmox_ticket (run proxmox role first); qga_command must be ASCII-only"
 
 - name: Execute command via QGA
+  # The script is sent over the agent's stdin (`input-data`) instead of as a
+  # third `command` argv element. Some qemu-guest-agent versions wedge the
+  # daemon when `guest-exec` is called with a sizeable arg-vector — the daemon
+  # accepts the call, fails to spawn/respond, and then becomes unreachable
+  # (subsequent guest-pings time out) until the VM reboots. Routing the script
+  # through stdin sidesteps that path entirely; it's also the form the in-VM
+  # configure tasks use successfully.
   ansible.builtin.uri:
     url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ qga_vmid }}/agent/exec"
     method: POST
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
       CSRFPreventionToken: "{{ proxmox_csrf }}"
-      Content-Type: "application/x-www-form-urlencoded"
-    body: "command=/bin/bash&command=-c&command={{ qga_command | urlencode }}"
     validate_certs: "{{ proxmox_validate_certs }}"
+    body_format: form-urlencoded
+    body:
+      # /bin/sh (not /bin/bash) — bash isn't installed on Alpine (busybox).
+      command: "/bin/sh"
+      input-data: "{{ qga_command }}"
   register: proxmox_qga_exec_result
 
 - name: Debug QGA exec result

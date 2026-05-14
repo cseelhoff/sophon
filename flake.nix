@@ -82,6 +82,7 @@
             dig
             bubblewrap
             socat
+            tailscale
           ];
 
           shellHook = ''

@@ -9,40 +9,6 @@
 # Depends on: proxmox role (via meta/main.yml)
 
 # -----------------------------------------------------------------------------
-# Kopia SFTP keypair (generated once on the controller, persists across runs)
-# -----------------------------------------------------------------------------
-# Kopia connects to this VM via SFTP, not via an NFS bind-mount, because the
-# kernel forces NFS bind-mounts to read-only inside non-init user namespaces
-# (which rootless containers always live in). SFTP is a kopia-native backend
-# that sidesteps the entire userns/permissions class of bug. The keypair is
-# generated here on the controller and exposed to the kopia role as facts.
-- name: Ensure NFS build dir exists (for kopia SSH keys)
-  ansible.builtin.file:
-    path: "{{ nfs_build_dir }}"
-    state: directory
-    mode: "0700"
-
-- name: Generate kopia SFTP keypair if missing
-  ansible.builtin.command:
-    cmd: "ssh-keygen -t ed25519 -N '' -C kopia@sophon -f {{ nfs_kopia_ssh_keyfile }}"
-    creates: "{{ nfs_kopia_ssh_keyfile }}"
-
-- name: Read kopia SFTP private key
-  ansible.builtin.slurp:
-    src: "{{ nfs_kopia_ssh_keyfile }}"
-  register: nfs_kopia_priv_slurp
-
-- name: Read kopia SFTP public key
-  ansible.builtin.slurp:
-    src: "{{ nfs_kopia_ssh_keyfile }}.pub"
-  register: nfs_kopia_pub_slurp
-
-- name: Set kopia SSH key facts (consumed by kopia role)
-  ansible.builtin.set_fact:
-    nfs_kopia_ssh_private_key: "{{ nfs_kopia_priv_slurp.content | b64decode }}"
-    nfs_kopia_ssh_public_key: "{{ nfs_kopia_pub_slurp.content | b64decode | trim }}"
-
-# -----------------------------------------------------------------------------
 # NFS Connectivity Check (via Proxmox storage API)
 # -----------------------------------------------------------------------------
 - name: Check if NFS storage already exists and is online in Proxmox
@@ -58,12 +24,24 @@
   ansible.builtin.set_fact:
     nfs_already_reachable: "{{ nfs_storage_check.json.data | selectattr('storage', 'eq', nfs_storage_name) | list | length > 0 }}"
 
+# Always discover the NFS VM (if it exists) and surface its vmid as a fact
+# so downstream roles (e.g. kopia) can QGA-exec against it without needing
+# to know the VM's name.
+- name: Discover NFS VM in Proxmox
+  ansible.builtin.set_fact:
+    nfs_existing_vm: "{{ proxmox_existing_vms.json.data | selectattr('name', 'eq', nfs_vm_name) | list | first | default(none) }}"
+
+- name: Set nfs_vmid fact for existing VM
+  ansible.builtin.set_fact:
+    nfs_vmid: "{{ nfs_existing_vm.vmid }}"
+  when: nfs_existing_vm is not none
+
 - name: Continue deployment if NFS is not already reachable
   when: not nfs_already_reachable
   block:
     - name: Set existing VM fact
       ansible.builtin.set_fact:
-        nfs_server_vm: "{{ proxmox_existing_vms.json.data | selectattr('name', 'eq', nfs_vm_name) | list | first | default(none) }}"
+        nfs_server_vm: "{{ nfs_existing_vm }}"
 
     - name: Proceed with vm build/check if not on Proxmox
       when: not nfs_server_vm
@@ -98,11 +76,11 @@
                     state: directory
                     mode: "0755"
 
-                # - name: Copy build-alpine-image script
-                #   ansible.builtin.copy:
-                #     src: build-alpine-image
-                #     dest: "{{ nfs_build_dir }}/build-alpine-image"
-                #     mode: "0755"
+                - name: Copy build-alpine-image script
+                  ansible.builtin.copy:
+                    src: build-alpine-image
+                    dest: "{{ nfs_build_dir }}/build-alpine-image"
+                    mode: "0755"
 
                 - name: Create chroot customization script
                   ansible.builtin.copy:
@@ -329,49 +307,95 @@
                 service networking restart
                 ping -c 3 {{ vnet_gateway }}
 
+                # Configure DNS resolver. The static-IP `interfaces` config
+                # above does not provide DNS (DHCP did during build). Without
+                # /etc/resolv.conf, apk and any other DNS-dependent tooling
+                # fails. Write the resolver derived from the Proxmox node
+                # config (vnet_dns), with a public fallback if empty.
+                cat > /etc/resolv.conf <<'EOF'
+                nameserver {{ vnet_dns | default('1.1.1.1', true) }}
+                nameserver 1.1.1.1
+                EOF
+
                 # Create NFS export directories for content storage
                 mkdir -p /export/template/iso
                 mkdir -p /export/containers
                 chmod -R 777 /export
                 chmod -R 777 /export/containers
 
-                # ---------------------------------------------------------
-                # Kopia SFTP user + repo directory
-                # ---------------------------------------------------------
-                # Ensure sshd is running (openssh is baked into the image
-                # via the chroot script, but service may need start on a
-                # cold boot).
-                rc-update add sshd default 2>/dev/null || true
-                service sshd start 2>/dev/null || true
+                # Pre-generate sshd host keys at first-boot config time so
+                # downstream roles (kopia) can read them via QGA without
+                # racing the openrc sshd init script. Idempotent: ssh-keygen
+                # -A only generates keys that are missing.
+                ssh-keygen -A
+                rc-service sshd restart || rc-service sshd start || true
 
-                # SFTP-only user: nologin shell, no password, key-only.
-                # OpenSSH's sftp-server subsystem does not require an
-                # interactive shell.
-                addgroup -S kopia 2>/dev/null || true
-                adduser -D -S -G kopia -s /sbin/nologin -h /home/kopia kopia 2>/dev/null || true
-                install -d -m 700 -o kopia -g kopia /home/kopia/.ssh
-                cat > /home/kopia/.ssh/authorized_keys <<'AKEYS'
-                {{ nfs_kopia_ssh_public_key }}
-                AKEYS
-                chmod 600 /home/kopia/.ssh/authorized_keys
-                chown kopia:kopia /home/kopia/.ssh/authorized_keys
-
-                # Repo directory: owned by kopia, only kopia can read/write.
-                install -d -m 700 -o kopia -g kopia /export/kopia
-                install -d -m 700 -o kopia -g kopia {{ nfs_kopia_repo_path }}
-
+                # Make sure NFS server is running on the new static IP. The
+                # `service networking restart` above can leave nfsd/rpcbind in
+                # a stale state where they aren't listening on the new
+                # address, which causes Proxmox to fail when it tries to
+                # mount the export below. Restarting (or starting) these
+                # services here is idempotent and ensures NFS is reachable
+                # before we proceed.
+                rc-service rpcbind restart || rc-service rpcbind start || true
+                rc-service nfs restart || rc-service nfs start || true
+                exportfs -r
             status_code: [200]
           register: nfs_network_config
           retries: 5
           delay: 5
 
+        - name: Wait for QGA configuration script to finish
+          ansible.builtin.uri:
+            url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ nfs_vmid }}/agent/exec-status?pid={{ nfs_network_config.json.data.pid }}"
+            method: GET
+            headers:
+              Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+            validate_certs: "{{ proxmox_validate_certs }}"
+          register: nfs_network_config_status
+          until: (nfs_network_config_status.json.data.exited | default(0) | int) == 1
+          retries: 60
+          delay: 5
+
+        - name: Fail if QGA configuration script returned non-zero
+          ansible.builtin.fail:
+            msg: |
+              NFS VM configuration script failed (exit={{ nfs_network_config_status.json.data.exitcode | default('?') }}).
+              stdout: {{ nfs_network_config_status.json.data['out-data'] | default('') }}
+              stderr: {{ nfs_network_config_status.json.data['err-data'] | default('') }}
+          when: (nfs_network_config_status.json.data.exitcode | default(-1) | int) != 0
 
     # -----------------------------------------------------------------------------
     # Add NFS Storage to Proxmox
     # -----------------------------------------------------------------------------
+    # If a previous failed activation left a stale NFS mount at
+    # /mnt/pve/<storage>, every subsequent activation reports
+    # "directory '/mnt/pve/<storage>' does not exist or is unreachable"
+    # because PVE's is_mounted() sees the dead mount but `-d` returns false
+    # on the stale handle. Clear it first so PVE can recreate the mountpoint.
+    - name: Clear any stale /mnt/pve/<storage> mountpoint on PVE
+      proxmox_shell:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        node: "{{ proxmox_node }}"
+        pve_auth_cookie: "{{ proxmox_ticket }}"
+        proxmox_csrf_token: "{{ proxmox_csrf }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        timeout: 30
+        command: >-
+          MP=/mnt/pve/{{ nfs_storage_name }};
+          if [ -e "$MP" ] || mountpoint -q "$MP" 2>/dev/null; then
+          umount -lf "$MP" 2>/dev/null || true;
+          rmdir "$MP" 2>/dev/null || true;
+          echo CLEARED;
+          else
+          echo NO_STALE_MOUNT;
+          fi
+      register: nfs_stale_mount_clear
+      changed_when: "'CLEARED' in (nfs_stale_mount_clear.stdout | default(''))"
 
     - name: Add NFS storage to Proxmox (retries until NFS is online)
-      # when: not nfs_already_reachable
       ansible.builtin.uri:
         url: "{{ proxmox_api }}/storage"
         method: POST
@@ -422,6 +446,18 @@
 
           ═══════════════════════════════════════════════════════════════════
 
+# -----------------------------------------------------------------------------
+# Provision the kopia SFTP user / repo dir / artifact files on this NFS VM.
+# Runs OUTSIDE the not-already-reachable block so it executes on every play
+# (idempotent), regardless of whether the VM was just built or has been up
+# for weeks. Honors the `nfs_provision_kopia_user` toggle (defaults to
+# `kopia_enabled`) so users wiring kopia to a different storage backend can
+# turn it off.
+# -----------------------------------------------------------------------------
+- name: Provision kopia SFTP user on NFS VM
+  ansible.builtin.include_tasks: kopia_user.yml
+  when: nfs_provision_kopia_user | default(kopia_enabled | default(false)) | bool
+
 - name: Check if NFS server is reachable
   ansible.builtin.command:
     cmd: "ping -c 1 -W 3 {{ nfs_ip }}"
@@ -433,79 +469,6 @@
   ansible.builtin.debug:
     msg: "NFS server {{ nfs_ip }} is not reachable — skipping NFS mount and content upload."
   when: nfs_ping_result.rc != 0
-
-# -----------------------------------------------------------------------------
-# Capture NFS server SSH host key for kopia known_hosts
-# -----------------------------------------------------------------------------
-# Runs whether the VM was just built or was already reachable; either way,
-# the kopia role needs a fresh known_hosts entry to verify the SFTP host.
-- name: Capture NFS server SSH host key
-  when: nfs_ping_result.rc == 0
-  block:
-    - name: Wait for sshd on NFS server
-      ansible.builtin.wait_for:
-        host: "{{ nfs_ip }}"
-        port: 22
-        timeout: 60
-
-    - name: Scan NFS server SSH host key
-      ansible.builtin.command:
-        cmd: "ssh-keyscan -t ed25519 -T 5 {{ nfs_ip }}"
-      register: nfs_ssh_keyscan
-      changed_when: false
-
-    - name: Set NFS known_hosts fact (consumed by kopia role)
-      ansible.builtin.set_fact:
-        nfs_kopia_known_hosts: "{{ nfs_ssh_keyscan.stdout }}"
-
-# -----------------------------------------------------------------------------
-# Ensure kopia SFTP user + repo dir exist on the NFS VM
-# -----------------------------------------------------------------------------
-# Idempotent: runs on every play whether the VM is brand new or already
-# existed before this role was updated. Uses QGA exec (no SSH-from-Ansible
-# dependency) and is safe to re-run.
-- name: Ensure kopia SFTP user and repo dir exist on NFS VM
-  when: nfs_ping_result.rc == 0
-  block:
-    - name: Look up NFS VM id via Proxmox API
-      ansible.builtin.set_fact:
-        nfs_kopia_vmid: >-
-          {{ (proxmox_existing_vms.json.data
-              | selectattr('name', 'eq', nfs_vm_name)
-              | list | first | default({})).vmid
-             | default(nfs_vmid | default('')) }}
-
-    - name: Provision kopia user, authorized_keys, and repo dir via guest agent
-      ansible.builtin.uri:
-        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ nfs_kopia_vmid }}/agent/exec"
-        method: POST
-        headers:
-          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-          CSRFPreventionToken: "{{ proxmox_csrf }}"
-        validate_certs: "{{ proxmox_validate_certs }}"
-        body_format: form-urlencoded
-        body:
-          command: "/bin/sh"
-          input-data: |
-            set -e
-            # Ensure sshd is running (in case the image predates this change)
-            rc-update add sshd default 2>/dev/null || true
-            service sshd start 2>/dev/null || true
-
-            # SFTP-only user: nologin shell + key-only auth.
-            addgroup -S kopia 2>/dev/null || true
-            adduser -D -S -G kopia -s /sbin/nologin -h /home/kopia kopia 2>/dev/null || true
-            install -d -m 700 -o kopia -g kopia /home/kopia/.ssh
-            cat > /home/kopia/.ssh/authorized_keys <<'AKEYS'
-            {{ nfs_kopia_ssh_public_key }}
-            AKEYS
-            chmod 600 /home/kopia/.ssh/authorized_keys
-            chown kopia:kopia /home/kopia/.ssh/authorized_keys
-
-            install -d -m 700 -o kopia -g kopia /export/kopia
-            install -d -m 700 -o kopia -g kopia {{ nfs_kopia_repo_path }}
-        status_code: [200]
-      when: nfs_kopia_vmid != ''
 
 - name: NFS content upload
   when: nfs_ping_result.rc == 0

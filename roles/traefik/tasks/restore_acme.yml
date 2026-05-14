@@ -66,6 +66,40 @@
         status_code: [204, 404, 409]
       changed_when: false
 
+    # The helper container needs an image present on the host. The traefik
+    # image isn't pulled until the stack is deployed (which happens AFTER
+    # this restore step), so on a fresh host we have to ensure it ourselves.
+    # In air-gapped mode the image is pre-loaded by an earlier role, so the
+    # inspect succeeds and the pull is skipped.
+    - name: Check if helper image is present on infravm
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/images/{{ traefik_acme_helper_image | urlencode }}/json
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _traefik_portainer_token }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: _traefik_acme_helper_image_check
+      changed_when: false
+
+    - name: Pull helper image on infravm if missing
+      vars:
+        _img_repo: "{{ (traefik_acme_helper_image | split(':'))[0] }}"
+        _img_tag: "{{ (traefik_acme_helper_image | split(':'))[1] }}"
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/images/create?fromImage={{ _img_repo }}&tag={{ _img_tag }}
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _traefik_portainer_token }}"
+          X-Registry-Auth: "e30="  # base64({}) — anonymous pull
+        validate_certs: false
+        status_code: [200]
+        timeout: 300
+      when: _traefik_acme_helper_image_check.status == 404
+      changed_when: true
+
     - name: Create stopped seed helper container with traefik_data mounted
       ansible.builtin.uri:
         url: >-

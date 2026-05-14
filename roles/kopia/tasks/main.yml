@@ -1,9 +1,72 @@
 ---
+# =============================================================================
 # Deploy Kopia snapshot server via Portainer Stack
+# =============================================================================
+# The kopia role is loosely coupled from the storage backend. It expects
+# two artifact files to already exist on the controller (produced by the
+# nfs role for the default Alpine NFS-VM backend, or by the user / a
+# different role for a real SAN/NAS):
+#
+#   {{ kopia_ssh_keyfile }}      - kopia's SFTP private key
+#   {{ kopia_known_hosts_file }} - one-line known_hosts entry for
+#                                  {{ kopia_sftp_host }}
+#
+# Both paths come from group_vars/all.yml (the integration contract).
 
 - name: Deploy Kopia
-  when: kopia_enabled | default(false)
+  when: kopia_enabled | default(true)
   block:
+    # -------------------------------------------------------------------------
+    # Verify the integration contract was honored by whatever provisioned
+    # the SFTP backend. Fail fast with an actionable message rather than
+    # letting the compose template render with empty key material.
+    # -------------------------------------------------------------------------
+    - name: Stat kopia SFTP private key
+      ansible.builtin.stat:
+        path: "{{ kopia_ssh_keyfile }}"
+      register: kopia_priv_stat
+
+    - name: Stat kopia known_hosts file
+      ansible.builtin.stat:
+        path: "{{ kopia_known_hosts_file }}"
+      register: kopia_kh_stat
+
+    - name: Fail if SFTP backend artifacts are missing
+      ansible.builtin.fail:
+        msg: |
+          Kopia SFTP backend artifacts are missing on the controller:
+
+            {{ kopia_ssh_keyfile }}      exists={{ kopia_priv_stat.stat.exists }}
+            {{ kopia_known_hosts_file }} exists={{ kopia_kh_stat.stat.exists }}
+
+          For the default Alpine NFS-VM backend these are produced by the
+          nfs role during NFS-server deployment. If you are using a different
+          storage backend, populate them out-of-band (or via a backend-
+          specific role) before running the kopia role, and ensure the
+          matching SFTP user is provisioned on that backend.
+      when: not (kopia_priv_stat.stat.exists and kopia_kh_stat.stat.exists)
+
+    # -------------------------------------------------------------------------
+    # Slurp artifact files and expose them to the compose template as facts.
+    # -------------------------------------------------------------------------
+    - name: Read kopia SFTP private key
+      ansible.builtin.slurp:
+        src: "{{ kopia_ssh_keyfile }}"
+      register: kopia_priv_slurp
+
+    - name: Read kopia known_hosts
+      ansible.builtin.slurp:
+        src: "{{ kopia_known_hosts_file }}"
+      register: kopia_kh_slurp
+
+    - name: Set kopia compose facts
+      ansible.builtin.set_fact:
+        kopia_sftp_private_key: "{{ kopia_priv_slurp.content | b64decode }}"
+        kopia_sftp_known_hosts: "{{ kopia_kh_slurp.content | b64decode | trim }}"
+
+    # -------------------------------------------------------------------------
+    # Deploy the kopia stack via Portainer.
+    # -------------------------------------------------------------------------
     - name: Deploy Kopia stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
@@ -19,6 +82,6 @@
           UI user:        {{ kopia_admin_user }}
           UI password:    {{ kopia_admin_password }}
           Repo password:  {{ kopia_repository_password }}
-          Repo path:      {{ kopia_repo_path }} (NFS)
-          Source watched: {{ kopia_backups_source }}
+          SFTP target:    {{ kopia_sftp_username }}@{{ kopia_sftp_host }}:{{ kopia_sftp_path }}
+          Source watched: /source
           Schedule:       {{ kopia_snapshot_cron }}

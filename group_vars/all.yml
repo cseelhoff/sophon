@@ -38,3 +38,39 @@ infravm_portainer_domain: "{{ coredns_domain_name | default(domain_name | defaul
 infravm_portainer_url: "{{ 'https://portainer-bootstrap.' ~ infravm_portainer_domain
   if infravm_portainer_domain | length > 0
   else 'https://' ~ infravm_ip | default('') ~ ':' ~ infravm_portainer_port }}"
+
+# -----------------------------------------------------------------------------
+# Kopia / SFTP backend integration contract
+# -----------------------------------------------------------------------------
+# These vars are the loose-coupling interface between whatever role
+# provisions the SFTP backend (the bundled `nfs` role for the Alpine NFS VM,
+# or your own role for a real SAN/NAS) and the `kopia` role that consumes
+# it. They live here — not in either role's defaults — so both roles see
+# the SAME values regardless of include order.
+#
+# Provisioning side (nfs role, by default) MUST ensure:
+#   on the controller:
+#     {{ kopia_ssh_keyfile }}      = kopia's SFTP private key (mode 0600)
+#     {{ kopia_known_hosts_file }} = single-line known_hosts entry for
+#                                    {{ kopia_sftp_host }}
+#   on the SFTP host:
+#     user {{ kopia_sftp_username }} exists with the matching public key
+#       in ~/.ssh/authorized_keys
+#     directory {{ kopia_sftp_path }} exists, owned by that user, mode 0700
+#
+# Consumer side (kopia role): reads the two artifact files, injects them
+# into the compose template, deploys via Portainer. Has no knowledge of
+# how the SFTP backend was provisioned.
+#
+# To swap in a real SAN/NAS:
+#   - set nfs_provision_kopia_user: false  (skips the bundled provisioning)
+#   - populate kopia_ssh_keyfile + kopia_known_hosts_file out-of-band
+#   - override kopia_sftp_host / kopia_sftp_path / kopia_sftp_username
+kopia_enabled: true
+kopia_sftp_host: "{{ nfs_ip }}"
+kopia_sftp_port: 22
+kopia_sftp_username: "kopia"
+kopia_sftp_path: "/export/kopia/repo"
+kopia_ssh_keydir: "{{ playbook_dir }}/artifacts/kopia"
+kopia_ssh_keyfile: "{{ kopia_ssh_keydir }}/id_ed25519"
+kopia_known_hosts_file: "{{ kopia_ssh_keydir }}/known_hosts"

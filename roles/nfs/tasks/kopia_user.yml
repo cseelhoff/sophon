@@ -1,0 +1,118 @@
+---
+# =============================================================================
+# Kopia SFTP backend provisioning on this NFS server
+# =============================================================================
+# Bridges the loose-coupling contract defined in group_vars/all.yml: produces
+# the artifact files the kopia role consumes and provisions the matching
+# unix user / repo dir on the NFS VM.
+#
+# Concretely this file:
+#   1. Generates kopia's SFTP keypair on the controller (if missing) under
+#      {{ kopia_ssh_keydir }}.
+#   2. QGA-execs into the NFS VM to:
+#        - create the {{ kopia_sftp_username }} unix user (nologin, key-only)
+#        - install the public key as authorized_keys
+#        - create the SFTP repo directory {{ kopia_sftp_path }}
+#        - emit the SSH host public key as the LAST line of stdout
+#   3. Persists a one-line known_hosts entry to {{ kopia_known_hosts_file }}.
+#
+# Idempotent: re-running is safe and a no-op when nothing changed.
+#
+# To skip this and use a SAN/NAS or other backend instead, set
+# `nfs_provision_kopia_user: false` and populate the artifact files
+# yourself.
+
+- name: Ensure kopia artifacts dir exists
+  ansible.builtin.file:
+    path: "{{ kopia_ssh_keydir }}"
+    state: directory
+    mode: "0700"
+
+- name: Generate kopia SFTP keypair if missing
+  ansible.builtin.command:
+    cmd: "ssh-keygen -t ed25519 -N '' -C kopia@sophon -f {{ kopia_ssh_keyfile }}"
+    creates: "{{ kopia_ssh_keyfile }}"
+
+- name: Read kopia SFTP public key
+  ansible.builtin.slurp:
+    src: "{{ kopia_ssh_keyfile }}.pub"
+  register: nfs_kopia_pub_slurp
+
+- name: Set kopia public key fact for QGA script
+  ansible.builtin.set_fact:
+    nfs_kopia_pub_key: "{{ nfs_kopia_pub_slurp.content | b64decode | trim }}"
+
+- name: Fail if NFS VM id not discoverable
+  ansible.builtin.fail:
+    msg: "nfs_vmid is not defined; cannot QGA-provision the kopia SFTP user."
+  when: nfs_vmid is not defined or (nfs_vmid | string) == ''
+
+- name: Provision kopia user/dir on NFS VM and read host key via QGA
+  ansible.builtin.include_role:
+    name: proxmox
+    tasks_from: qga_exec
+  vars:
+    qga_vmid: "{{ nfs_vmid }}"
+    qga_command: |
+      set -e
+
+      # Sanity check: the image must have openssh installed (it's in the
+      # build's --packages list). If you hit this on an existing VM, the
+      # VM was built from a stale image that predates that addition --
+      # destroy the VM and the cached qcow2 so the role rebuilds it from
+      # the current image. We do NOT install packages at runtime.
+      if ! command -v sshd >/dev/null 2>&1; then
+        echo "ERR: openssh is not installed on this NFS VM. Destroy the VM" >&2
+        echo "     and the cached qcow2 (artifacts/nfs-vm-build/ + Proxmox" >&2
+        echo "     ISO storage) so the nfs role rebuilds from the current" >&2
+        echo "     image, which bakes openssh into --packages." >&2
+        exit 2
+      fi
+
+      # SFTP-only user: nologin shell, key-only auth.
+      addgroup -S {{ kopia_sftp_username }} 2>/dev/null || true
+      adduser -D -S -G {{ kopia_sftp_username }} -s /sbin/nologin \
+        -h /home/{{ kopia_sftp_username }} {{ kopia_sftp_username }} 2>/dev/null || true
+      install -d -m 700 -o {{ kopia_sftp_username }} -g {{ kopia_sftp_username }} \
+        /home/{{ kopia_sftp_username }}/.ssh
+      echo '{{ nfs_kopia_pub_key }}' > /home/{{ kopia_sftp_username }}/.ssh/authorized_keys
+      chmod 600 /home/{{ kopia_sftp_username }}/.ssh/authorized_keys
+      chown {{ kopia_sftp_username }}:{{ kopia_sftp_username }} \
+        /home/{{ kopia_sftp_username }}/.ssh/authorized_keys
+
+      install -d -m 700 -o {{ kopia_sftp_username }} -g {{ kopia_sftp_username }} \
+        {{ kopia_sftp_path | dirname }}
+      install -d -m 700 -o {{ kopia_sftp_username }} -g {{ kopia_sftp_username }} \
+        {{ kopia_sftp_path }}
+
+      # Defensive: if sshd was just installed-and-enabled but has never
+      # actually started (so init never generated host keys), generate
+      # them now. ssh-keygen -A is part of the openssh package and is
+      # idempotent -- only creates keys that are missing.
+      ssh-keygen -A
+
+      # LAST line of stdout: the SSH host public key, consumed below to
+      # build the controller-side known_hosts file.
+      cat /etc/ssh/ssh_host_ed25519_key.pub
+
+- name: Fail if kopia provisioning script failed
+  ansible.builtin.fail:
+    msg: |
+      Kopia user provisioning on NFS VM failed (exit code {{ proxmox_qga_result.exitcode }}).
+      stdout: {{ proxmox_qga_result.stdout }}
+      stderr: {{ proxmox_qga_result.stderr }}
+  when: not proxmox_qga_result.success
+
+- name: Build known_hosts entry from QGA output
+  vars:
+    _hostkey_line: "{{ (proxmox_qga_result.stdout | trim).splitlines() | last | default('') }}"
+    _hostkey_parts: "{{ _hostkey_line.split() }}"
+  ansible.builtin.set_fact:
+    nfs_kopia_known_hosts_entry: "{{ kopia_sftp_host }} {{ _hostkey_parts[0] | default('') }} {{ _hostkey_parts[1] | default('') }}"
+  failed_when: (_hostkey_parts | length) < 2 or not _hostkey_line.startswith('ssh-')
+
+- name: Persist kopia known_hosts to artifacts
+  ansible.builtin.copy:
+    content: "{{ nfs_kopia_known_hosts_entry }}\n"
+    dest: "{{ kopia_known_hosts_file }}"
+    mode: "0600"

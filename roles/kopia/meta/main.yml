@@ -1,2 +1,7 @@
 ---
+# The kopia role no longer touches the storage backend directly — it only
+# reads pre-staged artifact files (private key + known_hosts) produced by
+# whichever role provisioned the SFTP user. So no QGA / Proxmox auth
+# dependency is needed here. The portainer_stack role this calls into has
+# its own dependencies.
 dependencies: []
