@@ -18,6 +18,10 @@ RUN apt-get update \
     && mkdir -m 0755 /nix \
     && chown ${USERNAME}:${USERNAME} /nix
 
+COPY .devcontainer/bin/sophon-tailscale /usr/local/bin/sophon-tailscale
+
+RUN chmod 0755 /usr/local/bin/sophon-tailscale
+
 USER ${USERNAME}
 
 RUN curl --fail --location https://nixos.org/nix/install | sh -s -- --no-daemon \

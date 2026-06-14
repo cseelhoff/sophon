@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: sophon-tailscale <command> [args]
+
+Commands:
+  up [tailscale-up-args...]   Start tailscaled, then run tailscale up
+  daemon                      Start tailscaled only
+  status [args...]            Run tailscale status
+  down [args...]              Run tailscale down
+  ip [args...]                Run tailscale ip
+
+Environment overrides:
+  TS_BIN, TS_DIR, TS_SOCKET, TS_STATE, SOPHON_WORKSPACE_DIR,
+  TAILSCALE_LOGIN_SERVER
+EOF
+}
+
+run_as_root() {
+  if [[ ${EUID} -ne 0 ]]; then
+    exec sudo --preserve-env=TS_BIN,TS_DIR,TS_SOCKET,TS_STATE,SOPHON_WORKSPACE_DIR,TAILSCALE_LOGIN_SERVER,TAILSCALED_BIN,TAILSCALE_BIN "$0" "$@"
+  fi
+}
+
+workspace_dir="${SOPHON_WORKSPACE_DIR:-/workspaces/sophon}"
+ts_bin="${TS_BIN:-/home/vscode/.nix-profile/bin}"
+ts_dir="${TS_DIR:-${workspace_dir}/.tailscale}"
+ts_socket="${TS_SOCKET:-${ts_dir}/tailscaled.sock}"
+ts_state="${TS_STATE:-${ts_dir}/tailscaled.state}"
+tailscaled_bin="${TAILSCALED_BIN:-${ts_bin}/tailscaled}"
+tailscale_bin="${TAILSCALE_BIN:-${ts_bin}/tailscale}"
+
+require_bins() {
+  if [[ ! -x "${tailscaled_bin}" ]]; then
+    echo "Missing tailscaled binary: ${tailscaled_bin}" >&2
+    exit 127
+  fi
+  if [[ ! -x "${tailscale_bin}" ]]; then
+    echo "Missing tailscale binary: ${tailscale_bin}" >&2
+    exit 127
+  fi
+}
+
+daemon_running() {
+  command -v pgrep >/dev/null 2>&1 \
+    && pgrep -f "${tailscaled_bin}.*--socket=${ts_socket}" >/dev/null 2>&1
+}
+
+start_daemon() {
+  install -d -m 700 "${ts_dir}"
+  touch "${ts_dir}/tailscaled.log"
+  chmod 600 "${ts_dir}/tailscaled.log"
+
+  if daemon_running; then
+    return 0
+  fi
+
+  rm -f "${ts_socket}"
+  nohup "${tailscaled_bin}" \
+    --socket="${ts_socket}" \
+    --state="${ts_state}" \
+    >"${ts_dir}/tailscaled.log" 2>&1 &
+
+  for _ in {1..40}; do
+    if [[ -S "${ts_socket}" ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "tailscaled did not create ${ts_socket}; see ${ts_dir}/tailscaled.log" >&2
+  exit 1
+}
+
+command="${1:-up}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+case "${command}" in
+  up)
+    run_as_root "${command}" "$@"
+    require_bins
+    start_daemon
+    up_args=(--accept-routes --shields-up)
+    if [[ -n "${TAILSCALE_LOGIN_SERVER:-}" ]]; then
+      up_args=(--login-server="${TAILSCALE_LOGIN_SERVER}" "${up_args[@]}")
+    fi
+    exec "${tailscale_bin}" --socket="${ts_socket}" up "${up_args[@]}" "$@"
+    ;;
+  daemon)
+    run_as_root "${command}" "$@"
+    require_bins
+    start_daemon
+    echo "tailscaled is running with socket ${ts_socket}"
+    ;;
+  status|down|ip)
+    run_as_root "${command}" "$@"
+    require_bins
+    exec "${tailscale_bin}" --socket="${ts_socket}" "${command}" "$@"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: ${command}" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

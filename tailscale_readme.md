@@ -1,8 +1,8 @@
 # Tailscale in the Devcontainer
 
-The devcontainer includes Tailscale from the Nix profile. Because `sudo` does not
-include `/home/vscode/.nix-profile/bin` in its secure path, run Tailscale commands
-with the full binary path or define the variables below first.
+The devcontainer includes Tailscale from the Nix profile and installs a
+`sophon-tailscale` helper into `/usr/local/bin`. Rebuild the devcontainer after
+changes to `.devcontainer/` so the helper is available.
 
 The Tailscale state is stored in `.tailscale/tailscaled.state`. That directory is
 ignored by Git so the node key can persist between VS Code devcontainer sessions
@@ -10,29 +10,19 @@ without being committed.
 
 ## Start Tailscale
 
-Run these commands after the devcontainer starts:
+Run this command after the devcontainer starts:
 
 ```bash
-TS_BIN=/home/vscode/.nix-profile/bin
-TS_DIR=/workspaces/sophon/.tailscale
-TS_SOCKET="$TS_DIR/tailscaled.sock"
-TS_STATE="$TS_DIR/tailscaled.state"
-
-sudo install -d -m 700 "$TS_DIR"
-
-sudo "$TS_BIN/tailscaled" \
-  --socket="$TS_SOCKET" \
-  --state="$TS_STATE" &
+sophon-tailscale up
 ```
 
-Then bring the node online:
+The helper creates `.tailscale/`, starts `tailscaled` with the repo-local socket
+and state file, then runs `tailscale up --accept-routes --shields-up`.
+
+If you need to pass additional `tailscale up` flags, append them:
 
 ```bash
-sudo "$TS_BIN/tailscale" \
-  --socket="$TS_SOCKET" \
-  up \
-  --accept-routes \
-  --shields-up
+sophon-tailscale up --hostname=sophon-devcontainer
 ```
 
 If the persisted state is valid, Tailscale should reconnect without a browser
@@ -42,18 +32,13 @@ URL.
 For Headscale or another non-default control server, add `--login-server`:
 
 ```bash
-sudo "$TS_BIN/tailscale" \
-  --socket="$TS_SOCKET" \
-  up \
-  --login-server=https://your-headscale.example.com \
-  --accept-routes \
-  --shields-up
+sophon-tailscale up --login-server=https://your-headscale.example.com
 ```
 
 ## Check Status and Routes
 
 ```bash
-sudo "$TS_BIN/tailscale" --socket="$TS_SOCKET" status
+sophon-tailscale status
 ip route show table 52
 ```
 
