@@ -12,11 +12,12 @@
         pkgs = nixpkgs.legacyPackages.${system};
         lib = nixpkgs.lib;
 
-        ansibleEnv = pkgs.ansible.overrideAttrs (old: {
-          propagatedBuildInputs = (old.propagatedBuildInputs or []) ++ [
-            pkgs.python3Packages.proxmoxer
-          ];
-        });
+        ansibleEnv = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
+          ansible-core
+          proxmoxer
+          requests
+          websocket-client
+        ]);
 
         fuseNfs = pkgs.stdenv.mkDerivation rec {
           pname = "fuse-nfs";
@@ -47,43 +48,86 @@
 
           preConfigure = "./setup.sh";
         };
+
+        sophonDevPackages = with pkgs; [
+          ansibleEnv
+          ansible-lint
+          apacheHttpd
+          butane
+          skopeo
+          dnf5
+          qemu
+          libguestfs-with-appliance
+          proot
+          unixtools.xxd
+          nfs-utils
+          fuse
+          libnfs
+          fuseNfs
+          cloudflared
+          gnumake
+          go
+          git
+          cacert
+          buildah
+          mkpasswd
+          dig
+          bubblewrap
+          socat
+          tailscale
+        ];
+
+        sophonRunnerImagePackages = sophonDevPackages ++ (with pkgs; [
+          bashInteractive
+          coreutils
+          findutils
+          gawk
+          gnugrep
+          gnused
+          gnutar
+          gzip
+          nix
+          which
+        ]);
       in
       {
         packages = {
           fuseNfs = fuseNfs;
+
+          sophon-dev-env = pkgs.buildEnv {
+            name = "sophon-dev-env";
+            paths = sophonDevPackages;
+          };
+
+          sophon-runner-image = pkgs.dockerTools.buildLayeredImage {
+            name = "sophon-nix-runner";
+            tag = "latest";
+            contents = sophonRunnerImagePackages;
+            extraCommands = ''
+              mkdir -p workspace tmp etc/nix
+              chmod 1777 tmp
+              cat > etc/nix/nix.conf <<'EOF'
+              experimental-features = nix-command flakes
+              sandbox = false
+              filter-syscalls = false
+              EOF
+            '';
+            config = {
+              Cmd = [ "${pkgs.bashInteractive}/bin/bash" ];
+              WorkingDir = "/workspace";
+              Env = [
+                "HOME=/tmp"
+                "NIX_CONFIG=experimental-features = nix-command flakes"
+                "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "PATH=${lib.makeBinPath sophonRunnerImagePackages}"
+              ];
+            };
+          };
         };
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            ansibleEnv
-            ansible-lint
-            python3Packages.proxmoxer
-            python3Packages.requests
-            python3Packages.websocket-client
-            apacheHttpd
-            butane
-            skopeo
-            dnf5
-            qemu
-            libguestfs-with-appliance
-            proot
-            unixtools.xxd
-            nfs-utils
-            fuse
-            libnfs
-            fuseNfs
-            cloudflared
-            gnumake
-            go
-            git
-            cacert
-            buildah
-            mkpasswd
-            dig
-            bubblewrap
-            socat
-            tailscale
-          ];
+          packages = sophonDevPackages;
 
           shellHook = ''
             if [ ! -d "$HOME/.ansible/collections/ansible_collections/community/proxmox" ]; then

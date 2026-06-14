@@ -265,6 +265,63 @@ ansible-playbook site.yml \
 - Ansible 2.15+
 - Access to Proxmox API
 
+## Containerized Development
+
+This repository includes a VS Code devcontainer for developers who want the Nix
+toolchain inside Docker instead of installing Nix directly on their workstation.
+The container uses Ubuntu as the VS Code base image, installs single-user Nix,
+and enables flakes so the flake can build the Sophon development shell and
+Docker-image tarballs without requiring Nix on the host.
+
+Prerequisites on the host:
+
+- Docker or another Docker-compatible engine
+- VS Code with the Dev Containers extension
+
+Open the repository in VS Code and choose **Dev Containers: Reopen in Container**.
+The devcontainer installs the flake's `sophon-dev-env` package into the
+`vscode` user's Nix profile while the image is built, so tools such as
+`ansible-playbook`, `ansible-lint`, `butane`, `skopeo`, and `go` are available on
+the normal container `PATH` without entering `nix develop` first. The image build
+also installs the Ansible Galaxy collections used by the playbooks.
+
+Rebuild the devcontainer after changing `flake.nix` or `flake.lock` so the baked
+tool profile is refreshed. `nix develop` still works inside the container and is
+useful when testing shell changes, but it is no longer required for ordinary
+Ansible commands or VS Code extension discovery.
+
+The devcontainer sets `updateRemoteUserUID` to `false`. This avoids an extra
+Dev Containers rebuild stage that can hang on Podman-compatible Docker shims when
+they try to resolve the generated local image name as an interactive short name.
+
+The default devcontainer does not mount the host Docker or Podman socket. Docker
+hosts usually expose `/var/run/docker.sock`, while rootless Podman hosts expose a
+user-specific socket such as `/run/user/1000/podman/podman.sock`; assuming either
+one can make Dev Containers fail before the workspace opens. Build the image
+tarball inside the devcontainer, then load it from a host terminal.
+
+The flake also exposes a Nix-built Docker image containing the Sophon tooling:
+
+```bash
+nix build .#sophon-runner-image
+```
+
+From the host, load and run the image with Docker or Podman:
+
+```bash
+docker load < result
+docker run --rm -it \
+   --user "$(id -u):$(id -g)" \
+   -v "$PWD:/workspace" \
+   sophon-nix-runner:latest
+```
+
+Use `podman load` and `podman run` with the same arguments on Podman hosts.
+
+This image is a Nix/Nixpkgs-built container image, not a full NixOS boot inside
+Docker. Docker containers share the host kernel, so use a VM when you need a real
+NixOS system with its own init, kernel, and system services.
+
 ## Directory Structure
 
 ```
