@@ -1,5 +1,13 @@
 # Sophon Prestaging Runbook
 
+Prestage is the only phase that touches the internet. It pulls container
+images, builds the CoreDNS Docker Discovery image, and builds the NFS VM disk,
+writing everything into `artifacts/`.
+
+**Run it every time, including when the target site has full internet access.**
+Deploy fetches nothing — see
+[ADR-0001](docs/adr/0001-air-gapped-is-the-only-deployment-mode.md).
+
 This repo intentionally ignores `artifacts/`. The directory is a local cache
 and secret/artifact staging area, not source. Run these commands from the repo
 root.
@@ -135,7 +143,26 @@ You can also skip this manual build if you are running `site.yml` online. The
 NFS role will build the same cache automatically when Proxmox does not already
 have the `sophon-nfs-alpine.qcow2` image.
 
-## 4. Deployment-Generated Kopia Artifacts
+## 4. How Artifacts Reach the Site
+
+You do not copy anything by hand. During `site.yml`, the `nfs` role mounts the
+NFS export on the Controller with `fuse-nfs` (unprivileged, vendored in
+`flake.nix`) and copies every tar from `artifacts/containers/` into
+`/export/containers`.
+
+On first boot, InfraVM's `sophon-init.service` runs `podman load` over every
+tar under `/var/mnt/nfs/containers` before any stack starts, so compose files
+resolve their images locally.
+
+This means the Controller needs routed access to `nfs_ip`. If the fuse mount
+fails, the deploy should stop there — a missing tar surfaces several roles
+later as an unexplained image pull. See
+[ADR-0005](docs/adr/0005-artifacts-reach-the-site-over-a-fuse-mounted-nfs-export.md).
+
+> Not all of this is implemented yet. See
+> [docs/known-gaps.md](docs/known-gaps.md).
+
+## 5. Deployment-Generated Kopia Artifacts
 
 These artifacts are generated only after the NFS VM exists, because the role
 creates a matching SFTP user on that VM and records its SSH host key:
@@ -162,7 +189,7 @@ If you use a different SFTP backend, set `nfs_provision_kopia_user=false` and
 create `artifacts/kopia/id_ed25519` plus `artifacts/kopia/known_hosts` yourself
 before running the Kopia role.
 
-## 5. Deployment-Generated Traefik ACME Artifact
+## 6. Deployment-Generated Traefik ACME Artifact
 
 Traefik writes this secret backup after certificates have actually been issued:
 
@@ -183,7 +210,7 @@ ansible-playbook traefik-backup-acme.yml \
 Treat `artifacts/traefik/acme.json` as a secret. It contains ACME account and
 certificate private keys.
 
-## 6. Optional Verification
+## 7. Optional Verification
 
 ```bash
 find artifacts -maxdepth 3 -type f -print | sort
@@ -199,15 +226,4 @@ also exist:
 test -f artifacts/kopia/id_ed25519
 test -f artifacts/kopia/known_hosts
 test -f artifacts/traefik/acme.json
-```
-
-## Current Repo Notes
-
-The README references `nfs-upload.yml`, but that playbook is not present in this
-checkout. The current local artifact flow is therefore:
-
-```bash
-nix develop
-ansible-playbook prestage.yml
-ansible-playbook site.yml ...
 ```
