@@ -20,10 +20,11 @@ one file everybody edits. ADR-0008 is the fix.
 ## Artifacts
 
 **`prestage_container_images` and the `*_image_tars` lists are kept in sync by
-hand.** [prestage.yml](../prestage.yml) decides what gets pulled and saved;
-each role's `defaults/main.yml` decides what gets loaded. Nothing checks that
-they agree. Adding a service means editing both, and forgetting the prestage
-side is only caught at deploy time by the `stat` check in
+hand.** [roles/prestage/defaults/main.yml](../roles/prestage/defaults/main.yml)
+decides what gets pulled and saved; each role's `defaults/main.yml` decides what
+gets loaded. Nothing checks that they agree. Adding a service means editing
+both, and forgetting the prestage side is only caught at deploy time by the
+`stat` check in
 [roles/portainer_stack/tasks/main.yml](../roles/portainer_stack/tasks/main.yml).
 — ADR-0005
 
@@ -87,20 +88,6 @@ system runs, reports success, and protects nothing. — ADR-0009
 hardcodes public resolvers. With no egress every non-local lookup stalls until
 timeout. `vnet_dns` is already discovered from the Proxmox network
 configuration and is the correct forwarder. — ADR-0006
-
-**No Controller DNS preflight.**
-Nothing asserts, after the `coredns` role, that the Controller resolves
-`<domain>` names to `infravm_ip`. If they resolve to a tunnel hostname instead,
-Keycloak configuration talks to the wrong endpoint and fails obscurely. —
-ADR-0007
-
-**Bootstrap tunnel remnants.**
-`infravm_portainer_url` in [group_vars/all.yml](../group_vars/all.yml) still
-defaults to `https://portainer-bootstrap.<domain>`, and the Cloudflare
-bootstrap ingress and CNAME tasks remain in
-[roles/infravm/tasks/main.yml](../roles/infravm/tasks/main.yml). The Controller
-is required to have direct vnet access, so this path should not exist. —
-ADR-0002
 
 **No NTP source on InfraVM.**
 Fedora CoreOS with no egress cannot reach the default NTP pool and will drift.

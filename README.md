@@ -35,26 +35,40 @@ disk, writing everything into `artifacts/`.
 **Deploy** fetches nothing. It provisions Proxmox and brings up every service
 using only what Prestage produced.
 
-Prestage is mandatory even when the target has full internet access. It costs
-one extra command and it is the only thing that keeps the disconnected path
-working without a second, untested code path — see
-[ADR-0001](docs/adr/0001-air-gapped-is-the-only-deployment-mode.md).
+Prestage always runs, even when the target has full internet access — it is the
+only thing that keeps the disconnected path working without a second, untested
+code path (see
+[ADR-0001](docs/adr/0001-air-gapped-a-supported-deployment-mode.md)). If you are
+connected, `site.yml` runs it for you and you never think about it. It is a
+no-op once `artifacts/` is populated, so it costs nothing on later runs and
+never reaches the network at a disconnected site.
+
+Run `prestage.yml` by hand only when the two phases happen on **different
+machines** — stage on a connected host, carry `artifacts/` in, deploy there.
 
 ## Quick start
 
 ```bash
 nix develop
 
-# Phase 1 — connected. Populates artifacts/.
-ansible-playbook prestage.yml
-
-# Phase 2 — provisions the site.
 ansible-playbook site.yml \
   -e proxmox_host=10.0.60.2 \
   -e proxmox_password=<password> \
   -e domain_name=example.com \
   -e nfs_ip=10.0.60.10 \
   -e infravm_ip=10.0.60.11
+```
+
+### Disconnected site
+
+Stage on a connected machine, copy `artifacts/` across, then deploy:
+
+```bash
+# Connected machine
+ansible-playbook prestage.yml
+
+# At the site, after copying artifacts/ into the repo
+ansible-playbook site.yml -e ...
 ```
 
 Read [docs/preconditions.md](docs/preconditions.md) first. Several required

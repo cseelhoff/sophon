@@ -76,12 +76,21 @@ services:
           --keep-weekly={{ kopia_keep_weekly }} \
           --keep-monthly={{ kopia_keep_monthly }} \
           --keep-annual={{ kopia_keep_annual }}
-        kopia policy set /source --snapshot-time="cron:{{ kopia_snapshot_cron }}" || true
+        kopia policy set /source --snapshot-time-crontab="{{ kopia_snapshot_cron }}" || true
         exec kopia server start \
           --insecure \
           --address=0.0.0.0:{{ kopia_port }}
+    # The image ships curl but NOT wget, and kopia's UI API rejects basic
+    # auth (401 even with the server credentials -- it wants a session +
+    # CSRF token). So the check asserts only what Traefik actually needs:
+    # that the HTTP listener answers. 401 is the expected healthy response.
+    # This matters more than it looks -- Traefik's Docker provider silently
+    # skips unhealthy containers, so a healthcheck that can never pass makes
+    # the service unroutable and returns 404 with nothing in Traefik's log.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:{{ kopia_port }}/api/v1/repo/status"]
+      test:
+        - CMD-SHELL
+        - curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:{{ kopia_port }}/api/v1/repo/status | grep -qE '^(200|401)$$'
       interval: 30s
       timeout: 10s
       retries: 5

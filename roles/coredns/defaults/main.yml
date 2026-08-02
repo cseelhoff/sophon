@@ -17,6 +17,12 @@ coredns_config_dir: "/opt/coredns"
 coredns_forward_dns: "9.9.9.9"
 coredns_domain_name: "{{ domain_name | default('', true) }}"
 
+# FQDN the Controller preflight resolves (ADR-0007). traefik.<domain> is the
+# static anchor CoreDNS serves from TRAEFIK_CNAME/HOST_IP, so it answers as
+# soon as the container is up; every other service name is a CNAME to it that
+# only appears once discovery sees that container.
+coredns_preflight_fqdn: "traefik.{{ coredns_domain_name }}"
+
 # Cloudflare settings
 coredns_cf_account_id: ""
 coredns_cf_tunnel_id: ""

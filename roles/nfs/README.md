@@ -101,17 +101,16 @@ This role integrates with the Sophon deployment workflow:
 
 ## Air-Gapped Mode
 
-For air-gapped deployments:
+`site.yml` stages the Alpine image itself when it is missing, so a connected
+Controller needs no extra step. For a disconnected site, stage on a connected
+machine and copy `artifacts/` across:
 
 ```bash
-# Phase 1: Prestage includes Alpine image
+# Connected machine
 ansible-playbook prestage.yml
 
-# Phase 2: Upload includes Alpine image upload
-ansible-playbook nfs-upload.yml
-
-# Phase 3: Deploy creates NFS server from uploaded image
-ansible-playbook site.yml -e proxmox_airgapped=true -e nfs_ip=10.0.1.35
+# At the site, after copying artifacts/ into the repo
+ansible-playbook site.yml -e nfs_ip=10.0.1.35
 ```
 
 ## Troubleshooting

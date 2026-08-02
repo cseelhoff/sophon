@@ -478,9 +478,13 @@
         prefix: nfs_test_
       register: nfs_temp_mount
 
+    # -p 0 disables FUSE default_permissions. The export is all_squash with
+    # anonuid=1000, so files land owned by 1000 while the controller runs as
+    # some other uid; with the kernel checking locally, overwriting or
+    # chmod-ing our own uploads fails EPERM. The server still enforces access.
     - name: Test NFS mount and verify contents
       ansible.builtin.shell:
-        cmd: "fuse-nfs -n 'nfs://{{ nfs_ip }}{{ nfs_export_root }}?rsize=1048576&wsize=1048576&readahead=1048576' -m {{ nfs_temp_mount.path }} -d"
+        cmd: "fuse-nfs -n 'nfs://{{ nfs_ip }}{{ nfs_export_root }}?rsize=1048576&wsize=1048576&readahead=1048576' -m {{ nfs_temp_mount.path }} -d -p 0"
       register: nfs_mount_result
       changed_when: true
       failed_when: false
@@ -501,13 +505,23 @@
       ansible.builtin.stat:
         path: "{{ sophon_containers_dir }}/{{ portainer_image_tarname }}"
       register: nfs_portainer_local
-      failed_when: not nfs_portainer_local.stat.exists
+
+    - name: Fail if the Portainer image tar was never prestaged
+      ansible.builtin.fail:
+        msg: >-
+          {{ sophon_containers_dir }}/{{ portainer_image_tarname }} does not
+          exist. InfraVM loads Portainer from this tar at first boot and
+          Ansible has no other way in. Run 'ansible-playbook prestage.yml'
+          first.
+      when: not nfs_portainer_local.stat.exists
 
     - name: Check remote portainer image size
       ansible.builtin.stat:
         path: "{{ nfs_temp_mount.path }}/containers/{{ portainer_image_tarname }}"
       register: nfs_portainer_remote
 
+    # Reads back over fuse-nfs are unreliable, so the size comparison above is
+    # the only usable idempotency check; copy's own checksum always differs.
     - name: Upload portainer image to NFS
       ansible.builtin.copy:
         src: "{{ sophon_containers_dir }}/{{ portainer_image_tarname }}"

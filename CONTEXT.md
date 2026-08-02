@@ -8,8 +8,11 @@ internet-connected; a site with no egress is a supported degraded mode.
 ## Language
 
 **Prestage**:
-The connected phase that produces every artifact the deployment will need.
-`prestage.yml` is the only part of Sophon permitted to touch the internet.
+The connected phase that produces every artifact the deployment will need. The
+`prestage` role is the only part of Sophon permitted to touch the internet.
+`site.yml` invokes it automatically; `prestage.yml` runs it standalone when
+Prestage and Deploy happen on different machines. No-op once `artifacts/` is
+populated.
 _Avoid_: build, download step, phase 1
 
 **Deploy**:

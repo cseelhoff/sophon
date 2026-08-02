@@ -98,7 +98,9 @@
         infravm_ip: "{{ item.split(' ')[0] }}"
       loop: "{{ _arp_entries }}"
       when:
-        - infravm_ip == ""
+        # The enclosing block runs when these are undefined as well as when
+        # they are empty, so a bare `== ""` blows up on the undefined case.
+        - infravm_ip is not defined or infravm_ip == ""
         - _infravm_mac is defined
         - _infravm_mac in item
 
@@ -118,7 +120,7 @@
       ansible.builtin.set_fact:
         nfs_ip: "{{ _available_ips[0] }}"
       when:
-        - nfs_ip == ""
+        - nfs_ip is not defined or nfs_ip == ""
         - _available_ips | length > 0
 
     - name: Remove NFS IP from available IPs
@@ -126,6 +128,7 @@
         _available_ips: "{{ _available_ips | reject('eq', nfs_ip) | list }}"
       when:
         - _available_ips is defined
+        - nfs_ip is defined
 
     - name: Set discovered InfraVM IP
       ansible.builtin.set_fact:

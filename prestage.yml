@@ -2,145 +2,20 @@
 # =============================================================================
 # Sophon Prestage Playbook
 # =============================================================================
-# Pre-stages local artifacts before deployment.
-# Container images are pulled/built and saved to tar files for efficient
-# distribution via NFS. The NFS VM image is built and cached locally.
+# Populates artifacts/ with everything Deploy needs: container image tars, the
+# CoreDNS Docker Discovery build, and the Alpine NFS VM disk.
+#
+# site.yml runs the same role automatically, so this playbook is only needed
+# when Prestage and Deploy happen on different machines — build artifacts on a
+# connected host, carry artifacts/ to the disconnected site, deploy there.
 #
 # Usage:
 #   ansible-playbook prestage.yml
+#   ansible-playbook prestage.yml -e prestage_force=true   # refresh everything
 
 - name: Prestage deployment artifacts
   hosts: localhost
-  vars:
-    prestage_artifacts_dir: "{{ playbook_dir }}/artifacts"
-    prestage_containers_dir: "{{ playbook_dir }}/artifacts/containers"
-    # Every image any role deploys. A name missing here is a stack that cannot
-    # start without egress. Keep in sync with the *_image_tars lists in
-    # roles/*/defaults/main.yml.
-    prestage_container_images:
-      - "{{ portainer_image }}"
-      - "docker.io/library/traefik:v3.2"
-      - "docker.io/gitea/gitea:1.22"
-      - "docker.io/library/postgres:16-alpine"
-      - "docker.io/kopia/kopia:0.21.1"
-      - "docker.io/bitnamilegacy/openldap:2.6.10-debian-12-r4"
-      - "docker.io/ldez/traefik-certs-dumper:v2.8.3"
-      - "quay.io/keycloak/keycloak:26.5"
-    prestage_coredns_dockerdiscovery_repo: "https://github.com/cseelhoff-ms/coredns-dockerdiscovery.git"
-    prestage_coredns_dockerdiscovery_src: "{{ (lookup('env', 'XDG_CACHE_HOME') | default(lookup('env', 'HOME') ~ '/.cache', true)) }}/sophon/coredns-dockerdiscovery"
-    prestage_coredns_dockerdiscovery_image: "coredns-dockerdiscovery:latest"
-    prestage_coredns_dockerdiscovery_tar: "{{ prestage_containers_dir }}/coredns-dockerdiscovery.tar"
-    prestage_nfs_build_dir: "{{ prestage_artifacts_dir }}/nfs-vm-build"
-    prestage_nfs_image_filename: "sophon-nfs-alpine.qcow2"
-    prestage_nfs_image_path: "{{ prestage_nfs_build_dir }}/{{ prestage_nfs_image_filename }}"
-    prestage_nfs_alpine_version: "3.21"
-    prestage_nfs_os_disk_size: "10G"
   tasks:
-    - name: Create containers staging directory
-      ansible.builtin.file:
-        path: "{{ prestage_containers_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Process container images
-      ansible.builtin.shell: |
-        TAR_FILE="{{ prestage_containers_dir }}/{{ (item.split(':')[0].split('/')[-2:] | join('-')) }}_{{ item.split(':')[-1] }}.tar"
-        [ ! -f "$TAR_FILE" ] && podman pull "{{ item }}" && podman save -o "$TAR_FILE" "{{ item }}"
-      loop: "{{ prestage_container_images }}"
-      loop_control:
-        label: "{{ item }}"
-      register: process_result
-      failed_when: false
-      changed_when: process_result.rc == 0
-
-    - name: Clone or update CoreDNS Docker Discovery source
-      ansible.builtin.git:
-        repo: "{{ prestage_coredns_dockerdiscovery_repo }}"
-        dest: "{{ prestage_coredns_dockerdiscovery_src }}"
-        version: master
-        update: true
-      register: prestage_coredns_dockerdiscovery_repo_state
-
-    - name: Check CoreDNS Docker Discovery image tar
-      ansible.builtin.stat:
-        path: "{{ prestage_coredns_dockerdiscovery_tar }}"
-      register: prestage_coredns_dockerdiscovery_tar_stat
-
-    - name: Build CoreDNS Docker Discovery container image
-      ansible.builtin.command:
-        cmd: >-
-          podman build
-          -t {{ prestage_coredns_dockerdiscovery_image }}
-          {{ prestage_coredns_dockerdiscovery_src }}
-      when: >-
-        prestage_coredns_dockerdiscovery_repo_state.changed
-        or not prestage_coredns_dockerdiscovery_tar_stat.stat.exists
-      changed_when: true
-
-    - name: Save CoreDNS Docker Discovery image tar
-      ansible.builtin.command:
-        cmd: >-
-          podman save
-          -o {{ prestage_coredns_dockerdiscovery_tar }}
-          {{ prestage_coredns_dockerdiscovery_image }}
-      when: >-
-        prestage_coredns_dockerdiscovery_repo_state.changed
-        or not prestage_coredns_dockerdiscovery_tar_stat.stat.exists
-      changed_when: true
-
-    - name: Create NFS VM image build directory
-      ansible.builtin.file:
-        path: "{{ prestage_nfs_build_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Copy NFS VM image builder
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/nfs_vm_build/build-alpine-image"
-        dest: "{{ prestage_nfs_build_dir }}/build-alpine-image"
-        mode: "0755"
-
-    - name: Write NFS VM chroot setup script
-      ansible.builtin.copy:
-        dest: "{{ prestage_nfs_build_dir }}/nfs-chroot-setup.sh"
-        mode: "0755"
-        content: |
-          #!/bin/sh
-          set -ex
-
-          rc-update add qemu-guest-agent default
-          rc-update add rpcbind default
-          rc-update add nfs default
-          rc-update add sshd default
-          rc-update add networking boot
-          rc-update add hostname boot
-
-          mkdir -p /export
-          chmod 755 /export
-
-          echo "/export *(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=100)" > /etc/exports
-          echo "sophon-nfs" > /etc/hostname
-
-          cat > /etc/network/interfaces <<'IFACE'
-          auto lo
-          iface lo inet loopback
-
-          auto eth0
-          iface eth0 inet dhcp
-          IFACE
-
-    - name: Build NFS Alpine qcow2 image
-      ansible.builtin.command:
-        cmd: >-
-          {{ prestage_nfs_build_dir }}/build-alpine-image
-          --image-size {{ prestage_nfs_os_disk_size }}
-          --image-format qcow2
-          --branch v{{ prestage_nfs_alpine_version }}
-          --packages "qemu-guest-agent nfs-utils openssh parted e2fsprogs openrc util-linux"
-          --script-chroot {{ prestage_nfs_build_dir }}/nfs-chroot-setup.sh
-          {{ prestage_nfs_image_path }}
-        creates: "{{ prestage_nfs_image_path }}"
-      environment:
-        SSL_CERT_FILE: "{{ lookup('env', 'SSL_CERT_FILE') | default('/etc/ssl/certs/ca-certificates.crt', true) }}"
-        NIX_SSL_CERT_FILE: "{{ lookup('env', 'NIX_SSL_CERT_FILE') | default('', true) }}"
-        LIBGUESTFS_BACKEND: "direct"
+    - name: Stage artifacts
+      ansible.builtin.include_role:
+        name: prestage

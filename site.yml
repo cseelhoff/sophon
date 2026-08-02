@@ -88,6 +88,11 @@
       vars:
         _secrets_dir: "{{ playbook_dir }}/artifacts/secrets"
 
+    # No-op once artifacts/ is populated, so a disconnected site never reaches
+    # the network here. Run prestage.yml separately to stage on another machine.
+    - name: Stage artifacts
+      ansible.builtin.include_role: { name: prestage }
+
     - name: Authenticate with Proxmox
       ansible.builtin.include_role: { name: proxmox }
 

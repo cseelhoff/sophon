@@ -41,6 +41,36 @@
     #   delay: 3
     #   changed_when: false
 
+    # ADR-0007. Deploy addresses services by FQDN over validated TLS from here
+    # on -- keycloak/tasks/configure.yml alone makes 27 such calls -- so the
+    # Controller's own resolver has to answer for <domain>. getent goes through
+    # NSS, the same path urllib uses inside the uri module, so this fails in the
+    # same way the real calls would.
+    - name: Preflight Controller resolution of the service domain
+      ansible.builtin.command:
+        cmd: "getent ahostsv4 {{ coredns_preflight_fqdn }}"
+      register: coredns_preflight
+      changed_when: false
+      failed_when: false
+
+    # Matching the address matters as much as resolving at all: a Controller
+    # with internet access resolves these names through public DNS and hairpins
+    # out via the Cloudflare tunnel, which works until the site loses egress.
+    - name: Fail if the Controller does not resolve the service domain to InfraVM
+      when: infravm_ip not in coredns_preflight.stdout
+      ansible.builtin.fail:
+        msg: |
+          The Controller cannot resolve {{ coredns_preflight_fqdn }} to {{ infravm_ip }}.
+
+          getent returned: {{ coredns_preflight.stdout | trim | replace('\n', ' / ') | default('(no answer)', true) }}
+
+          CoreDNS is up and authoritative for {{ coredns_domain_name }} -- verify with:
+              dig @{{ infravm_ip }} {{ coredns_preflight_fqdn }} +short
+
+          Deploy addresses every remaining service by FQDN, so point this
+          machine's resolver at {{ infravm_ip }} and re-run. Sophon does not
+          edit the Controller's network configuration itself.
+
     - name: Display CoreDNS status
       ansible.builtin.debug:
-        msg: "CoreDNS ready at {{ infravm_ip }}:{{ coredns_dns_port }}"
+        msg: "CoreDNS ready at {{ infravm_ip }}:{{ coredns_dns_port }}, Controller resolution verified"

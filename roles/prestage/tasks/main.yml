@@ -1,0 +1,152 @@
+---
+# Pulls container images, builds the CoreDNS Docker Discovery image, and builds
+# the Alpine NFS VM disk into artifacts/.
+#
+# site.yml includes this role too, so a connected operator never runs it by
+# hand. It is a no-op once every artifact exists, which is what keeps the
+# disconnected path working: carry artifacts/ in and nothing here touches the
+# network.
+
+- name: Derive the tar filename for each image
+  ansible.builtin.set_fact:
+    prestage_image_tars: >-
+      {{ prestage_image_tars | default([])
+         + [sophon_containers_dir ~ '/'
+            ~ (item.split(':')[0].split('/')[-2:] | join('-'))
+            ~ '_' ~ item.split(':')[-1] ~ '.tar'] }}
+  loop: "{{ prestage_container_images }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Stat every artifact prestage is responsible for
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ prestage_image_tars + [prestage_coredns_tar, prestage_nfs_image_path] }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: prestage_artifact_stat
+
+- name: Decide whether prestage has work to do
+  ansible.builtin.set_fact:
+    prestage_missing: "{{ prestage_artifact_stat.results | rejectattr('stat.exists') | map(attribute='item') | list }}"
+
+- name: Report that artifacts are already staged
+  ansible.builtin.debug:
+    msg: "All prestage artifacts present — skipping. Pass -e prestage_force=true to refresh."
+  when:
+    - prestage_missing | length == 0
+    - not (prestage_force | bool)
+
+- name: Stage artifacts
+  when: prestage_missing | length > 0 or (prestage_force | bool)
+  block:
+    - name: Report what is being staged
+      ansible.builtin.debug:
+        msg: >-
+          Staging {{ prestage_missing | length }} missing artifact(s):
+          {{ prestage_missing | map('basename') | join(', ') }}
+
+    - name: Create containers staging directory
+      ansible.builtin.file:
+        path: "{{ sophon_containers_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Pull and save container images
+      ansible.builtin.shell: |
+        set -e
+        TAR_FILE="{{ sophon_containers_dir }}/{{ (item.split(':')[0].split('/')[-2:] | join('-')) }}_{{ item.split(':')[-1] }}.tar"
+        if [ -f "$TAR_FILE" ] && [ "{{ prestage_force | bool | lower }}" != "true" ]; then
+          echo SKIPPED
+          exit 0
+        fi
+        podman pull "{{ item }}"
+        podman save -o "$TAR_FILE" "{{ item }}"
+      loop: "{{ prestage_container_images }}"
+      loop_control:
+        label: "{{ item }}"
+      register: prestage_pull
+      changed_when: "'SKIPPED' not in prestage_pull.stdout"
+
+    - name: Clone or update CoreDNS Docker Discovery source
+      ansible.builtin.git:
+        repo: "{{ prestage_coredns_repo }}"
+        dest: "{{ prestage_coredns_src }}"
+        version: master
+        update: true
+      register: prestage_coredns_src_state
+
+    - name: Build CoreDNS Docker Discovery container image
+      ansible.builtin.command:
+        cmd: >-
+          podman build
+          -t {{ prestage_coredns_image }}
+          {{ prestage_coredns_src }}
+      when: prestage_coredns_src_state.changed or prestage_coredns_tar in prestage_missing or (prestage_force | bool)
+      changed_when: true
+
+    - name: Save CoreDNS Docker Discovery image tar
+      ansible.builtin.command:
+        cmd: >-
+          podman save
+          -o {{ prestage_coredns_tar }}
+          {{ prestage_coredns_image }}
+      when: prestage_coredns_src_state.changed or prestage_coredns_tar in prestage_missing or (prestage_force | bool)
+      changed_when: true
+
+    - name: Create NFS VM image build directory
+      ansible.builtin.file:
+        path: "{{ prestage_nfs_build_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy NFS VM image builder
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/nfs_vm_build/build-alpine-image"
+        dest: "{{ prestage_nfs_build_dir }}/build-alpine-image"
+        mode: "0755"
+
+    - name: Write NFS VM chroot setup script
+      ansible.builtin.copy:
+        dest: "{{ prestage_nfs_build_dir }}/nfs-chroot-setup.sh"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          set -ex
+
+          rc-update add qemu-guest-agent default
+          rc-update add rpcbind default
+          rc-update add nfs default
+          rc-update add sshd default
+          rc-update add networking boot
+          rc-update add hostname boot
+
+          mkdir -p /export
+          chmod 755 /export
+
+          echo "/export *(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=100)" > /etc/exports
+          echo "sophon-nfs" > /etc/hostname
+
+          cat > /etc/network/interfaces <<'IFACE'
+          auto lo
+          iface lo inet loopback
+
+          auto eth0
+          iface eth0 inet dhcp
+          IFACE
+
+    - name: Build NFS Alpine qcow2 image
+      ansible.builtin.command:
+        cmd: >-
+          {{ prestage_nfs_build_dir }}/build-alpine-image
+          --image-size {{ prestage_nfs_os_disk_size }}
+          --image-format qcow2
+          --branch v{{ prestage_nfs_alpine_version }}
+          --packages "qemu-guest-agent nfs-utils openssh parted e2fsprogs openrc util-linux"
+          --script-chroot {{ prestage_nfs_build_dir }}/nfs-chroot-setup.sh
+          {{ prestage_nfs_image_path }}
+        creates: "{{ omit if (prestage_force | bool) else prestage_nfs_image_path }}"
+      environment:
+        SSL_CERT_FILE: "{{ lookup('env', 'SSL_CERT_FILE') | default('/etc/ssl/certs/ca-certificates.crt', true) }}"
+        NIX_SSL_CERT_FILE: "{{ lookup('env', 'NIX_SSL_CERT_FILE') | default('', true) }}"
+        LIBGUESTFS_BACKEND: "direct"

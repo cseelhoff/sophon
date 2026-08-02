@@ -11,8 +11,8 @@
 # fresh volume with the existing ACME account + certs.
 #
 # Required vars (pass with -e or set in inventory):
-#   domain_name              - e.g. example.com (drives infravm_portainer_url)
-#   infravm_ip               - fallback if portainer-bootstrap.<domain> unreachable
+#   domain_name              - e.g. example.com
+#   infravm_ip               - drives infravm_portainer_url
 #   portainer_admin_password - same value used during deploy
 #
 # Usage:

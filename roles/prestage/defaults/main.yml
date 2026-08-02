@@ -1,0 +1,31 @@
+---
+# Re-fetch and rebuild every artifact even if it is already on disk.
+prestage_force: false
+
+# Every image any role deploys. A name missing here is a stack that cannot
+# start without egress. Keep in sync with the *_image_tars lists in
+# roles/*/defaults/main.yml.
+prestage_container_images:
+  - "{{ portainer_image }}"
+  - "docker.io/library/traefik:v3.2"
+  - "docker.io/gitea/gitea:1.22"
+  - "docker.io/library/postgres:16-alpine"
+  - "docker.io/kopia/kopia:0.21.1"
+  - "docker.io/bitnamilegacy/openldap:2.6.10-debian-12-r4"
+  - "docker.io/ldez/traefik-certs-dumper:v2.8.3"
+  - "quay.io/keycloak/keycloak:26.5"
+
+prestage_artifacts_dir: "{{ playbook_dir }}/artifacts"
+
+prestage_coredns_repo: "https://github.com/cseelhoff-ms/coredns-dockerdiscovery.git"
+prestage_coredns_src: >-
+  {{ (lookup('env', 'XDG_CACHE_HOME')
+      | default(lookup('env', 'HOME') ~ '/.cache', true)) }}/sophon/coredns-dockerdiscovery
+prestage_coredns_image: "coredns-dockerdiscovery:latest"
+prestage_coredns_tar: "{{ sophon_containers_dir }}/coredns-dockerdiscovery.tar"
+
+prestage_nfs_build_dir: "{{ prestage_artifacts_dir }}/nfs-vm-build"
+prestage_nfs_image_filename: "sophon-nfs-alpine.qcow2"
+prestage_nfs_image_path: "{{ prestage_nfs_build_dir }}/{{ prestage_nfs_image_filename }}"
+prestage_nfs_alpine_version: "3.21"
+prestage_nfs_os_disk_size: "10G"

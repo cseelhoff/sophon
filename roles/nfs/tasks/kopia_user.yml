@@ -13,8 +13,8 @@
 #        - create the {{ kopia_sftp_username }} unix user (nologin, key-only)
 #        - install the public key as authorized_keys
 #        - create the SFTP repo directory {{ kopia_sftp_path }}
-#        - emit the SSH host public key as the LAST line of stdout
-#   3. Persists a one-line known_hosts entry to {{ kopia_known_hosts_file }}.
+#        - emit every SSH host public key after a ---HOSTKEYS--- marker
+#   3. Persists those as known_hosts entries in {{ kopia_known_hosts_file }}.
 #
 # Idempotent: re-running is safe and a no-op when nothing changed.
 #
@@ -73,6 +73,13 @@
       addgroup -S {{ kopia_sftp_username }} 2>/dev/null || true
       adduser -D -S -G {{ kopia_sftp_username }} -s /sbin/nologin \
         -h /home/{{ kopia_sftp_username }} {{ kopia_sftp_username }} 2>/dev/null || true
+
+      # adduser leaves "!" in the shadow password field, which OpenSSH reads as
+      # a locked account and refuses at preauth even for key-only logins; the
+      # client only ever sees the connection drop. "*" means no password will
+      # ever match while leaving the account unlocked.
+      sed -i 's|^{{ kopia_sftp_username }}:[^:]*:|{{ kopia_sftp_username }}:*:|' /etc/shadow
+
       install -d -m 700 -o {{ kopia_sftp_username }} -g {{ kopia_sftp_username }} \
         /home/{{ kopia_sftp_username }}/.ssh
       echo '{{ nfs_kopia_pub_key }}' > /home/{{ kopia_sftp_username }}/.ssh/authorized_keys
@@ -91,9 +98,18 @@
       # idempotent -- only creates keys that are missing.
       ssh-keygen -A
 
-      # LAST line of stdout: the SSH host public key, consumed below to
-      # build the controller-side known_hosts file.
-      cat /etc/ssh/ssh_host_ed25519_key.pub
+      # Everything after this marker is host public keys, consumed below to
+      # build the controller-side known_hosts file. Every type is emitted,
+      # not just ed25519: kopia's Go SSH client leaves HostKeyAlgorithms
+      # unset, so it negotiates Go's own default preference order, which
+      # offers ECDSA ahead of ed25519. ssh-keygen -A above generates an ECDSA
+      # key, so the server answers with that one, and a known_hosts holding
+      # only the ed25519 key makes it look like the host presented an
+      # unexpected key -- the client aborts with "knownhosts: key mismatch".
+      echo '---HOSTKEYS---'
+      for f in /etc/ssh/ssh_host_*_key.pub; do
+        if [ -f "$f" ]; then cat "$f"; fi
+      done
 
 - name: Fail if kopia provisioning script failed
   ansible.builtin.fail:
@@ -103,16 +119,21 @@
       stderr: {{ proxmox_qga_result.stderr }}
   when: not proxmox_qga_result.success
 
-- name: Build known_hosts entry from QGA output
+# Keeps only the <type> <base64> pair off each key line, dropping the trailing
+# comment, and prefixes the host. Anything the shell echoed before the marker
+# (warnings, adduser chatter) is discarded by splitting on it.
+- name: Build known_hosts entries from QGA output
   vars:
-    _hostkey_line: "{{ (proxmox_qga_result.stdout | trim).splitlines() | last | default('') }}"
-    _hostkey_parts: "{{ _hostkey_line.split() }}"
+    _hostkey_lines: "{{ ((proxmox_qga_result.stdout | trim).split('---HOSTKEYS---') | last).splitlines()
+                        | map('trim') | select('match', '^(ssh-|ecdsa-|sk-)') | list }}"
   ansible.builtin.set_fact:
-    nfs_kopia_known_hosts_entry: "{{ kopia_sftp_host }} {{ _hostkey_parts[0] | default('') }} {{ _hostkey_parts[1] | default('') }}"
-  failed_when: (_hostkey_parts | length) < 2 or not _hostkey_line.startswith('ssh-')
+    nfs_kopia_known_hosts_entries: "{{ _hostkey_lines
+                                      | map('regex_replace', '^(\\S+)\\s+(\\S+).*$', kopia_sftp_host ~ ' \\1 \\2')
+                                      | list }}"
+  failed_when: (_hostkey_lines | length) < 1
 
 - name: Persist kopia known_hosts to artifacts
   ansible.builtin.copy:
-    content: "{{ nfs_kopia_known_hosts_entry }}\n"
+    content: "{{ nfs_kopia_known_hosts_entries | join('\n') }}\n"
     dest: "{{ kopia_known_hosts_file }}"
     mode: "0600"

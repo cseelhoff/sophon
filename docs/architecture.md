@@ -70,14 +70,22 @@ re-run.
 
 ```
  ── Prestage (needs internet) ──────────────────────────────────────
-   skopeo copy   ──▶ artifacts/containers/*.tar
-   docker build  ──▶ artifacts/containers/coredns-dockerdiscovery.tar
-   libguestfs    ──▶ artifacts/alpine-nfs.qcow2
+   podman pull   ──▶ artifacts/containers/*.tar
+   podman build  ──▶ artifacts/containers/coredns-dockerdiscovery.tar
+   libguestfs    ──▶ artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
 
  ── Deploy (needs nothing external) ────────────────────────────────
    artifacts/  ──fuse-nfs──▶  /export/containers  ──podman load──▶ Portainer
    artifacts/  ──────────── Portainer /docker/images/load ───────▶ everything else
 ```
+
+Prestage is `roles/prestage`, included by `site.yml` before anything is
+provisioned and wrapped by `prestage.yml` for standalone use. It stats every
+artifact it owns and does nothing at all when they are all present — including
+the one `git` clone that needs egress. That is what lets Deploy invoke it
+unconditionally without breaking a disconnected site: carry `artifacts/` in and
+the role is a no-op. See
+[ADR-0001](adr/0001-air-gapped-a-supported-deployment-mode.md).
 
 Prestage writes everything into `artifacts/`. Deploy uses two transports,
 split by bootstrap order:

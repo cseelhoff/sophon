@@ -4,9 +4,17 @@ Prestage is the only phase that touches the internet. It pulls container
 images, builds the CoreDNS Docker Discovery image, and builds the NFS VM disk,
 writing everything into `artifacts/`.
 
-**Run it every time, including when the target site has full internet access.**
-Deploy fetches nothing — see
-[ADR-0001](docs/adr/0001-air-gapped-is-the-only-deployment-mode.md).
+**`site.yml` runs Prestage for you.** If the machine deploying is the machine
+with internet access, you never run this playbook by hand — deploy and it
+stages what is missing first.
+
+Run `prestage.yml` directly when Prestage and Deploy happen on **different
+machines**: stage here, copy `artifacts/` to the disconnected site, deploy
+there. Deploy fetches nothing — see
+[ADR-0001](docs/adr/0001-air-gapped-a-supported-deployment-mode.md).
+
+Either way Prestage is a no-op once every artifact exists, so it never reaches
+the network at a site that already has `artifacts/`.
 
 This repo intentionally ignores `artifacts/`. The directory is a local cache
 and secret/artifact staging area, not source. Run these commands from the repo
@@ -25,7 +33,8 @@ The shell provides Ansible, Podman/Buildah-related tools, `guestfish`,
 
 This runs the checked-in Ansible prestage playbook. It pulls standard container
 images, builds the CoreDNS Docker Discovery image tar, and builds the NFS VM
-qcow2 cache.
+qcow2 cache. Artifacts already on disk are left alone; pass
+`-e prestage_force=true` to re-fetch and rebuild everything.
 
 ```bash
 ansible-playbook prestage.yml
@@ -40,9 +49,9 @@ artifacts/containers/library-traefik_v3.2.tar
 artifacts/containers/gitea-gitea_1.22.tar
 artifacts/containers/library-postgres_16-alpine.tar
 artifacts/containers/kopia-kopia_0.21.1.tar
-artifacts/containers/osixia-openldap_1.5.0.tar
-artifacts/containers/osixia-phpldapadmin_0.9.0.tar
-artifacts/containers/cloudflare-cloudflared_latest.tar
+artifacts/containers/bitnamilegacy-openldap_2.6.10-debian-12-r4.tar
+artifacts/containers/ldez-traefik-certs-dumper_v2.8.3.tar
+artifacts/containers/keycloak-keycloak_26.5.tar
 artifacts/containers/coredns-dockerdiscovery.tar
 artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
 ```

@@ -17,8 +17,15 @@ The machine you run Ansible from.
 | DNS resolution for `<domain>` pointing at CoreDNS on `infravm_ip` | Keycloak configuration and Traefik checks run against `https://auth.<domain>` etc. from the Controller — see [ADR-0007](adr/0007-controller-resolves-service-names-through-coredns.md) |
 
 The DNS requirement is circular on a first run: CoreDNS does not exist until
-the `coredns` role has run. Point the Controller's resolver at `infravm_ip`
-after that role completes, or add the service names to `/etc/hosts`.
+the `coredns` role has run. That role therefore ends with a preflight that
+resolves `traefik.<domain>` through the Controller's own resolver and asserts
+the answer is `infravm_ip`. On a first run it stops there with an actionable
+message; point the resolver at `infravm_ip` (or add the service names to
+`/etc/hosts`) and re-run. Deploy is idempotent, so the second run picks up
+where the first stopped.
+
+Sophon never edits the Controller's network configuration. Checking is the
+role's job; changing it is the operator's.
 
 ## Proxmox host
 
@@ -90,11 +97,14 @@ sufficient. See [ADR-0010](adr/0010-portainer-is-the-deployment-substrate.md).
 
 ## Prestage
 
-`ansible-playbook prestage.yml` must have been run successfully, on a machine
-with internet access, and `artifacts/` must be present on the Controller.
+`artifacts/` must be populated before any provisioning happens. `site.yml` does
+this for you by running the `prestage` role first, so a Controller with internet
+access needs nothing extra.
 
-Deploy fetches nothing. This holds even when the target site has full internet
-access ([ADR-0001](adr/0001-air-gapped-is-the-only-deployment-mode.md)). See
+If the Controller is disconnected, `ansible-playbook prestage.yml` must have
+been run successfully on a machine with internet access and `artifacts/` copied
+across. Deploy itself fetches nothing
+([ADR-0001](adr/0001-air-gapped-a-supported-deployment-mode.md)). See
 [prestage.md](../prestage.md) for the runbook.
 
 ## Summary: a complete invocation
