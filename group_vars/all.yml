@@ -4,6 +4,47 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Site settings, sourced from the environment
+# -----------------------------------------------------------------------------
+# Every value a deployment must be told about is read from an environment
+# variable here so the run itself is just `ansible-playbook site.yml` — a long
+# -e command line is easy to paste with one flag missing, and a missing vnet
+# flag silently retargets the deployment at a different subnet.
+#
+# `-e` still wins over anything below, so one-off overrides keep working. The
+# fallback after each lookup repeats the role default verbatim, so leaving a
+# variable unset behaves exactly as it did before this block existed.
+#
+# Cloudflare needs only the token: the zone and account ids are read back from
+# the API by the coredns role, which keeps them from going stale when a zone is
+# recreated.
+proxmox_host: "{{ lookup('env', 'SOPHON_PROXMOX_HOST') | default('', true) }}"
+proxmox_port: "{{ lookup('env', 'SOPHON_PROXMOX_PORT') | default(8006, true) | int }}"
+proxmox_node: "{{ lookup('env', 'SOPHON_PROXMOX_NODE') | default('proxmox', true) }}"
+proxmox_password: "{{ lookup('env', 'SOPHON_PROXMOX_PASSWORD') | default('', true) }}"
+proxmox_iso_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_ISO_STORAGE') | default('local', true) }}"
+
+domain_name: "{{ lookup('env', 'SOPHON_DOMAIN') | default('', true) }}"
+traefik_acme_email: "{{ lookup('env', 'SOPHON_ACME_EMAIL') | default('admin@example.com', true) }}"
+coredns_cf_token: "{{ lookup('env', 'SOPHON_CF_TOKEN') | default('', true) }}"
+
+# Empty means "discover it": the vnet role fills these in from the Proxmox SDN
+# definition and the free addresses in the subnet.
+vnet_interface: "{{ lookup('env', 'SOPHON_VNET_INTERFACE') | default('vmbr0', true) }}"
+vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
+vnet_gateway: "{{ lookup('env', 'SOPHON_VNET_GATEWAY') | default('', true) }}"
+vnet_cidr: "{{ lookup('env', 'SOPHON_VNET_CIDR') | default('', true) }}"
+nfs_ip: "{{ lookup('env', 'SOPHON_NFS_IP') | default('', true) }}"
+infravm_ip: "{{ lookup('env', 'SOPHON_INFRAVM_IP') | default('', true) }}"
+
+keycloak_realm: "{{ lookup('env', 'SOPHON_KEYCLOAK_REALM') | default('sophon', true) }}"
+# Shown on the Keycloak login page. Tracks the realm name so renaming the realm
+# cannot leave "Sophon" greeting users of a site that is not called that.
+keycloak_realm_display_name: >-
+  {{ lookup('env', 'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME') | default(keycloak_realm, true) }}
+keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') | default('admin', true) }}"
+
+# -----------------------------------------------------------------------------
 # Portainer image / edition
 # -----------------------------------------------------------------------------
 # Business Edition. Needs portainer_license_key to run unrestricted.
@@ -13,15 +54,16 @@ portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
 
 # Portainer Business Edition license key. Required when running EE images.
 # Obtain a free 5-node Business Starter license from portainer.io.
-# Pass via -e portainer_license_key=... or vault.
-portainer_license_key: ""
+portainer_license_key: "{{ lookup('env', 'SOPHON_PORTAINER_LICENSE_KEY') | default('', true) }}"
 
 # Seeds gitea_db_password, kopia_repository_password and others, so it must be
 # the same value on every run — regenerating it orphans the Kopia repository.
+# Unset in the environment means "generate one and remember it".
 portainer_admin_password: >-
-  {{ lookup('password',
-            playbook_dir ~ '/artifacts/secrets/portainer_admin_password'
-            ~ ' length=24 chars=ascii_letters,digits') }}
+  {{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD')
+     | default(lookup('password',
+                      playbook_dir ~ '/artifacts/secrets/portainer_admin_password'
+                      ~ ' length=24 chars=ascii_letters,digits'), true) }}
 
 # Tarball filename for prestage / NFS upload / infravm boot loader.
 # Mirrors the naming convention in prestage.yml:

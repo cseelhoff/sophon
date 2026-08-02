@@ -16,10 +16,10 @@
 #   infravm_cloudflared_tunnel_token=xxx ansible-playbook site.yml
 #
 # Skip prompts (CI/scripting):
-#   ansible-playbook site.yml \
-#     -e proxmox_host=10.0.0.10 \
-#     -e domain_name=sophon.local \
-#     -e proxmox_password=secret
+#   Export the site settings once (SOPHON_PROXMOX_HOST, SOPHON_DOMAIN,
+#   SOPHON_CF_TOKEN, SOPHON_VNET_*, ... -- see group_vars/all.yml for the full
+#   list and docs/preconditions.md for a worked example), then just:
+#     ansible-playbook site.yml
 #
 # WORKFLOW:
 # ─────────────────────────────────────────────────────────────────────────────

@@ -18,6 +18,224 @@
     #   ansible.builtin.set_fact:
     #     _coredns_corefile_b64: "{{ lookup('template', 'Corefile.j2') | b64encode }}"
 
+    # Bad Cloudflare credentials fail silently and late: lego logs "zone could
+    # not be found" inside the Traefik container, Traefik serves its self-signed
+    # default, and the deploy still reports success. Checking here, before
+    # anything is deployed, turns that into one actionable message.
+    #
+    # ADR-0006 forbids failing the deploy because egress is absent, so an
+    # unreachable API is a warning, not an error -- only an authoritative
+    # negative from Cloudflare fails.
+    - name: Preflight Cloudflare credentials
+      when: coredns_cf_token | default('', true) != ""
+      block:
+
+        # The zone lookup is the authoritative check, deliberately not
+        # /user/tokens/verify: account-owned tokens (the cfat_ format) are
+        # rejected by verify with "Invalid API Token" while working correctly
+        # everywhere else, so checking there rejects good credentials. A token
+        # scoped to a zone that has since been deleted -- what a lapsed and
+        # re-registered domain leaves behind -- lists no zones here, and lego
+        # needs the zone id before it can write the challenge record.
+        - name: Look up the zone the Cloudflare token can see
+          ansible.builtin.uri:
+            url: "https://api.cloudflare.com/client/v4/zones?name={{ coredns_domain_name }}"
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            timeout: 10
+          register: coredns_cf_zones
+          failed_when: false
+          changed_when: false
+
+        # The healthy branch emits the literal "ok" rather than nothing: under
+        # native Jinja a template that renders empty comes back as None, which
+        # trips any "is it blank" test written the obvious way.
+        - name: Diagnose the Cloudflare preflight result
+          vars:
+            _api: "{{ coredns_cf_zones.json | default({}, true) }}"
+            _zones: "{{ coredns_cf_zones.json.result | default([], true) }}"
+            _zone: "{{ coredns_cf_zones.json.result | default([], true) | first | default({}, true) }}"
+          ansible.builtin.set_fact:
+            coredns_cf_diagnosis: >-
+              {%- if not (_api.success | default(false)) -%}
+              Cloudflare rejected the request:
+              {{ _api.errors | default([], true) | map(attribute='message') | join('; ') | default('no error detail returned', true) }}
+              {%- elif (_zones | length) == 0 -%}
+              The token works but can see no zones at all. Most likely it is still
+              scoped to a zone that no longer exists -- a domain that lapsed and was
+              re-added to Cloudflare gets a brand new zone with a new zone id -- or it
+              was created without the Zone:Read permission.
+              {%- elif (_zone.status | default('')) != 'active' -%}
+              Zone {{ _zone.id }} exists but its status is "{{ _zone.status }}", not "active".
+              Point your registrar's nameservers at the pair Cloudflare assigned to it.
+              {%- elif coredns_cf_zone_id | default('', true) not in ['', _zone.id] -%}
+              coredns_cf_zone_id is set to {{ coredns_cf_zone_id }}, but the live zone for
+              {{ coredns_domain_name }} is {{ _zone.id }}. Leave it unset to adopt the live
+              value automatically.
+              {%- else -%}
+              ok
+              {%- endif -%}
+          when: coredns_cf_zones.json is defined
+
+        - name: Fail with remediation if Cloudflare cannot serve the zone
+          when: coredns_cf_diagnosis | default('ok', true) | trim != 'ok'
+          ansible.builtin.fail:
+            msg: |
+              Cloudflare preflight failed for {{ coredns_domain_name }}.
+
+              {{ coredns_cf_diagnosis | trim }}
+
+              Until this is fixed, Traefik cannot complete the Let's Encrypt DNS-01
+              challenge, so every service falls back to TRAEFIK DEFAULT CERT, and
+              CoreDNS cannot publish the CNAME records or tunnel routes that make
+              those names reachable from outside.
+
+              Create a replacement token at
+                  https://dash.cloudflare.com/profile/api-tokens
+              via "Create Token" -> "Create Custom Token", granting:
+
+                  Zone    / Zone              / Read    (zone lookup, needed by lego)
+                  Zone    / DNS               / Edit    (_acme-challenge TXT and CNAMEs)
+                  Account / Cloudflare Tunnel / Edit    (tunnel ingress routes)
+
+              Zone Resources:    Include -> Specific zone -> {{ coredns_domain_name }}
+              Account Resources: Include -> the account that owns that zone
+
+              Then re-run with the new token in place:
+
+                  export SOPHON_CF_TOKEN=<new token>
+
+              The zone and account ids are read back from Cloudflare, so they never
+              need supplying. Sophon never creates or edits Cloudflare credentials.
+
+        # Deriving these is what stops the stale-id failure recurring: the ids
+        # change whenever the zone is recreated, the token does not.
+        - name: Adopt the zone id Cloudflare reports
+          vars:
+            _zone: "{{ coredns_cf_zones.json.result | first }}"
+          ansible.builtin.set_fact:
+            coredns_cf_zone_id: "{{ coredns_cf_zone_id if (coredns_cf_zone_id | default('', true) != '') else _zone.id }}"
+            coredns_cf_discovered_account_id: "{{ _zone.account.id }}"
+          when: coredns_cf_zones.json is defined
+
+        # Zone:Read is not enough. lego needs Zone:DNS:Edit to publish the
+        # _acme-challenge TXT, and a token without it fails every DNS-01 with
+        # "Authentication error (10000)" -- burning five authorization failures
+        # per hostname before Let's Encrypt locks that name out for an hour.
+        # Writing a throwaway record is the only way to know before Traefik
+        # starts spending that quota.
+        - name: Probe whether the token may write DNS records
+          ansible.builtin.uri:
+            url: "https://api.cloudflare.com/client/v4/zones/{{ coredns_cf_zone_id }}/dns_records"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            body_format: json
+            body:
+              type: TXT
+              name: "{{ coredns_cf_probe_record }}"
+              content: "sophon dns-01 write probe"
+              ttl: 60
+            timeout: 10
+          register: coredns_cf_probe
+          failed_when: false
+          changed_when: false
+          when: coredns_cf_zones.json is defined
+
+        - name: Remove the probe record
+          ansible.builtin.uri:
+            url: >-
+              https://api.cloudflare.com/client/v4/zones/{{ coredns_cf_zone_id }}/dns_records/{{ coredns_cf_probe.json.result.id }}
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            timeout: 10
+          register: coredns_cf_probe_cleanup
+          failed_when: false
+          changed_when: false
+          when: coredns_cf_probe.json.success | default(false)
+
+        - name: Warn if the probe record could not be removed
+          when:
+            - coredns_cf_probe.json.success | default(false)
+            - not (coredns_cf_probe_cleanup.json.success | default(false))
+          ansible.builtin.debug:
+            msg: >-
+              Left a stray TXT record at {{ coredns_cf_probe_record }}; delete it by hand.
+
+        - name: Fail if the token cannot write the ACME challenge record
+          when:
+            - coredns_cf_probe.json is defined
+            - not (coredns_cf_probe.json.success | default(false))
+          ansible.builtin.fail:
+            msg: |
+              The Cloudflare token can read zone {{ coredns_domain_name }} but cannot write
+              to it:
+
+              {{ coredns_cf_probe.json.errors | default([], true) | map(attribute='message') | join('; ') | default('no error detail returned', true) }}
+
+              Traefik would fail every DNS-01 challenge with "Authentication error (10000)",
+              and five failures per hostname earns a one-hour Let's Encrypt lockout, so the
+              deploy stops here instead.
+
+              The token is missing Zone / DNS / Edit. Add it at
+                  https://dash.cloudflare.com/profile/api-tokens
+              so the token holds all of:
+
+                  Zone    / Zone              / Read    (zone lookup)
+                  Zone    / DNS               / Edit    (_acme-challenge TXT and CNAMEs)
+                  Account / Cloudflare Tunnel / Edit    (only if using tunnels)
+
+              Then re-run with the new token in place:
+
+                  export SOPHON_CF_TOKEN=<new token>
+
+        - name: Look up the Cloudflare tunnel by name
+          ansible.builtin.uri:
+            url: >-
+              https://api.cloudflare.com/client/v4/accounts/{{ coredns_cf_discovered_account_id }}/cfd_tunnel?is_deleted=false&name={{ coredns_cf_tunnel_name }}
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            timeout: 10
+          register: coredns_cf_tunnels
+          failed_when: false
+          changed_when: false
+          when:
+            - coredns_cf_discovered_account_id | default('', true) != ''
+            - coredns_cf_tunnel_id | default('', true) == ''
+
+        # setup.go treats cf_account_id and cf_tunnel_id as one group: supplying
+        # either without the other aborts CoreDNS at startup, taking the whole
+        # site's DNS with it. So the account id is only published once a tunnel
+        # id is known, and both stay empty otherwise.
+        - name: Adopt the tunnel and account ids only as a matched pair
+          vars:
+            _tunnel: "{{ coredns_cf_tunnels.json.result | default([], true) | first | default({}, true) }}"
+            _tunnel_id: "{{ coredns_cf_tunnel_id if (coredns_cf_tunnel_id | default('', true) != '') else _tunnel.id | default('', true) }}"
+          ansible.builtin.set_fact:
+            coredns_cf_tunnel_id: "{{ _tunnel_id }}"
+            coredns_cf_account_id: "{{ coredns_cf_discovered_account_id if _tunnel_id != '' else '' }}"
+          when: coredns_cf_zones.json is defined
+
+        - name: Display the Cloudflare coordinates in use
+          when: coredns_cf_zones.json is defined
+          ansible.builtin.debug:
+            msg: >-
+              Cloudflare zone {{ coredns_cf_zone_id }} for {{ coredns_domain_name }};
+              {{ 'tunnel ' ~ coredns_cf_tunnel_id ~ ' in account ' ~ coredns_cf_account_id
+                 if coredns_cf_tunnel_id != ''
+                 else 'no tunnel named "' ~ coredns_cf_tunnel_name ~ '" exists, so public CNAMEs and
+                      ingress routes are not published and every name must be resolved from CoreDNS
+                      directly. Certificates are unaffected.' }}
+
+        - name: Warn that the Cloudflare preflight could not run
+          when: coredns_cf_zones.json is not defined
+          ansible.builtin.debug:
+            msg: >-
+              Could not reach the Cloudflare API to validate the token, so the check was
+              skipped. If this site has no egress that is expected (ADR-0006); certificate
+              renewal and tunnel publishing stay down until egress returns.
+
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack

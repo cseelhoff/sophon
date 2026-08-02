@@ -24,8 +24,14 @@ coredns_domain_name: "{{ domain_name | default('', true) }}"
 coredns_preflight_fqdn: "traefik.{{ coredns_domain_name }}"
 
 # Cloudflare settings
+coredns_cf_token: ""
+coredns_cf_zone_id: ""
 coredns_cf_account_id: ""
 coredns_cf_tunnel_id: ""
+# Looked up by name so a recreated tunnel is picked up without editing an id.
+coredns_cf_tunnel_name: "{{ lookup('env', 'SOPHON_CF_TUNNEL_NAME') | default('sophon', true) }}"
+# Written and deleted by the preflight to prove the token holds Zone:DNS:Edit.
+coredns_cf_probe_record: "_sophon-preflight.{{ coredns_domain_name }}"
 
 # Local zones (synced by dns_sync sidecar)
 # coredns_local_zones:
