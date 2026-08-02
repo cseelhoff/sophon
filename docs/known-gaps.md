@@ -17,30 +17,25 @@ tunnel needs deleting and recreating.
 Root cause: there was nowhere for real values to live, so they went into the
 one file everybody edits. ADR-0008 is the fix.
 
-## Artifacts never reach the site
+## Artifacts
 
-**Only Portainer's image tar is copied to the NFS export.**
-[roles/nfs/tasks/main.yml](../roles/nfs/tasks/main.yml) fuse-mounts `/export`
-and copies `{{ portainer_image_tarname }}` alone. Every other prestaged tar
-stays on the Controller. — ADR-0005
+**`prestage_container_images` and the `*_image_tars` lists are kept in sync by
+hand.** [prestage.yml](../prestage.yml) decides what gets pulled and saved;
+each role's `defaults/main.yml` decides what gets loaded. Nothing checks that
+they agree. Adding a service means editing both, and forgetting the prestage
+side is only caught at deploy time by the `stat` check in
+[roles/portainer_stack/tasks/main.yml](../roles/portainer_stack/tasks/main.yml).
+— ADR-0005
 
-**The load-all-tars loop is commented out.**
-[roles/infravm/templates/infravm.bu.j2](../roles/infravm/templates/infravm.bu.j2)'s
-`sophon-init.service` loads only the Portainer tar; the loop over
-`/var/mnt/nfs/containers/*.tar` is disabled. — ADR-0005
+**Image tar filenames are derived by string surgery.** Both prestage and the
+role defaults reconstruct `registry-repo_tag.tar` from the image reference
+independently. A reference shaped differently from the others — a bare
+`postgres:16-alpine`, say, or a digest pin — produces two different filenames
+and the mismatch shows up as a missing file. — ADR-0005
 
-**Compose files lack `pull_policy: never`.**
-Without it, Portainer pulls from the registry when a tag is not already
-present locally, so a disconnected deploy fails at stack creation rather than
-at the missing-artifact step. — ADR-0005
-
-**NFS mount failure warns instead of failing.**
-If the fuse mount does not come up, the play continues and the failure surfaces
-several roles later as a missing image. — ADR-0005
-
-Together these three mean the air-gapped path has never actually worked
-end-to-end; connected deploys succeed because Portainer silently pulls
-everything else.
+**The fuse mount is never unmounted.** [roles/nfs/tasks/main.yml](../roles/nfs/tasks/main.yml)
+creates a tempdir, mounts into it, copies, and leaves it mounted for the life
+of the run.
 
 ## Address discovery
 
@@ -62,29 +57,22 @@ it, `site.yml` documents it, and no task reads it. Remove it. — ADR-0001
 
 ## Generated state
 
-**Secrets are regenerated on every run.**
-[site.yml](../site.yml) uses
-`lookup('password', '/dev/null length=24 chars=ascii_letters,digits')` for
-`keycloak_admin_password`, `gitea_admin_password`, `openldap_admin_password`
-and the example user passwords. `/dev/null` means nothing is stored, so every
-run mints new values and the previous ones are lost — including the ones
-already configured inside running services. Point the lookup at a real path
-under `artifacts/`. — ADR-0008
+**Portainer's admin password is generated but never persisted.**
+[roles/infravm/tasks/main.yml](../roles/infravm/tasks/main.yml) generates it
+inside a `when: status == 404` block, so it is minted only on first admin
+initialisation and never written anywhere. On a later run the block is skipped
+and `portainer_admin_password` is undefined, which breaks anything deriving
+from it (`gitea_db_password`, among others). It needs reading from
+`artifacts/secrets/` outside the block. — ADR-0008
 
-Same pattern in [roles/infravm/tasks/main.yml](../roles/infravm/tasks/main.yml)
-for `portainer_admin_password`.
+`site.yml`'s own generated passwords are now persisted under
+`artifacts/secrets/`.
 
 **`artifacts/` is not a Kopia source.**
 It holds the SSH keys, ACME account key and generated credentials for the whole
 deployment, and nothing backs it up. — ADR-0008, ADR-0009
 
 ## Service state
-
-**Keycloak runs `KC_DB=dev-mem`.**
-[roles/keycloak/defaults/main.yml](../roles/keycloak/defaults/main.yml) sets an
-in-memory database. The realm, clients, mappers and group mappings — 27 REST
-calls' worth — vanish on container restart. Move to Postgres on the existing
-volume. — ADR-0009
 
 **Kopia snapshots an empty tree.**
 The `/var/mnt/nfs/backups/<service>/` dump contract is documented in

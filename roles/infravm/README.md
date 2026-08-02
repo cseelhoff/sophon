@@ -46,7 +46,8 @@ InfraVM is a CoreOS-based VM that:
 |----------|---------|-------------|
 | `portainer_admin_password` | (auto-generated) | Initial admin password |
 | `portainer_port` | `9443` | HTTPS port for web UI |
-| `portainer_image_tag` | `2.39.0` | Portainer CE image tag |
+| `portainer_image_repo` | `docker.io/portainer/portainer-ee` | Portainer image repository |
+| `portainer_image_tag` | `2.41.0` | Portainer Business Edition image tag |
 
 ### Cloudflared Settings
 

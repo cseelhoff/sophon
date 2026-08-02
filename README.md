@@ -170,13 +170,16 @@ how generated state is stored.
 ## Testing
 
 ```bash
-# Lint
-yamllint -c .yamllint .
-ansible-lint -c .ansible-lint
+yamllint .
+ansible-lint
+ansible-playbook --syntax-check site.yml prestage.yml
 
-# Molecule role tests
-./tests/test.sh
+# Molecule role tests (roles/*/molecule/)
+molecule test
 ```
+
+`tests/test.yml` holds override values for local integration runs:
+`ansible-playbook site.yml -e @tests/test.yml`.
 
 ## Backup / Restore
 

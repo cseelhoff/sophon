@@ -21,7 +21,11 @@ gitea_db_user: "gitea"
 gitea_db_password: "{{ portainer_admin_password }}"
 
 # Postgres image used for the bundled DB container.
-gitea_postgres_image: "docker.io/postgres:16-alpine"
+gitea_postgres_image: "docker.io/library/postgres:16-alpine"
+
+gitea_image_tars:
+  - "{{ sophon_containers_dir }}/gitea-gitea_{{ gitea_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
 
 # Network
 gitea_port_http: 3000

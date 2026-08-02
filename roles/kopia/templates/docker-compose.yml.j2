@@ -12,6 +12,7 @@
 services:
   kopia:
     image: {{ kopia_image }}
+    pull_policy: never
     container_name: kopia
     restart: unless-stopped
     environment:

@@ -13,7 +13,7 @@ provisioner:
         portainer_enabled: true
         portainer_data_dir: "/tmp/portainer"
         portainer_port: 9443
-        portainer_image_name: "portainer/portainer-ce"
-        portainer_image_tag: "latest"
+        portainer_image_repo: "docker.io/portainer/portainer-ee"
+        portainer_image_tag: "2.41.0"
         infravm_ip: "127.0.0.1"
         http_file_server_port: 8000

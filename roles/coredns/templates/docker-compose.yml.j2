@@ -1,6 +1,7 @@
 services:
   coredns:
-    image: coredns-dockerdiscovery:latest
+    image: localhost/coredns-dockerdiscovery:latest
+    pull_policy: never
     container_name: coredns
     restart: always
     cap_add:

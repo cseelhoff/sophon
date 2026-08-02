@@ -1,6 +1,7 @@
 services:
   certs-dumper:
     image: docker.io/{{ openldap_certs_dumper_image_name }}:{{ openldap_certs_dumper_image_tag }}
+    pull_policy: never
     container_name: certs-dumper
     restart: unless-stopped
     networks:
@@ -46,6 +47,7 @@ services:
   ldap:
     container_name: ldap
     image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
+    pull_policy: never
     restart: always
     networks:
       - proxy

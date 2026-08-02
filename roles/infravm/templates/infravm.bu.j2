@@ -118,8 +118,9 @@ systemd:
         Environment=XDG_RUNTIME_DIR=/run/user/1000
         Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
         Environment=HOME=/var/home/{{ infravm_username }}
-        # Load container images from NFS
-        # ExecStart=/bin/sh -c 'for tarfile in /var/mnt/nfs/containers/*.tar; do podman load -i "$tarfile" || true; done'
+        # Only Portainer is loaded from NFS. Every other stack's images are
+        # pushed by Ansible through Portainer's /docker/images/load endpoint,
+        # so they refresh on every run instead of only at first boot.
 
         # Create shared proxy network for inter-stack communication
         ExecStart=/bin/sh -c 'podman network exists proxy || podman network create --label com.docker.compose.network=proxy proxy'

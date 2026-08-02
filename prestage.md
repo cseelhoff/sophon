@@ -145,22 +145,31 @@ have the `sophon-nfs-alpine.qcow2` image.
 
 ## 4. How Artifacts Reach the Site
 
-You do not copy anything by hand. During `site.yml`, the `nfs` role mounts the
-NFS export on the Controller with `fuse-nfs` (unprivileged, vendored in
-`flake.nix`) and copies every tar from `artifacts/containers/` into
-`/export/containers`.
+You do not copy anything by hand. `site.yml` uses two transports.
 
-On first boot, InfraVM's `sophon-init.service` runs `podman load` over every
-tar under `/var/mnt/nfs/containers` before any stack starts, so compose files
-resolve their images locally.
+**Portainer's image tar** travels over NFS. The `nfs` role mounts the export on
+the Controller with `fuse-nfs` (unprivileged, vendored in `flake.nix`) and
+copies `portainer-portainer-ee_<tag>.tar` into `/export/containers`. InfraVM's
+`sophon-init.service` `podman load`s it at first boot. This route exists only
+because Portainer cannot deliver its own image.
 
-This means the Controller needs routed access to `nfs_ip`. If the fuse mount
-fails, the deploy should stop there — a missing tar surfaces several roles
-later as an unexplained image pull. See
+**Every other image** is uploaded through Portainer itself. Each service role
+declares a `*_image_tars` list and passes it to `roles/portainer_stack`, which
+POSTs each tar to `/api/endpoints/<id>/docker/images/load` before creating or
+updating the stack. This happens on every run, so changing an image tag in a
+role's defaults takes effect on the next `site.yml` — no VM rebuild.
+
+If a tar named in `*_image_tars` is missing from `artifacts/containers/`, the
+play fails on the Controller and names the file. Compose files set
+`pull_policy: never`, so a gap cannot be hidden by a registry pull.
+
+Both routes need the Controller to have routed access to the vnet
+(`nfs_ip` and `infravm_ip`). See
 [ADR-0005](docs/adr/0005-artifacts-reach-the-site-over-a-fuse-mounted-nfs-export.md).
 
-> Not all of this is implemented yet. See
-> [docs/known-gaps.md](docs/known-gaps.md).
+> If you add a service, add its images to `prestage_container_images` in
+> `prestage.yml` *and* to the role's `*_image_tars`. Nothing keeps the two
+> lists in agreement. See [docs/known-gaps.md](docs/known-gaps.md).
 
 ## 5. Deployment-Generated Kopia Artifacts
 

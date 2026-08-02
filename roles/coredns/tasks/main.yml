@@ -14,23 +14,6 @@
   when: coredns_enabled | default(true)
   block:
 
-    # -----------------------------------------------------------------
-    # Upload container images to Docker via Portainer API
-    # -----------------------------------------------------------------
-
-    - name: Upload container image tars to Docker via Portainer
-      ansible.builtin.uri:
-        url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/images/load"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
-          Content-Type: "application/x-tar"
-        src: "{{ coredns_image_path }}"
-        remote_src: false
-        validate_certs: false
-        status_code: [200]
-      register: _coredns_image_load
-
     # - name: Render Corefile and encode for init container
     #   ansible.builtin.set_fact:
     #     _coredns_corefile_b64: "{{ lookup('template', 'Corefile.j2') | b64encode }}"
@@ -41,6 +24,7 @@
       vars:
         portainer_stack_name: "coredns"
         portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_image_tars: "{{ coredns_image_tars }}"
 
     # - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
     #   ansible.builtin.wait_for:

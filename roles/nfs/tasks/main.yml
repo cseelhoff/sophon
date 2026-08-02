@@ -465,13 +465,12 @@
   changed_when: false
   failed_when: false
 
-- name: Skip NFS content tasks if server is unreachable
+- name: Warn if NFS server did not answer ICMP
   ansible.builtin.debug:
-    msg: "NFS server {{ nfs_ip }} is not reachable — skipping NFS mount and content upload."
+    msg: "{{ nfs_ip }} did not answer ping; attempting the mount anyway."
   when: nfs_ping_result.rc != 0
 
 - name: NFS content upload
-  when: nfs_ping_result.rc == 0
   block:
     - name: Create temporary mount point
       ansible.builtin.tempfile:
@@ -486,30 +485,32 @@
       changed_when: true
       failed_when: false
 
-    - name: Set NFS mount success fact
-      ansible.builtin.set_fact:
-        nfs_mount_success: "{{ nfs_mount_result.rc == 0 }}"
-
-    - name: Warn if NFS mount failed
-      ansible.builtin.debug:
-        msg: "WARNING: NFS mount failed (rc={{ nfs_mount_result.rc }}). Skipping NFS content upload. stderr: {{ nfs_mount_result.stderr | default('') }}"
-      when: not nfs_mount_success
+    # InfraVM loads Portainer from this export at first boot, and Portainer is
+    # the only channel Ansible has to the VM. A silent skip here surfaces
+    # several roles later as an unreachable Portainer API.
+    - name: Fail if NFS mount did not succeed
+      ansible.builtin.fail:
+        msg: >-
+          Could not fuse-mount nfs://{{ nfs_ip }}{{ nfs_export_root }}
+          (rc={{ nfs_mount_result.rc }}). The controller needs direct access to
+          the vnet to stage the Portainer image.
+          stderr: {{ nfs_mount_result.stderr | default('') }}
+      when: nfs_mount_result.rc != 0
 
     - name: Check local portainer image size
       ansible.builtin.stat:
-        path: "{{ playbook_dir }}/artifacts/containers/{{ portainer_image_tarname }}"
+        path: "{{ sophon_containers_dir }}/{{ portainer_image_tarname }}"
       register: nfs_portainer_local
-      when: nfs_mount_success
+      failed_when: not nfs_portainer_local.stat.exists
 
     - name: Check remote portainer image size
       ansible.builtin.stat:
         path: "{{ nfs_temp_mount.path }}/containers/{{ portainer_image_tarname }}"
       register: nfs_portainer_remote
-      when: nfs_mount_success
 
     - name: Upload portainer image to NFS
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/artifacts/containers/{{ portainer_image_tarname }}"
+        src: "{{ sophon_containers_dir }}/{{ portainer_image_tarname }}"
         dest: "{{ nfs_temp_mount.path }}/containers/{{ portainer_image_tarname }}"
         mode: "0644"
-      when: nfs_mount_success and (not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size)
+      when: not nfs_portainer_remote.stat.exists or nfs_portainer_remote.stat.size != nfs_portainer_local.stat.size

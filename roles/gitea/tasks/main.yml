@@ -10,6 +10,7 @@
       vars:
         portainer_stack_name: "gitea"
         portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_image_tars: "{{ gitea_image_tars }}"
         portainer_stack_deploy_timeout: 300
 
     - name: Display Gitea status

@@ -9,3 +9,9 @@ portainer_stack_compose_content: ""
 portainer_stack_deploy_timeout: 120
 portainer_stack_api_retries: 60
 portainer_stack_api_delay: 5
+
+# Prestaged image tars to load into the endpoint before deploying the stack.
+# Compose files pin pull_policy: never, so anything not listed here will fail
+# to start rather than silently pulling from a registry.
+portainer_stack_image_tars: []
+portainer_stack_image_load_timeout: 600

@@ -20,6 +20,7 @@
   vars:
     portainer_stack_name: "keycloak"
     portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    portainer_stack_image_tars: "{{ keycloak_image_tars }}"
 
 - name: Display Keycloak status
   ansible.builtin.debug:

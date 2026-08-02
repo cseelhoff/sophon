@@ -21,6 +21,7 @@
       vars:
         portainer_stack_name: "{{ traefik_compose_project }}"
         portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_image_tars: "{{ traefik_image_tars }}"
 
     # Post-deploy: snapshot acme.json back to controller. No-op (404) until
     # traefik has actually issued a cert — first deploy will report nothing

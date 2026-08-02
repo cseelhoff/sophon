@@ -25,6 +25,9 @@ kopia_image_name: "docker.io/kopia/kopia"
 kopia_image_tag: "0.21.1"
 kopia_image: "{{ kopia_image_name }}:{{ kopia_image_tag }}"
 
+kopia_image_tars:
+  - "{{ sophon_containers_dir }}/kopia-kopia_{{ kopia_image_tag }}.tar"
+
 # Domain / URLs
 kopia_hostname: "kopia"
 kopia_domain: "{{ domain_name }}"

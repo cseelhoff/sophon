@@ -45,37 +45,48 @@
   hosts: localhost
   tasks:
     # =========================================================================
-    # Generate random admin / seed-user passwords once per run.
+    # Generate random admin / seed-user passwords once, then reuse them.
     # `set_fact` is overridden by `-e var=...` extra-vars (highest precedence)
-    # but overrides any role default, so passing -e on the CLI still wins.
-    # `lookup('password', '/dev/null ...')` is invoked once here and the
-    # resulting fact is reused everywhere else in the play.
+    # but overrides any role default, so passing -e on the CLI still wins and
+    # is never written to disk.
+    # The `password` lookup writes each value under artifacts/secrets/ and
+    # returns the existing one on later runs. Services persist their own
+    # credentials now (Keycloak in Postgres, Gitea in Postgres, OpenLDAP on
+    # disk), so regenerating here would lock us out of a running deployment.
     # Portainer's admin password is generated inside the infravm role.
     # =========================================================================
+    - name: Ensure secrets directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/artifacts/secrets"
+        state: directory
+        mode: "0700"
+
     - name: Generate random admin and seed-user passwords
       ansible.builtin.set_fact:
         keycloak_admin_password: >-
           {{ keycloak_admin_password
              if (keycloak_admin_password | default('')) not in ['', 'admin']
-             else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+             else lookup('password', _secrets_dir ~ '/keycloak_admin_password length=24 chars=ascii_letters,digits') }}
         gitea_admin_password: >-
           {{ gitea_admin_password
              if (gitea_admin_password | default('')) != ''
-             else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+             else lookup('password', _secrets_dir ~ '/gitea_admin_password length=24 chars=ascii_letters,digits') }}
         openldap_admin_password: >-
           {{ openldap_admin_password
              if (openldap_admin_password | default('')) not in ['', 'admin']
-             else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+             else lookup('password', _secrets_dir ~ '/openldap_admin_password length=24 chars=ascii_letters,digits') }}
         openldap_example_user_password: >-
           {{ openldap_example_user_password
              if (openldap_example_user_password | default('')) not in ['', 'changeme-user']
-             else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}
+             else lookup('password', _secrets_dir ~ '/openldap_example_user_password length=20 chars=ascii_letters,digits') }}
         openldap_example_admin_password: >-
           {{ openldap_example_admin_password
              if (openldap_example_admin_password | default('')) not in ['', 'changeme-admin']
-             else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}
+             else lookup('password', _secrets_dir ~ '/openldap_example_admin_password length=20 chars=ascii_letters,digits') }}
         openldap_example_user_uid: "{{ openldap_example_user_uid | default('john.doe') }}"
         openldap_example_admin_uid: "{{ openldap_example_admin_uid | default('john.doe.admin') }}"
+      vars:
+        _secrets_dir: "{{ playbook_dir }}/artifacts/secrets"
 
     - name: Authenticate with Proxmox
       ansible.builtin.include_role: { name: proxmox }

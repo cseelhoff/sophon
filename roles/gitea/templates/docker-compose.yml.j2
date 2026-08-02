@@ -5,6 +5,7 @@
 services:
   gitea:
     image: {{ gitea_image }}
+    pull_policy: never
     container_name: gitea
     restart: unless-stopped
     environment:
@@ -66,6 +67,7 @@ services:
   # gitea's resolv.conf), which sidesteps Go-resolver/aardvark interactions.
   gitea-db:
     image: {{ gitea_postgres_image }}
+    pull_policy: never
     container_name: gitea-db
     restart: unless-stopped
     environment:
@@ -89,6 +91,7 @@ services:
   # which we swallow.
   gitea-init:
     image: {{ gitea_image }}
+    pull_policy: never
     container_name: gitea-init
     restart: "no"
     depends_on:

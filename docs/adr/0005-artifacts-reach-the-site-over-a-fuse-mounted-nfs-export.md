@@ -1,4 +1,14 @@
+---
+status: amended
+---
+
 # Artifacts reach the site by fuse-mounting the NFS export from the Controller
+
+**Amended.** NFS remains the transport for artifacts that must exist before
+Portainer does — which in practice is Portainer's own image tar and nothing
+else. Every other container image now reaches the endpoint through Portainer's
+Docker-API proxy (`POST /api/endpoints/<id>/docker/images/load`). See
+"Amendment: two transports, split by bootstrap order" below.
 
 The Controller mounts the NFS VM's export with `fuse-nfs` and copies every
 prestaged artifact into it. InfraVM then loads all container image tars from
@@ -39,3 +49,32 @@ first boots means there is only one mechanism.
 - Compose files need `pull_policy: never`. Otherwise Portainer pulls from
   Docker Hub, the loaded images go unused, and a broken transport stays
   invisible until the site is genuinely disconnected.
+
+## Amendment: two transports, split by bootstrap order
+
+The "one mechanism" argument above traded a real defect for a stylistic win.
+Loading images at first boot means an image only ever arrives once. Bump a tag,
+rebuild the CoreDNS image, or add a service, and the tar lands on NFS but never
+reaches Podman, because `sophon-init.service` already ran. Recovering means
+rebuilding the VM.
+
+`roles/coredns` had already worked around this with a bespoke `uri` task
+POSTing its tar to Portainer's Docker-API proxy. That mechanism runs on every
+play, so images track the repo. The rejection of it above — "cannot bootstrap
+Portainer" — is true but does not disqualify it for the other seven images.
+
+So the split is:
+
+- **NFS + `sophon-init.service`:** Portainer's tar only. It cannot arrive any
+  other way.
+- **Portainer `/docker/images/load`:** everything else, on every run. The
+  generalised implementation lives in `roles/portainer_stack`, which takes a
+  `portainer_stack_image_tars` list, `stat`s each path, and fails if one is
+  missing before it touches the stack.
+
+This costs a second transport and buys idempotent image delivery. The failure
+mode also improves: a missing tar now fails on the Controller, naming the file,
+instead of surfacing as a stack that will not start.
+
+`prestage_container_images` in `prestage.yml` and the per-role
+`*_image_tars` lists must be kept in agreement by hand. Nothing enforces it.

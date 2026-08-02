@@ -6,11 +6,7 @@
 # -----------------------------------------------------------------------------
 # Portainer image / edition
 # -----------------------------------------------------------------------------
-# Default is Business Edition (EE). Set portainer_license_key to activate.
-# To revert to Community Edition, override:
-#   portainer_image_repo: "docker.io/portainer/portainer-ce"
-#   portainer_image_tag:  "2.39.0"
-#   portainer_license_key: ""
+# Business Edition. Needs portainer_license_key to run unrestricted.
 portainer_image_repo: "docker.io/portainer/portainer-ee"
 portainer_image_tag: "2.41.0"
 portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
@@ -22,8 +18,13 @@ portainer_license_key: ""
 
 # Tarball filename for prestage / NFS upload / infravm boot loader.
 # Mirrors the naming convention in prestage.yml:
-#   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.21.5.tar
+#   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.41.0.tar
 portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
+
+# Where prestage.yml writes container image tars. Roles name the tars they
+# need relative to this and hand them to portainer_stack, which loads them
+# into the endpoint before deploying the stack.
+sophon_containers_dir: "{{ playbook_dir }}/artifacts/containers"
 
 # -----------------------------------------------------------------------------
 # Portainer URL (used by infravm, coredns, portainer_stack, keycloak roles)

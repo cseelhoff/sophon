@@ -14,10 +14,25 @@ keycloak_domain: "{{ domain_name }}"
 keycloak_admin_user: "admin"
 keycloak_admin_password: "admin"
 
-# Database - using built-in H2 for simplicity
-# For production, use PostgreSQL
-# Use "dev-mem" for in-memory (no stale H2 auth issues) or "dev-file" for persistence
-keycloak_db_type: "dev-mem"
+# Database. Keycloak's realm, clients, mappers and group mappings are written
+# by configure.yml over the Admin REST API, so the DB must outlive the
+# container. Bundled Postgres on the shared `proxy` network, same pattern as
+# gitea-db: no host port, no traefik labels.
+keycloak_db_type: "postgres"
+keycloak_postgres_image: "docker.io/library/postgres:16-alpine"
+keycloak_db_host: "keycloak-db"
+keycloak_db_port: 5432
+keycloak_db_name: "keycloak"
+keycloak_db_user: "keycloak"
+keycloak_db_password: >-
+  {{ lookup('password',
+            playbook_dir ~ '/artifacts/secrets/keycloak_db_password length=32 chars=ascii_letters,digits') }}
+
+# Prestaged tars loaded before the stack deploys. Names follow prestage.yml's
+# <vendor>-<image>_<tag>.tar convention.
+keycloak_image_tars:
+  - "{{ sophon_containers_dir }}/keycloak-keycloak_{{ keycloak_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
 
 # LDAP integration (requires openldap role deployed first)
 openldap_domain: "{{ domain_name }}"

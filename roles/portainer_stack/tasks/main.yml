@@ -71,6 +71,38 @@
     portainer_stack_endpoint_id: "{{ portainer_stack_endpoints[0].Id }}"
   when: portainer_stack_endpoints | length > 0
 
+- name: Stat prestaged image tars
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ portainer_stack_image_tars }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: portainer_stack_tar_stat
+
+- name: Fail if any prestaged image tar is missing
+  ansible.builtin.fail:
+    msg: >-
+      Stack '{{ portainer_stack_name }}' is missing prestaged image tars:
+      {{ portainer_stack_tar_stat.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}.
+      Run prestage.yml, and check prestage_container_images lists these images.
+  when: portainer_stack_tar_stat.results | rejectattr('stat.exists') | list | length > 0
+
+- name: Load prestaged images into the endpoint
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_stack_endpoint_id }}/docker/images/load"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+      Content-Type: "application/x-tar"
+    src: "{{ item }}"
+    remote_src: false
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: [200]
+    timeout: "{{ portainer_stack_image_load_timeout }}"
+  loop: "{{ portainer_stack_image_tars }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
 - name: Get existing stacks
   ansible.builtin.uri:
     url: "{{ infravm_portainer_url }}/api/stacks"

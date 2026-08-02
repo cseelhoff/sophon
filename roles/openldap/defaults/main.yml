@@ -50,5 +50,9 @@ openldap_certs_dumper_image_name: "ldez/traefik-certs-dumper"
 openldap_certs_dumper_image_tag: "v2.8.3"
 openldap_traefik_acme_volume: "traefik_traefik_data"
 
+openldap_image_tars:
+  - "{{ sophon_containers_dir }}/bitnamilegacy-openldap_{{ openldap_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/ldez-traefik-certs-dumper_{{ openldap_certs_dumper_image_tag }}.tar"
+
 # Logging
 openldap_log_level: 256

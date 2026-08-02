@@ -75,17 +75,26 @@ re-run.
    libguestfs    ──▶ artifacts/alpine-nfs.qcow2
 
  ── Deploy (needs nothing external) ────────────────────────────────
-   artifacts/  ──fuse-nfs──▶  /export/containers  ──podman load──▶ InfraVM
+   artifacts/  ──fuse-nfs──▶  /export/containers  ──podman load──▶ Portainer
+   artifacts/  ──────────── Portainer /docker/images/load ───────▶ everything else
 ```
 
-Prestage writes everything into `artifacts/`. Deploy copies it onto the NFS
-export — the Controller mounts `/export` with `fuse-nfs`, which is vendored
-from source in [flake.nix](../flake.nix) precisely so this works without root.
-InfraVM's `sophon-init.service` then `podman load`s every tar it finds under
-`/var/mnt/nfs/containers` before any stack starts.
+Prestage writes everything into `artifacts/`. Deploy uses two transports,
+split by bootstrap order:
 
-Compose files reference images by the exact tag Prestage saved, and rely on
-those tars being present. See
+- **Portainer's own image tar** goes onto the NFS export. The Controller mounts
+  `/export` with `fuse-nfs`, vendored from source in [flake.nix](../flake.nix)
+  precisely so this works without root. InfraVM's `sophon-init.service`
+  `podman load`s it at first boot. Portainer cannot deliver itself.
+- **Every other image** is POSTed to Portainer's Docker-API proxy at
+  `/api/endpoints/<id>/docker/images/load` immediately before the stack that
+  needs it. This runs on every play, so bumping a tag or rebuilding an image
+  takes effect without rebuilding the VM.
+
+The second transport lives in `roles/portainer_stack`: each role passes a
+`*_image_tars` list, the role `stat`s every path and fails naming the missing
+file before it touches the stack. Compose files set `pull_policy: never`, so a
+gap in the artifact set cannot be papered over by a silent registry pull. See
 [ADR-0005](adr/0005-artifacts-reach-the-site-over-a-fuse-mounted-nfs-export.md).
 
 ## Deployment order and why it is that order

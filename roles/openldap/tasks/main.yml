@@ -10,6 +10,7 @@
       vars:
         portainer_stack_name: "openldap"
         portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_image_tars: "{{ openldap_image_tars }}"
     # - name: Wait for OpenLDAP to be ready
     #   ansible.builtin.raw: |
     #     timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{{ openldap_port_ldap }}'
