@@ -420,12 +420,6 @@
 - name: when block for if admin not initialized
   when: portainer_admin_check.status == 404
   block:
-    - name: Generate Portainer admin password
-      ansible.builtin.set_fact:
-        portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-        portainer_admin_password_generated: true
-      when: portainer_admin_password is not defined
-
     - name: Validate Portainer password meets requirements
       ansible.builtin.assert:
         that:
@@ -448,13 +442,13 @@
       ansible.builtin.debug:
         msg:
           - "============================================================"
-          - "PORTAINER ADMIN CREDENTIALS (auto-generated - SAVE THESE NOW)"
+          - "PORTAINER ADMIN CREDENTIALS"
           - "============================================================"
           - "URL:      {{ infravm_portainer_url }}"
           - "Username: admin"
           - "Password: {{ portainer_admin_password }}"
+          - "Stored:   artifacts/secrets/portainer_admin_password"
           - "============================================================"
-      when: portainer_admin_password_generated | default(false) | bool
 
 # - name: Warn if admin already exists and password was auto-generated
 #   ansible.builtin.debug:

@@ -16,6 +16,13 @@ portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
 # Pass via -e portainer_license_key=... or vault.
 portainer_license_key: ""
 
+# Seeds gitea_db_password, kopia_repository_password and others, so it must be
+# the same value on every run — regenerating it orphans the Kopia repository.
+portainer_admin_password: >-
+  {{ lookup('password',
+            playbook_dir ~ '/artifacts/secrets/portainer_admin_password'
+            ~ ' length=24 chars=ascii_letters,digits') }}
+
 # Tarball filename for prestage / NFS upload / infravm boot loader.
 # Mirrors the naming convention in prestage.yml:
 #   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.41.0.tar

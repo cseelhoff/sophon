@@ -1,9 +1,14 @@
 ---
 # Deploy Keycloak Identity Provider via Portainer Stack
 
-- name: Generate random Portainer OIDC client secret
+# Client creation below tolerates 409, so on a re-run Keycloak keeps the secret
+# it already has — this must return that same value or Portainer's OIDC breaks.
+- name: Resolve Portainer OIDC client secret
   ansible.builtin.set_fact:
-    keycloak_portainer_client_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+    keycloak_portainer_client_secret: >-
+      {{ lookup('password',
+                playbook_dir ~ '/artifacts/secrets/keycloak_portainer_client_secret'
+                ~ ' chars=ascii_letters,digits length=32') }}
   when: keycloak_portainer_client_secret is not defined
 
 # Publish key Keycloak vars as facts so they survive past role scope and are

@@ -57,16 +57,10 @@ it, `site.yml` documents it, and no task reads it. Remove it. — ADR-0001
 
 ## Generated state
 
-**Portainer's admin password is generated but never persisted.**
-[roles/infravm/tasks/main.yml](../roles/infravm/tasks/main.yml) generates it
-inside a `when: status == 404` block, so it is minted only on first admin
-initialisation and never written anywhere. On a later run the block is skipped
-and `portainer_admin_password` is undefined, which breaks anything deriving
-from it (`gitea_db_password`, among others). It needs reading from
-`artifacts/secrets/` outside the block. — ADR-0008
-
-`site.yml`'s own generated passwords are now persisted under
-`artifacts/secrets/`.
+Generated passwords now persist under `artifacts/secrets/` — `site.yml`'s
+admin and seed-user passwords, `portainer_admin_password` from
+[group_vars/all.yml](../group_vars/all.yml), `keycloak_db_password`, and the
+Portainer OIDC client secret.
 
 **`artifacts/` is not a Kopia source.**
 It holds the SSH keys, ACME account key and generated credentials for the whole
@@ -82,11 +76,8 @@ system runs, reports success, and protects nothing. — ADR-0009
 
 ## Naming
 
-**`keycloak_realm` defaults to `177cpt`.**
-[roles/keycloak/defaults/main.yml](../roles/keycloak/defaults/main.yml) carries
-a deployment-specific realm name as the project default. It should be `sophon`.
-
-Related: [sophon.drawio.xml](../sophon.drawio.xml) and
+**Diagrams carry a deployment-specific label.**
+[sophon.drawio.xml](../sophon.drawio.xml) and
 [sophon.drawio.svg](../sophon.drawio.svg) contain `177CPT` labels.
 
 ## Networking and DNS

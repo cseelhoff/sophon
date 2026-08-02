@@ -53,7 +53,7 @@
     # returns the existing one on later runs. Services persist their own
     # credentials now (Keycloak in Postgres, Gitea in Postgres, OpenLDAP on
     # disk), so regenerating here would lock us out of a running deployment.
-    # Portainer's admin password is generated inside the infravm role.
+    # Portainer's admin password is persisted the same way from group_vars.
     # =========================================================================
     - name: Ensure secrets directory exists
       ansible.builtin.file:
