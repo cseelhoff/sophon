@@ -52,12 +52,22 @@
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
     validate_certs: "{{ proxmox_validate_certs }}"
   register: _proxmox_existing_vms
-  when: proxmox_existing_vms is not defined
 
+# /cluster/resources lists templates alongside real VMs, and roles find their VM
+# by name. A template sharing that name is picked up as if it were the VM, and
+# the run dies much later at "you can't start a vm if it's a template".
+# Older Proxmox omits the key entirely rather than sending 0, and selecting on
+# an absent attribute is an error, so those entries are kept separately.
+#
+# Re-queried on every include: a VM created earlier in the run must be visible
+# to later roles, or they create a second one.
 - name: Set existing VMs fact
   ansible.builtin.set_fact:
-    proxmox_existing_vms: "{{ _proxmox_existing_vms }}"
-  when: proxmox_existing_vms is not defined
+    proxmox_existing_vms: >-
+      {{ _proxmox_existing_vms | combine({'json': {'data':
+         (_proxmox_existing_vms.json.data | rejectattr('template', 'defined') | list)
+         + (_proxmox_existing_vms.json.data | selectattr('template', 'defined')
+            | rejectattr('template', 'eq', 1) | list)}}, recursive=true) }}
 
 - name: Check if image already exists on Proxmox
   ansible.builtin.uri:

@@ -1,4 +1,3 @@
 ---
 dependencies:
   - role: proxmox
-    when: proxmox_ticket is not defined

@@ -1,6 +1,7 @@
 ---
 dependencies:
+  # Unconditional: a role-level `when` would gate every task in proxmox, freezing
+  # the VM list at its first reading. Authentication is cached task-by-task there.
   - role: proxmox
-    when: proxmox_ticket is not defined
   - role: vnet
     when: (nfs_ip == "") or (vnet_gateway == "") or (vnet_cidr == "") or (vnet_dns == "")

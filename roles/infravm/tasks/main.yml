@@ -228,6 +228,17 @@
         infravm_virtio_disks: "{{ infravm_virtio_disks | combine({'virtio1': proxmox_disk_storage_id ~ ':' ~ (infravm_data_disk_size | regex_replace('[Gg]$', ''))}) }}"
       when: infravm_data_disk_size | default('') | length > 0
 
+    # Without an explicit vmid the module resolves the name against every cluster
+    # resource, templates included, and adopts that vmid instead of creating.
+    - name: Allocate the next free VMID
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/cluster/nextid"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: infravm_nextid
+
     - name: Create InfraVM on Proxmox
       community.proxmox.proxmox_kvm:
         api_host: "{{ proxmox_host }}"
@@ -235,6 +246,7 @@
         api_user: "{{ proxmox_user }}"
         api_password: "{{ proxmox_password }}"
         node: "{{ proxmox_node }}"
+        vmid: "{{ infravm_nextid.json.data }}"
         name: "{{ infravm_vm_name }}"
         cores: "{{ infravm_cores }}"
         memory: "{{ infravm_memory }}"
