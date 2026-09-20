@@ -35,7 +35,7 @@
     .toolbar button { min-width:36px; height:36px; padding:0 10px; }
     #zoom-level { width:48px; text-align:center; font:12px "DejaVu Sans Mono", monospace; }
     #diagram-pane { height:calc(100vh - 198px); min-height:360px; overflow:auto; border:1px solid var(--line); border-radius:4px; background-color:white; background-image:radial-gradient(#dce3df .7px, transparent .7px); background-size:16px 16px; }
-    object { display:block; width:100%; aspect-ratio:1652 / 1075; }
+    object { display:block; width:100%; aspect-ratio:1661 / 1095; }
     #detail { padding:14px 0; display:flex; flex-wrap:wrap; gap:8px 20px; min-height:46px; color:var(--muted); font-size:12px; }
     #detail strong { color:var(--ink); }
     .workspace.has-tasks #diagram-pane { height:35vh; min-height:220px; }
@@ -383,6 +383,16 @@
       if (!config || !diagram.contentDocument?.documentElement || diagram.contentDocument.documentElement.localName !== 'svg') return;
       mapped = new Map();
       const documentSvg = diagram.contentDocument;
+      const viewBox = documentSvg.documentElement.viewBox.baseVal;
+      diagram.style.aspectRatio = `${viewBox.width} / ${viewBox.height}`;
+      for (const [cell, label] of Object.entries(config.labels)) {
+        const node = documentSvg.querySelector(`[data-cell-id="${cell}"]`);
+        if (!node) continue;
+        const title = node.querySelector('.deployment-title') || documentSvg.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.setAttribute('class', 'deployment-title');
+        title.textContent = `${label}: Not tracked by this deployment viewer`;
+        node.prepend(title);
+      }
       for (const [stage, cells] of Object.entries(config.cells)) {
         const nodes = cells.map(cell => documentSvg.querySelector(`[data-cell-id="${cell}"]`)).filter(Boolean);
         mapped.set(stage, nodes);
@@ -418,7 +428,11 @@
             if (!artwork.classList.contains('deployment-border')) artwork.style.filter = values.state === 'completed' ? '' : 'grayscale(1)';
           }
           node.style.opacity = values.state === 'pending' ? '.38' : values.state === 'skipped' ? '.55' : '1';
-          node.setAttribute('aria-label', `${config.stages[stage]}: ${labels[values.state]}`);
+          const label = config.labels[node.getAttribute('data-cell-id')] || config.stages[stage];
+          const description = `${label} | ${config.stages[stage]}: ${labels[values.state]} (stage status, not individual verification)`;
+          node.setAttribute('aria-label', description);
+          const title = node.querySelector('.deployment-title');
+          if (title) title.textContent = description;
           node.querySelector('.deployment-border').setAttribute('stroke', colors[values.state]);
         }
       }
@@ -432,6 +446,9 @@
         const counters = document.createElement('span');
         counters.textContent = `${values.ok} successful | ${values.skipped} skipped | ${values.rescued} rescued | ${values.ignored} ignored`;
         detail.append(name, counters);
+        const icons = document.createElement('span');
+        icons.textContent = `Diagram: ${(config.cells[focus] || []).map(cell => config.labels[cell]).filter(Boolean).join(', ')}. Stage status only; not individual artifact or service verification.`;
+        detail.append(icons);
       }
       renderTasks(report, focus);
     }

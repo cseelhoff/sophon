@@ -18,7 +18,33 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from deployment import STAGES, FIELDS, DashboardServer, application, new_control, shell_command, trace_environment
+from deployment import STAGES, FIELDS, CELLS, DashboardServer, application, load_diagram, new_control, shell_command, trace_environment
+
+
+def test_diagram():
+  diagram, labels = load_diagram()
+  assert diagram == (ROOT / 'sophon.svg').read_bytes()
+  assert CELLS.keys() == STAGES.keys()
+  mapped = [cell for cells in CELLS.values() for cell in cells]
+  assert len(mapped) == len(set(mapped))
+  assert all(cell in labels for cell in mapped)
+  assert {labels[cell] for cell in CELLS['prestage']} == {
+    'alpine-nfs.qcow2', 'portainer.tar', 'coredns.tar', 'openldap.tar',
+    'traefik.tar', 'keycloak.tar', 'gitea.tar', 'postgres.tar',
+  }
+  assert [labels[cell] for cell in CELLS['proxmox']] == ['2. Proxmox Prod Cluster']
+  assert [labels[cell] for cell in CELLS['infravm']] == ['4. InfraVM', '5. Portainer']
+  assert [labels[cell] for cell in CELLS['kopia']] == ['11. Kopia']
+  untracked = {label for cell, label in labels.items() if cell not in mapped}
+  assert {'coreos.qcow2', 'gitea.sql', 'coredns.yml', 'cloudflared.tar', 'LDAP Backup'} <= untracked
+  assert '0' not in labels and '1' not in labels
+  with patch.dict(CELLS, {'prestage': ['missing-cell']}):
+    try:
+      load_diagram()
+    except ValueError as error:
+      assert str(error) == 'SVG mapping missing cells: missing-cell'
+    else:
+      raise AssertionError('Missing diagram cells must fail startup validation')
 
 
 def run_fixture(directory, tasks, roles=None):
@@ -251,7 +277,14 @@ def test_gui_settings():
     try:
       url = server.stdout.readline().strip()
       with urlopen(url + 'config.json', timeout=5) as response:
-        token = json.load(response)['token']
+        config = json.load(response)
+      token = config['token']
+      assert config['cells'] == CELLS
+      assert config['labels'] == load_diagram()[1]
+      with urlopen(url + 'diagram.svg', timeout=5) as response:
+        assert response.headers['Content-Type'] == 'image/svg+xml'
+        assert "script-src 'none'" in response.headers['Content-Security-Policy']
+        assert response.read() == (ROOT / 'sophon.svg').read_bytes()
       try:
         urlopen(url + 'settings.json', timeout=5)
       except HTTPError as error:
@@ -619,6 +652,7 @@ def test_nfs_recovery():
 
 
 if __name__ == '__main__':
+  test_diagram()
   test_credential_inputs()
   test_shell_command()
   test_shell_trace()

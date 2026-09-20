@@ -157,12 +157,23 @@ not the diagram, for that error. The terminal launcher also records startup
 failures and interruptions. The server serves only its explicit routes, not
 the repository or the rest of `artifacts/`.
 
-After editing the diagram, export it again to `sophon.drawio.svg` with cell IDs
+After editing the diagram, export it again to `sophon.svg` with cell IDs
 preserved, update `CELLS` in `deployment.py` if mapped cells were replaced, and
-restart the server. Missing mapped cells fail validation at startup. Kopia has
-no matching icon in the current export, so its progress is list-only.
-Prestage and Proxmox authentication are also list-only. InfraVM includes the
-Portainer icon. Unmapped diagram elements remain unchanged.
+restart the server. Missing mapped cells fail validation at startup. All stages
+now have mapped icons, including the production Proxmox cluster and Kopia.
+InfraVM includes Portainer. Labels are extracted from the SVG for tooltips and
+the selected stage's details; hover other labeled elements to see that they are
+not tracked by this viewer.
+
+Prestage maps only depicted artifacts produced by the current role:
+`alpine-nfs.qcow2`, `portainer.tar`, `coredns.tar`, `openldap.tar`, `traefik.tar`,
+`keycloak.tar`, `gitea.tar`, and `postgres.tar`. These are diagram aliases, not
+literal artifact paths: the NFS disk is `sophon-nfs-alpine.qcow2`, CoreDNS is
+`coredns-dockerdiscovery.tar`, and other container archives have vendor/version
+names. Their colour follows the overall Prestage outcome, not individual file
+verification. Depicted `.sql` backups, `.yml` files, `coreos.qcow2`, and unsupported
+container archives remain untracked; the current Prestage role does not produce
+them. The diagram is broader than the implemented deployment.
 
 Run the local checks with `python3 tests/test_deployment.py`. They use temporary
 Ansible fixtures and never deploy the site.

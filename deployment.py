@@ -32,13 +32,21 @@ STAGES = {
     'kopia': 'Kopia',
 }
 CELLS = {
+    'prestage': [
+        '_SmIZJivoSQWszKZv9Yz-16', '_SmIZJivoSQWszKZv9Yz-52',
+        '_SmIZJivoSQWszKZv9Yz-53', '_SmIZJivoSQWszKZv9Yz-54',
+        '_SmIZJivoSQWszKZv9Yz-55', '_SmIZJivoSQWszKZv9Yz-56',
+        '_SmIZJivoSQWszKZv9Yz-57', '_SmIZJivoSQWszKZv9Yz-62',
+    ],
+    'proxmox': ['_SmIZJivoSQWszKZv9Yz-3'],
     'nfs': ['_SmIZJivoSQWszKZv9Yz-65'],
-    'infravm': ['_SmIZJivoSQWszKZv9Yz-2', '_SmIZJivoSQWszKZv9Yz-1'],
+    'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5'],
     'coredns': ['497KWN3HuOLj0ZWtI1qn-3'],
     'traefik': ['BveltJdI-pWs-qTDEDWz-51'],
     'openldap': ['BveltJdI-pWs-qTDEDWz-50'],
     'keycloak': ['BveltJdI-pWs-qTDEDWz-53'],
     'gitea': ['BveltJdI-pWs-qTDEDWz-45'],
+    'kopia': ['Ht_PiSHEylvQ-5aMCYDO-4'],
 }
 FIELDS = {
     'SOPHON_PROXMOX_HOST': ('Host', 'Proxmox', 'host', '', True),
@@ -76,7 +84,8 @@ LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094), 'SOP
 
 def new_control(environment):
     return {'values': {name: environment.get(name) or definition[3] for name, definition in FIELDS.items()},
-            'environment': dict(environment), 'token': secrets.token_urlsafe(32), 'processes': []}
+            'environment': dict(environment), 'token': secrets.token_urlsafe(32), 'processes': [],
+            'diagram_labels': {}}
 
 
 def settings_payload(control):
@@ -277,7 +286,8 @@ def application(directory, assets, control, environment, start_response):
             return [b'Forbidden']
         body, content_type = json.dumps(settings_payload(control)).encode(), 'application/json'
     elif path == '/config.json':
-        body = json.dumps({'stages': STAGES, 'cells': CELLS, 'token': control['token']}).encode()
+        body = json.dumps({'stages': STAGES, 'cells': CELLS, 'labels': control['diagram_labels'],
+                           'token': control['token']}).encode()
         content_type = 'application/json'
     elif path in assets:
         body, content_type = assets[path]
@@ -302,18 +312,40 @@ class DashboardServer(ThreadingMixIn, WSGIServer):
         return connection, address
 
 
-def serve(directory, port=0):
-    diagram = (ROOT / 'sophon.drawio.svg').read_bytes()
-    cell_ids = {node.get('data-cell-id') for node in ET.fromstring(diagram).iter()}
+def load_diagram():
+    diagram = (ROOT / 'sophon.svg').read_bytes()
+    root = ET.fromstring(diagram)
+    cells = {node.get('data-cell-id'): node for node in root.iter() if node.get('data-cell-id')}
+    cell_ids = cells.keys()
     missing = [cell for cells in CELLS.values() for cell in cells if cell not in cell_ids]
     if missing:
-        print('SVG mapping missing cells: ' + ', '.join(missing), file=sys.stderr)
+        raise ValueError('SVG mapping missing cells: ' + ', '.join(missing))
+    labels = {}
+    for cell, node in cells.items():
+        if any(child.get('data-cell-id') for child in node.iter() if child is not node):
+            continue
+        text_nodes = node.findall('.//{http://www.w3.org/2000/svg}foreignObject')
+        if not text_nodes:
+            text_nodes = node.findall('.//{http://www.w3.org/2000/svg}text')
+        label = ' '.join(' '.join(text.itertext()) for text in text_nodes)
+        if label.strip():
+            labels[cell] = ' '.join(label.split())
+    return diagram, labels
+
+
+def serve(directory, port=0):
+    try:
+        diagram, labels = load_diagram()
+    except ValueError as error:
+        print(error, file=sys.stderr)
         return 1
     assets = {
         '/': ((ROOT / 'dashboard' / 'index.html').read_bytes(), 'text/html; charset=utf-8'),
         '/diagram.svg': (diagram, 'image/svg+xml'),
     }
-    with make_server('127.0.0.1', port, partial(application, directory, assets, new_control(os.environ)),
+    control = new_control(os.environ)
+    control['diagram_labels'] = labels
+    with make_server('127.0.0.1', port, partial(application, directory, assets, control),
                      server_class=DashboardServer) as server:
         print(f'http://127.0.0.1:{server.server_port}/', flush=True)
         server.serve_forever()
