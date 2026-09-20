@@ -161,9 +161,11 @@ After editing the diagram, export it again to `sophon.svg` with cell IDs
 preserved, update `CELLS` in `deployment.py` if mapped cells were replaced, and
 restart the server. Missing mapped cells fail validation at startup. All stages
 now have mapped icons, including the production Proxmox cluster and Kopia.
-InfraVM includes Portainer. Labels are extracted from the SVG for tooltips and
-the selected stage's details; hover other labeled elements to see that they are
-not tracked by this viewer.
+InfraVM includes Portainer and the `coreos.qcow2` icon. That label is an alias for
+the versioned Fedora CoreOS disk configured by `infravm_coreos_url`; its preparation
+and import happen in InfraVM, not Prestage. Labels are extracted from the SVG for
+tooltips and the selected stage's details; hover other labeled elements to see
+that they are not tracked by this viewer.
 
 Prestage maps only depicted artifacts produced by the current role:
 `alpine-nfs.qcow2`, `portainer.tar`, `coredns.tar`, `openldap.tar`, `traefik.tar`,
@@ -171,12 +173,26 @@ Prestage maps only depicted artifacts produced by the current role:
 literal artifact paths: the NFS disk is `sophon-nfs-alpine.qcow2`, CoreDNS is
 `coredns-dockerdiscovery.tar`, and other container archives have vendor/version
 names. Their colour follows the overall Prestage outcome, not individual file
-verification. Depicted `.sql` backups, `.yml` files, `coreos.qcow2`, and unsupported
+verification. Depicted `.sql` backups, `.yml` files, and unsupported
 container archives remain untracked; the current Prestage role does not produce
-them. The diagram is broader than the implemented deployment.
+them. The `LDAP Backup` icon also remains untracked: the OpenLDAP role does not
+produce a backup dump file. The diagram is broader than the implemented deployment.
+
+The dashboard defaults to dark mode, including forms, task results, and the
+embedded diagram, regardless of the operating system's theme. The viewer applies
+the SVG's native dark colours and removes white label backplates without
+inverting service logos or modifying the source `sophon.svg`.
+
+Zoom ranges from 25% to 500%; Fit restores the diagram to the pane's width.
+Selecting a stage shows its task results. Use Hide beside the task filter to
+close that section and restore the larger diagram view. Progress updates do not
+reopen it; select any stage to show task results again.
 
 Run the local checks with `python3 tests/test_deployment.py`. They use temporary
-Ansible fixtures and never deploy the site.
+Ansible fixtures and never deploy the site. Browser interaction checks are
+separate: with the Python `playwright` package and its Chromium browser installed,
+run `python3 tests/test_dashboard.py`. They exercise zoom and hiding task results at desktop
+and mobile sizes against a temporary viewer, without deploying anything.
 
 ### Disconnected site
 

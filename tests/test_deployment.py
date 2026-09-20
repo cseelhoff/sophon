@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import xml.etree.ElementTree as ET
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
@@ -23,7 +24,13 @@ from deployment import STAGES, FIELDS, CELLS, DashboardServer, application, load
 
 def test_diagram():
   diagram, labels = load_diagram()
-  assert diagram == (ROOT / 'sophon.svg').read_bytes()
+  rendered = ET.fromstring(diagram)
+  style = rendered[0]
+  assert style.tag == '{http://www.w3.org/2000/svg}style'
+  assert 'color-scheme: dark !important' in style.text
+  assert 'background-color: transparent !important' in style.text
+  rendered.remove(style)
+  assert ET.tostring(rendered) == ET.tostring(ET.parse(ROOT / 'sophon.svg').getroot())
   assert CELLS.keys() == STAGES.keys()
   mapped = [cell for cells in CELLS.values() for cell in cells]
   assert len(mapped) == len(set(mapped))
@@ -33,10 +40,10 @@ def test_diagram():
     'traefik.tar', 'keycloak.tar', 'gitea.tar', 'postgres.tar',
   }
   assert [labels[cell] for cell in CELLS['proxmox']] == ['2. Proxmox Prod Cluster']
-  assert [labels[cell] for cell in CELLS['infravm']] == ['4. InfraVM', '5. Portainer']
+  assert [labels[cell] for cell in CELLS['infravm']] == ['4. InfraVM', '5. Portainer', 'coreos.qcow2']
   assert [labels[cell] for cell in CELLS['kopia']] == ['11. Kopia']
   untracked = {label for cell, label in labels.items() if cell not in mapped}
-  assert {'coreos.qcow2', 'gitea.sql', 'coredns.yml', 'cloudflared.tar', 'LDAP Backup'} <= untracked
+  assert {'gitea.sql', 'coredns.yml', 'cloudflared.tar', 'LDAP Backup'} <= untracked
   assert '0' not in labels and '1' not in labels
   with patch.dict(CELLS, {'prestage': ['missing-cell']}):
     try:
@@ -284,7 +291,7 @@ def test_gui_settings():
       with urlopen(url + 'diagram.svg', timeout=5) as response:
         assert response.headers['Content-Type'] == 'image/svg+xml'
         assert "script-src 'none'" in response.headers['Content-Security-Policy']
-        assert response.read() == (ROOT / 'sophon.svg').read_bytes()
+        assert response.read() == load_diagram()[0]
       try:
         urlopen(url + 'settings.json', timeout=5)
       except HTTPError as error:

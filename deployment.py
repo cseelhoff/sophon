@@ -40,7 +40,7 @@ CELLS = {
     ],
     'proxmox': ['_SmIZJivoSQWszKZv9Yz-3'],
     'nfs': ['_SmIZJivoSQWszKZv9Yz-65'],
-    'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5'],
+    'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5', '_SmIZJivoSQWszKZv9Yz-12'],
     'coredns': ['497KWN3HuOLj0ZWtI1qn-3'],
     'traefik': ['BveltJdI-pWs-qTDEDWz-51'],
     'openldap': ['BveltJdI-pWs-qTDEDWz-50'],
@@ -330,7 +330,16 @@ def load_diagram():
         label = ' '.join(' '.join(text.itertext()) for text in text_nodes)
         if label.strip():
             labels[cell] = ' '.join(label.split())
-    return diagram, labels
+    ET.register_namespace('', 'http://www.w3.org/2000/svg')
+    ET.register_namespace('xhtml', 'http://www.w3.org/1999/xhtml')
+    style = ET.Element('{http://www.w3.org/2000/svg}style')
+    style.text = (
+        ':root { color-scheme: dark !important; background: #151c20 !important; '
+        '--ge-dark-color: #151c20; } '
+        'foreignObject > div { background-color: transparent !important; color: #e6edf3 !important; }'
+    )
+    root.insert(0, style)
+    return ET.tostring(root, encoding='utf-8'), labels
 
 
 def serve(directory, port=0):

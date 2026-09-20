@@ -5,23 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sophon | Deployment</title>
   <style>
-    :root { color-scheme: light; --ink:#202b29; --muted:#5f6b68; --line:#d4dcd8; --green:#187349; --blue:#1468a4; --red:#bd343e; --amber:#936613; }
+    :root { color-scheme: dark; --ink:#e6edf3; --muted:#a9b7c0; --line:#46545e; --green:#62d69a; --blue:#78baff; --red:#ff8992; --amber:#e7bd65; --background:#101619; --surface:#1b242a; --canvas:#151c20; }
     * { box-sizing:border-box; letter-spacing:0; }
-    body { margin:0; color:var(--ink); background:#f5f7f6; font:14px "DejaVu Sans", sans-serif; }
-    button { font:inherit; cursor:pointer; color:inherit; background:white; border:1px solid var(--line); border-radius:4px; }
+    body { margin:0; color:var(--ink); background:var(--background); font:14px "DejaVu Sans", sans-serif; }
+    button { font:inherit; cursor:pointer; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:4px; }
     button:focus-visible { outline:3px solid var(--blue); outline-offset:2px; }
-    header { display:flex; align-items:center; flex-wrap:wrap; gap:12px 28px; padding:18px 24px; border-bottom:1px solid var(--line); background:white; }
+    header { display:flex; align-items:center; flex-wrap:wrap; gap:12px 28px; padding:18px 24px; border-bottom:1px solid var(--line); background:var(--surface); }
     h1 { margin:0; font-size:24px; font-weight:700; }
     h1 span { font-size:14px; font-weight:400; color:var(--muted); margin-left:12px; }
     #run-state { font-weight:700; }
     #run-time { margin-left:auto; font:12px "DejaVu Sans Mono", monospace; color:var(--muted); }
     main { display:grid; grid-template-columns:250px minmax(0,1fr); min-height:calc(100vh - 70px); }
-    aside { border-right:1px solid var(--line); background:white; padding:20px 12px; }
+    aside { border-right:1px solid var(--line); background:var(--surface); padding:20px 12px; }
     h2 { font-size:12px; font-weight:700; margin:0 10px 16px; color:var(--muted); }
     ol { list-style:none; padding:0; margin:0; }
     .stage { width:100%; display:grid; grid-template-columns:24px minmax(0,1fr); gap:3px 8px; text-align:left; padding:12px 10px; margin-bottom:4px; border-color:transparent; min-height:65px; }
-    .stage:hover { background:#f2f6f4; }
-    .stage[aria-pressed="true"] { background:#edf5f1; border-color:#a3c7b6; }
+    .stage:hover { background:#26343c; }
+    .stage[aria-pressed="true"] { background:#203d33; border-color:#589b7a; }
     .stage .symbol { grid-row:span 2; align-self:center; font-size:18px; text-align:center; }
     .stage .name { font-weight:600; overflow-wrap:anywhere; }
     .stage .state { color:var(--muted); font-size:12px; }
@@ -34,7 +34,7 @@
     .toolbar strong { margin-right:auto; font-size:14px; }
     .toolbar button { min-width:36px; height:36px; padding:0 10px; }
     #zoom-level { width:48px; text-align:center; font:12px "DejaVu Sans Mono", monospace; }
-    #diagram-pane { height:calc(100vh - 198px); min-height:360px; overflow:auto; border:1px solid var(--line); border-radius:4px; background-color:white; background-image:radial-gradient(#dce3df .7px, transparent .7px); background-size:16px 16px; }
+    #diagram-pane { height:calc(100vh - 198px); min-height:360px; overflow:auto; border:1px solid var(--line); border-radius:4px; background-color:var(--canvas); background-image:radial-gradient(var(--line) .7px, transparent .7px); background-size:16px 16px; }
     object { display:block; width:100%; aspect-ratio:1661 / 1095; }
     #detail { padding:14px 0; display:flex; flex-wrap:wrap; gap:8px 20px; min-height:46px; color:var(--muted); font-size:12px; }
     #detail strong { color:var(--ink); }
@@ -42,9 +42,10 @@
     #task-panel { border-top:1px solid var(--line); padding-top:12px; }
     .task-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-bottom:10px; }
     .task-heading h2 { margin:0 auto 0 0; font-size:14px; color:var(--ink); }
-    #task-filter { font:inherit; padding:6px 8px; background:white; border:1px solid var(--line); border-radius:4px; }
+    #task-filter { font:inherit; padding:6px 8px; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:4px; }
+    #hide-tasks { padding:6px 12px; }
     #task-results { max-height:43vh; min-height:100px; overflow:auto; }
-    .task-result { border-bottom:1px solid var(--line); background:white; }
+    .task-result { border-bottom:1px solid var(--line); background:var(--surface); }
     .task-result summary { cursor:pointer; padding:10px 8px; overflow-wrap:anywhere; }
     .task-result summary:focus-visible { outline:2px solid var(--blue); outline-offset:-2px; }
     .task-name { font-weight:600; }
@@ -52,32 +53,32 @@
     .task-result[data-state="failed"] .task-state { color:var(--red); font-weight:700; }
     .task-result[data-state="retrying"] .task-state, .task-result[data-state="ignored"] .task-state { color:var(--amber); }
     .task-meta { margin:0; padding:4px 12px 10px; color:var(--muted); font:12px "DejaVu Sans Mono", monospace; overflow-wrap:anywhere; }
-    .task-output { margin:4px 12px 12px; padding:10px; max-height:220px; overflow:auto; background:#f3f6f4; font:12px/1.5 "DejaVu Sans Mono", monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .task-output { margin:4px 12px 12px; padding:10px; max-height:220px; overflow:auto; background:var(--background); font:12px/1.5 "DejaVu Sans Mono", monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
     .task-caption { margin:10px 12px 4px; font-size:12px; font-weight:600; }
     #task-empty { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
-    #notice { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--amber); background:#fff6dc; color:#614b19; overflow-wrap:anywhere; }
+    #notice { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--amber); background:#382e1d; color:var(--amber); overflow-wrap:anywhere; }
     #notice:empty { display:none; }
     #configure { min-height:36px; padding:0 14px; }
     button:disabled { cursor:default; opacity:.55; }
-    dialog { width:min(760px, calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:white; }
-    dialog::backdrop { background:rgb(20 30 25 / .45); }
+    dialog { width:min(760px, calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:var(--surface); }
+    dialog::backdrop { background:rgb(0 0 0 / .65); }
     #deployment-form { display:flex; flex-direction:column; max-height:calc(100dvh - 36px); }
     .form-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:18px 20px; border-bottom:1px solid var(--line); }
     .form-heading h2 { margin:0; font-size:20px; color:var(--ink); }
     .form-heading button, .form-actions button { min-height:38px; padding:0 16px; }
     .form-body { overflow:auto; padding:0 20px 20px; }
-    #shell-command { width:100%; min-height:240px; white-space:pre; font:12px/1.5 monospace; }
+    #shell-command { width:100%; min-height:240px; white-space:pre; color:var(--ink); background:var(--background); border:1px solid var(--line); font:12px/1.5 monospace; }
     .security-note { color:var(--muted); font-size:12px; line-height:1.5; }
     fieldset { min-width:0; margin:0; padding:18px 0; border:0; border-bottom:1px solid var(--line); }
     legend { padding:16px 0 0; font-weight:700; }
     .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
     .field { display:flex; flex-direction:column; gap:6px; min-width:0; font-size:13px; }
     .field span { overflow-wrap:anywhere; }
-    .field input { width:100%; min-width:0; height:38px; padding:8px 10px; border:1px solid #aebbb4; border-radius:4px; background:white; color:var(--ink); font:inherit; }
+    .field input { width:100%; min-width:0; height:38px; padding:8px 10px; border:1px solid var(--line); border-radius:4px; background:var(--background); color:var(--ink); font:inherit; }
     .field input:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
     .field small { color:var(--muted); font-size:11px; }
     .form-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; padding:14px 20px; border-top:1px solid var(--line); }
-    #deploy-button { background:var(--green); border-color:var(--green); color:white; }
+    #deploy-button { background:var(--green); border-color:var(--green); color:var(--background); }
     #form-error { margin:0; padding:12px 20px; color:var(--red); overflow-wrap:anywhere; }
     #form-error:empty { display:none; }
     @media (max-width:700px) {
@@ -121,6 +122,7 @@
             <option value="all">All tasks</option>
             <option value="problems">Failures and recoveries</option>
           </select>
+          <button id="hide-tasks" type="button" aria-label="Hide task results">Hide</button>
         </div>
         <p id="task-empty"></p>
         <div id="task-results"></div>
@@ -154,12 +156,13 @@
   <script>
     const labels = {idle:'No deployment run', pending:'Not reached', running:'Running', completed:'Deployment complete', skipped:'Skipped', failed:'Failed', interrupted:'Interrupted', unknown:'Outcome unknown'};
     const symbols = {pending:'-', running:'>', completed:'+', skipped:'/', failed:'!', interrupted:'!', unknown:'?'};
-    const colors = {pending:'#8c9690', running:'#1468a4', completed:'#187349', skipped:'#8c9690', failed:'#bd343e', interrupted:'#936613', unknown:'#936613'};
+    const palette = getComputedStyle(document.documentElement);
+    const colors = Object.fromEntries(Object.entries({pending:'muted', running:'blue', completed:'green', skipped:'muted', failed:'red', interrupted:'amber', unknown:'amber'}).map(([state, color]) => [state, palette.getPropertyValue(`--${color}`).trim()]));
     const stageList = document.getElementById('stages');
     const diagram = document.getElementById('diagram');
     const pane = document.getElementById('diagram-pane');
     const notice = document.getElementById('notice');
-    let config, latest, selected, zoom = 1;
+    let config, latest, selected, zoom = 1, tasksHidden = false;
     const rows = new Map();
     let mapped = new Map();
     let taskSnapshot = '';
@@ -168,11 +171,19 @@
     const taskPanel = document.getElementById('task-panel');
     const taskResults = document.getElementById('task-results');
     const taskFilter = document.getElementById('task-filter');
+    const workspace = document.querySelector('.workspace');
     taskFilter.onchange = () => { if (latest) render(latest); };
+    document.getElementById('hide-tasks').onclick = () => {
+      const stage = selected || latest?.current;
+      tasksHidden = true;
+      selected = undefined;
+      if (latest) render(latest);
+      rows.get(stage)?.focus({preventScroll:true});
+    };
 
     function renderTasks(report, stage) {
       taskPanel.hidden = !stage;
-      document.querySelector('.workspace').classList.toggle('has-tasks', Boolean(stage));
+      workspace.classList.toggle('has-tasks', Boolean(stage));
       if (!stage) return;
       const tasks = report.stages[stage].tasks;
       const snapshot = JSON.stringify([report.run_id, stage, report.state, tasks, taskFilter.value]);
@@ -370,14 +381,14 @@
       }
     });
     function setZoom(value) {
-      zoom = Math.min(5, Math.max(1, value));
+      zoom = Math.min(5, Math.max(.25, value));
       diagram.style.width = `${zoom * 100}%`;
       document.getElementById('zoom-level').textContent = zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`;
-      document.getElementById('zoom-out').disabled = zoom === 1;
+      document.getElementById('zoom-out').disabled = zoom === .25;
       document.getElementById('zoom-in').disabled = zoom === 5;
     }
-    document.getElementById('zoom-in').onclick = () => setZoom(zoom + .5);
-    document.getElementById('zoom-out').onclick = () => setZoom(zoom - .5);
+    document.getElementById('zoom-in').onclick = () => setZoom(zoom + .25);
+    document.getElementById('zoom-out').onclick = () => setZoom(zoom - .25);
     document.getElementById('fit').onclick = () => { setZoom(1); pane.scrollTo(0, 0); };
     function mapDiagram() {
       if (!config || !diagram.contentDocument?.documentElement || diagram.contentDocument.documentElement.localName !== 'svg') return;
@@ -427,7 +438,7 @@
           for (const artwork of node.children) {
             if (!artwork.classList.contains('deployment-border')) artwork.style.filter = values.state === 'completed' ? '' : 'grayscale(1)';
           }
-          node.style.opacity = values.state === 'pending' ? '.38' : values.state === 'skipped' ? '.55' : '1';
+          node.style.opacity = values.state === 'pending' ? '.65' : values.state === 'skipped' ? '.75' : '1';
           const label = config.labels[node.getAttribute('data-cell-id')] || config.stages[stage];
           const description = `${label} | ${config.stages[stage]}: ${labels[values.state]} (stage status, not individual verification)`;
           node.setAttribute('aria-label', description);
@@ -436,7 +447,7 @@
           node.querySelector('.deployment-border').setAttribute('stroke', colors[values.state]);
         }
       }
-      const focus = selected || report.current;
+      const focus = tasksHidden ? undefined : selected || report.current;
       const detail = document.getElementById('detail');
       detail.replaceChildren();
       if (focus) {
@@ -494,6 +505,7 @@
           button.append(element);
         }
         button.onclick = () => {
+          tasksHidden = false;
           selected = stage;
           if (latest) render(latest);
           const node = mapped.get(stage)?.[0];
