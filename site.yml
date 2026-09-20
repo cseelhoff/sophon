@@ -43,82 +43,79 @@
 
 - name: Deploy Sophon
   hosts: localhost
+  pre_tasks:
+    - name: Validate deployment credentials
+      ansible.builtin.assert:
+        that:
+          - lookup('vars', item) is string
+          - lookup('vars', item) | trim | length > 0
+        fail_msg: "Supply SOPHON_{{ item | upper }} in the environment or override {{ item }} with -e."
+        quiet: true
+      loop:
+        - proxmox_password
+        - portainer_admin_password
+        - keycloak_admin_password
+        - keycloak_db_password
+        - keycloak_portainer_client_secret
+        - gitea_admin_password
+        - openldap_admin_password
+        - openldap_example_user_password
+        - openldap_example_admin_password
+        - gitea_db_password
+        - kopia_admin_password
+        - kopia_repository_password
+      tags: [always]
+
+    - name: Validate Portainer password length
+      ansible.builtin.assert:
+        that:
+          - portainer_admin_password | length >= 12
+        fail_msg: "SOPHON_PORTAINER_ADMIN_PASSWORD (portainer_admin_password) must contain at least 12 characters."
+        quiet: true
+      tags: [always]
+
   tasks:
-    # =========================================================================
-    # Generate random admin / seed-user passwords once, then reuse them.
-    # `set_fact` is overridden by `-e var=...` extra-vars (highest precedence)
-    # but overrides any role default, so passing -e on the CLI still wins and
-    # is never written to disk.
-    # The `password` lookup writes each value under artifacts/secrets/ and
-    # returns the existing one on later runs. Services persist their own
-    # credentials now (Keycloak in Postgres, Gitea in Postgres, OpenLDAP on
-    # disk), so regenerating here would lock us out of a running deployment.
-    # Portainer's admin password is persisted the same way from group_vars.
-    # =========================================================================
-    - name: Ensure secrets directory exists
-      ansible.builtin.file:
-        path: "{{ playbook_dir }}/artifacts/secrets"
-        state: directory
-        mode: "0700"
-
-    - name: Generate random admin and seed-user passwords
-      ansible.builtin.set_fact:
-        keycloak_admin_password: >-
-          {{ keycloak_admin_password
-             if (keycloak_admin_password | default('')) not in ['', 'admin']
-             else lookup('password', _secrets_dir ~ '/keycloak_admin_password length=24 chars=ascii_letters,digits') }}
-        gitea_admin_password: >-
-          {{ gitea_admin_password
-             if (gitea_admin_password | default('')) != ''
-             else lookup('password', _secrets_dir ~ '/gitea_admin_password length=24 chars=ascii_letters,digits') }}
-        openldap_admin_password: >-
-          {{ openldap_admin_password
-             if (openldap_admin_password | default('')) not in ['', 'admin']
-             else lookup('password', _secrets_dir ~ '/openldap_admin_password length=24 chars=ascii_letters,digits') }}
-        openldap_example_user_password: >-
-          {{ openldap_example_user_password
-             if (openldap_example_user_password | default('')) not in ['', 'changeme-user']
-             else lookup('password', _secrets_dir ~ '/openldap_example_user_password length=20 chars=ascii_letters,digits') }}
-        openldap_example_admin_password: >-
-          {{ openldap_example_admin_password
-             if (openldap_example_admin_password | default('')) not in ['', 'changeme-admin']
-             else lookup('password', _secrets_dir ~ '/openldap_example_admin_password length=20 chars=ascii_letters,digits') }}
-        openldap_example_user_uid: "{{ openldap_example_user_uid | default('john.doe') }}"
-        openldap_example_admin_uid: "{{ openldap_example_admin_uid | default('john.doe.admin') }}"
-      vars:
-        _secrets_dir: "{{ playbook_dir }}/artifacts/secrets"
-
     # No-op once artifacts/ is populated, so a disconnected site never reaches
     # the network here. Run prestage.yml separately to stage on another machine.
     - name: Stage artifacts
       ansible.builtin.include_role: { name: prestage }
+      tags: [sophon_stage_prestage]
 
     - name: Authenticate with Proxmox
       ansible.builtin.include_role: { name: proxmox }
+      tags: [sophon_stage_proxmox]
 
     - name: Deploy NFS Server
       ansible.builtin.include_role: { name: nfs }
+      tags: [sophon_stage_nfs]
 
     - name: Deploy InfraVM
       ansible.builtin.include_role: { name: infravm }
+      tags: [sophon_stage_infravm]
 
     - name: Deploy CoreDNS Docker Discovery
       ansible.builtin.include_role: { name: coredns }
+      tags: [sophon_stage_coredns]
 
     - name: Deploy Traefik
       ansible.builtin.include_role: { name: traefik }
+      tags: [sophon_stage_traefik]
 
     - name: Deploy OpenLDAP
       ansible.builtin.include_role: { name: openldap }
+      tags: [sophon_stage_openldap]
 
     - name: Deploy Keycloak
       ansible.builtin.include_role: { name: keycloak }
+      tags: [sophon_stage_keycloak]
 
     - name: Deploy Gitea
       ansible.builtin.include_role: { name: gitea }
+      tags: [sophon_stage_gitea]
 
     - name: Deploy Kopia
       ansible.builtin.include_role: { name: kopia }
+      tags: [sophon_stage_kopia]
 
 
     # - name: Display final IP configuration
@@ -142,7 +139,8 @@
     # Final Summary
     # =============================================================================
 
-    - name: Display generated passwords
+    - name: Display deployment credentials
+      tags: [sophon_stage_end]
       ansible.builtin.debug:
         msg: |
           ============================================================================
@@ -157,13 +155,14 @@
           Portainer:
             URL:             https://{{ infravm_ip }}:9443
             Username:        admin
-            Password:        {{ portainer_admin_password | default('not generated') }}
+            Password:        {{ portainer_admin_password }}
 
           Other Credentials:
-            Keycloak Admin:      {{ keycloak_admin_password | default('not generated') }}
-            Gitea Admin:         {{ gitea_admin_password | default('not generated') }}
-            Kopia UI / Repo:     {{ kopia_admin_password | default(portainer_admin_password) | default('not generated') }}
-            OpenLDAP Admin:      {{ openldap_admin_password | default('not generated') }}
+            Keycloak Admin:      {{ keycloak_admin_password }}
+            Gitea Admin:         {{ gitea_admin_password }}
+            Kopia UI:            {{ kopia_admin_password }}
+            Kopia Repository:    {{ kopia_repository_password }}
+            OpenLDAP Admin:      {{ openldap_admin_password }}
 
           LDAP Example Users (auto-seeded):
             Standard user:       uid={{ openldap_example_user_uid }}  password: {{ openldap_example_user_password }}

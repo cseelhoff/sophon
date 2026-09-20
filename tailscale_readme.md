@@ -4,6 +4,11 @@ The devcontainer includes Tailscale from the Nix profile and installs a
 `sophon-tailscale` helper into `/usr/local/bin`. Rebuild the devcontainer after
 changes to `.devcontainer/` so the helper is available.
 
+In VS Code, run **Dev Containers: Rebuild and Reopen in Container** from the
+command palette (or **Dev Containers: Rebuild Container** if already inside).
+Wait for the image build to finish, then run the commands below in the container
+terminal, not the host terminal.
+
 The Tailscale state is stored in `.tailscale/tailscaled.state`. That directory is
 ignored by Git so the node key can persist between VS Code devcontainer sessions
 without being committed.
@@ -100,6 +105,10 @@ ip route get 10.0.60.2
 
 ## Notes
 
+- The Dockerfile writes the Nix settings `sandbox = false` and
+  `filter-syscalls = false` before running the Nix installer. The installer
+  itself needs these settings inside the restricted build container; writing
+  them afterward can fail with `cannot set host name: Operation not permitted`.
 - `/dev/net/tun` must exist in the devcontainer.
 - The devcontainer needs `NET_ADMIN`, `NET_RAW`, and `/dev/net/tun` in
   `.devcontainer/devcontainer.json`.

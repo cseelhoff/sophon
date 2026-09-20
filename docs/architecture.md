@@ -199,9 +199,14 @@ protected ([ADR-0009](adr/0009-service-state-is-reconstructible-or-irreplaceable
 
 | Kind | Examples | Protection |
 |---|---|---|
-| **Generated** | passwords, allocated IPs, SSH keys | `artifacts/`, on the Controller |
+| **Generated** | SSH keys and other generated deployment artifacts | `artifacts/`, on the Controller |
 | **Reconstructible** | Keycloak realm config, Traefik routers | Re-run the playbook |
 | **Irreplaceable** | Gitea repositories, LDAP entries, `acme.json` | Kopia snapshot |
+
+Passwords are operator inputs, supplied through the environment or Ansible
+overrides and retained in the operator's password manager. They are not generated
+or persisted as controller password files; see
+[credentials](preconditions.md#credentials).
 
 Kopia backs up `/source` — the `kopia_backups` volume — to an encrypted
 repository reachable over SFTP on the NFS VM at `/export/kopia/repo`. Services

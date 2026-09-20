@@ -12,8 +12,8 @@
 # flag silently retargets the deployment at a different subnet.
 #
 # `-e` still wins over anything below, so one-off overrides keep working. The
-# fallback after each lookup repeats the role default verbatim, so leaving a
-# variable unset behaves exactly as it did before this block existed.
+# non-secret settings have defaults. Required credentials have no generated
+# fallback and are checked before deployment starts.
 #
 # Cloudflare needs only the token: the zone and account ids are read back from
 # the API by the coredns role, which keeps them from going stale when a zone is
@@ -42,7 +42,15 @@ keycloak_realm: "{{ lookup('env', 'SOPHON_KEYCLOAK_REALM') | default('sophon', t
 # cannot leave "Sophon" greeting users of a site that is not called that.
 keycloak_realm_display_name: >-
   {{ lookup('env', 'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME') | default(keycloak_realm, true) }}
-keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') | default('admin', true) }}"
+keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') }}"
+keycloak_db_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_DB_PASSWORD') }}"
+keycloak_portainer_client_secret: "{{ lookup('env', 'SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET') }}"
+gitea_admin_password: "{{ lookup('env', 'SOPHON_GITEA_ADMIN_PASSWORD') }}"
+openldap_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_ADMIN_PASSWORD') }}"
+openldap_example_user_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD') }}"
+openldap_example_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD') }}"
+openldap_example_user_uid: "john.doe"
+openldap_example_admin_uid: "john.doe.admin"
 
 # -----------------------------------------------------------------------------
 # Portainer image / edition
@@ -56,14 +64,13 @@ portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
 # Obtain a free 5-node Business Starter license from portainer.io.
 portainer_license_key: "{{ lookup('env', 'SOPHON_PORTAINER_LICENSE_KEY') | default('', true) }}"
 
-# Seeds gitea_db_password, kopia_repository_password and others, so it must be
-# the same value on every run — regenerating it orphans the Kopia repository.
-# Unset in the environment means "generate one and remember it".
-portainer_admin_password: >-
-  {{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD')
-     | default(lookup('password',
-                      playbook_dir ~ '/artifacts/secrets/portainer_admin_password'
-                      ~ ' length=24 chars=ascii_letters,digits'), true) }}
+portainer_admin_password: "{{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD') }}"
+
+# Preserve the existing shared-password defaults without generating credentials.
+# Existing installations must supply the same values on every run.
+gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(portainer_admin_password, true) }}"
+kopia_admin_password: "{{ lookup('env', 'SOPHON_KOPIA_ADMIN_PASSWORD') | default(portainer_admin_password, true) }}"
+kopia_repository_password: "{{ lookup('env', 'SOPHON_KOPIA_REPOSITORY_PASSWORD') | default(portainer_admin_password, true) }}"
 
 # Tarball filename for prestage / NFS upload / infravm boot loader.
 # Mirrors the naming convention in prestage.yml:

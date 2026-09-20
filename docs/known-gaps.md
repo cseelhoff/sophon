@@ -58,14 +58,14 @@ it, `site.yml` documents it, and no task reads it. Remove it. — ADR-0001
 
 ## Generated state
 
-Generated passwords now persist under `artifacts/secrets/` — `site.yml`'s
-admin and seed-user passwords, `portainer_admin_password` from
-[group_vars/all.yml](../group_vars/all.yml), `keycloak_db_password`, and the
-Portainer OIDC client secret.
+Passwords and the Portainer OIDC client secret are explicit environment inputs,
+validated before deployment. Old `artifacts/secrets/` files are no longer read
+or written; existing deployments must
+[migrate their existing values](preconditions.md#existing-deployments).
 
 **`artifacts/` is not a Kopia source.**
-It holds the SSH keys, ACME account key and generated credentials for the whole
-deployment, and nothing backs it up. — ADR-0008, ADR-0009
+It holds SSH keys and other private deployment state (and may still contain
+legacy password files), and nothing backs it up. — ADR-0008, ADR-0009
 
 ## Service state
 

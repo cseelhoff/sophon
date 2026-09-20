@@ -127,6 +127,66 @@ across. Deploy itself fetches nothing
 ([ADR-0001](adr/0001-air-gapped-a-supported-deployment-mode.md)). See
 [prestage.md](../prestage.md) for the runbook.
 
+## Credentials
+
+Supply credentials through the controller's environment or explicit Ansible
+overrides. `site.yml` validates them before provisioning, including on tagged
+runs. Empty or whitespace-only values fail with the environment-variable name;
+the Portainer admin password must contain at least 12 characters.
+
+| Required environment variable | Ansible variable |
+|---|---|
+| `SOPHON_PROXMOX_PASSWORD` | `proxmox_password` |
+| `SOPHON_PORTAINER_ADMIN_PASSWORD` | `portainer_admin_password` |
+| `SOPHON_KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` |
+| `SOPHON_KEYCLOAK_DB_PASSWORD` | `keycloak_db_password` |
+| `SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET` | `keycloak_portainer_client_secret` |
+| `SOPHON_GITEA_ADMIN_PASSWORD` | `gitea_admin_password` |
+| `SOPHON_OPENLDAP_ADMIN_PASSWORD` | `openldap_admin_password` |
+| `SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD` | `openldap_example_user_password` |
+| `SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD` | `openldap_example_admin_password` |
+
+The optional `SOPHON_GITEA_DB_PASSWORD`, `SOPHON_KOPIA_ADMIN_PASSWORD`, and
+`SOPHON_KOPIA_REPOSITORY_PASSWORD` override their corresponding Ansible variables.
+When unset or empty, each reuses the supplied Portainer admin password, preserving
+the existing shared-password defaults. Set them explicitly if the deployed
+values differ. LDAP config and bind credentials retain their existing reuse of
+the LDAP admin password unless overridden with Ansible variables.
+
+Keep the durable copy in your password manager. Environment variables transport
+credentials; they do not survive the shell or container being replaced. Prefer
+your password manager's environment injection, or a hidden shell prompt, rather
+than putting literal passwords into shell history. For example, in Bash:
+
+```bash
+read -rsp 'Existing Gitea admin password: ' SOPHON_GITEA_ADMIN_PASSWORD; printf '\n'
+export SOPHON_GITEA_ADMIN_PASSWORD
+```
+
+Repeat for each required credential, or enter them in the dashboard. Dashboard
+values are not saved between browser reloads. Passwords are no longer generated
+or saved as reusable controller secrets; Ansible Vault is not required.
+Deployed service configuration and logs may still contain credentials.
+
+### Existing deployments
+
+Before rerunning, move the **existing values** from the old
+`artifacts/secrets/<ansible-variable>` files into your password manager and
+supply them through the matching environment variables above. Read these files
+privately as their owner; do not paste them into chat, commits, or shared logs.
+Use any existing explicit overrides instead of stale saved values.
+
+The old files are left untouched but are no longer read. Nothing is automatically
+rotated or migrated. In particular, preserve the Keycloak database password,
+Portainer OIDC client secret, Gitea database password, and Kopia repository
+password. If Gitea/Kopia previously reused the Portainer password, keep that same
+value or supply their previous values as explicit overrides. Changing an input
+is not a supported password-rotation procedure for an existing service.
+
+Once all values are safely retained and verified, the old password files can be
+retired separately. Do not delete all of `artifacts/`: it still contains needed
+SSH keys and other private deployment state.
+
 ## Summary: a complete invocation
 
 Every site setting is read from the environment, so describe the site once:
@@ -149,15 +209,17 @@ export SOPHON_CF_TOKEN='<cloudflare api token>'
 export SOPHON_PORTAINER_LICENSE_KEY='<licence key>'
 ```
 
+Load all credentials listed above as well. The placeholders illustrate the
+inputs, not a recommendation to put real secrets in shell history.
+
 Then deploy, and redeploy, with:
 
 ```bash
 ansible-playbook site.yml
 ```
 
-The optional extras are `SOPHON_PORTAINER_ADMIN_PASSWORD`,
-`SOPHON_KEYCLOAK_ADMIN_PASSWORD` and `SOPHON_KEYCLOAK_REALM`; leave them unset
-to get generated passwords and the default realm.
+`SOPHON_KEYCLOAK_REALM` is optional and defaults to `sophon`. Required passwords
+have no generated fallback.
 
 Splitting the run this way is not just ergonomics. `site.yml` has no memory of
 which subnet a deployment lives on, so a single vnet flag dropped from a long
@@ -166,10 +228,5 @@ the set once removes that failure mode from every subsequent run.
 
 `-e` still takes precedence over the environment for one-off overrides.
 
-Anything not supplied that Sophon can generate — service passwords in
-particular — is generated and written under `artifacts/`, then reused on
-subsequent runs. Values passed with `-e` always win and are never written to
-disk ([ADR-0008](adr/0008-generated-state-persists-under-artifacts.md)).
-
-Do not paste these values into a tracked file. Use a shell history-ignored
-invocation, an environment file outside the repo, or a vault.
+Do not paste credentials into a tracked file. Retain them in your password
+manager and supply them to the environment of the invocation.

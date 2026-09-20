@@ -1,5 +1,15 @@
 # Generated state persists under artifacts/, and `-e` always wins
 
+**Amended:** Password persistence is superseded by explicit credential inputs.
+Service passwords and the Portainer OIDC client secret are now supplied through
+`SOPHON_*` environment variables or Ansible overrides and validated before
+deployment. Sophon does not generate, read, or write reusable controller password
+files and does not require Ansible Vault. Existing password files are left
+untouched for manual migration; see
+[credentials and migration](../preconditions.md#credentials).
+Other generated state, such as the Kopia SSH keypair, still requires protection.
+The text below records the original decision, not current password behavior.
+
 Secrets and allocated addresses that Sophon generates are written to
 `artifacts/` on first run and read back on every run after that. Any value
 supplied on the command line with `-e` takes precedence and is never written to

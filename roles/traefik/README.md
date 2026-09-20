@@ -21,7 +21,11 @@ Deploys Traefik reverse proxy with automatic SSL via Let's Encrypt.
 | `traefik_dns_provider` | `cloudflare` | ACME DNS provider |
 | `traefik_log_level` | `INFO` | Log verbosity |
 
-## Secrets (via Vault)
+## Credential inputs
+
+Supply the Cloudflare token through `SOPHON_CF_TOKEN` for a full deployment.
+Optional role-specific credentials can be supplied as Ansible variables;
+Vault is not required.
 
 | Variable | Description |
 |----------|-------------|

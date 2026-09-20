@@ -19,12 +19,17 @@ Deploys OpenLDAP directory service with phpLDAPadmin.
 | `openldap_domain` | `example.local` | LDAP domain |
 | `openldap_organisation` | `Example Org` | Organization name |
 
-## Secrets (via Vault)
+## Credential inputs
 
-| Variable | Description |
-|----------|-------------|
-| `openldap_admin_password` | LDAP admin password |
-| `openldap_config_password` | Config admin password |
+| Variable | Environment input |
+|----------|-------------------|
+| `openldap_admin_password` | `SOPHON_OPENLDAP_ADMIN_PASSWORD` |
+| `openldap_example_user_password` | `SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD` |
+| `openldap_example_admin_password` | `SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD` |
+
+These are required by `site.yml`. The config and Keycloak bind passwords reuse
+the LDAP admin password unless explicitly overridden with Ansible variables.
+No controller password files or Vault setup are needed.
 
 ## Dependencies
 

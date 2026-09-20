@@ -24,14 +24,14 @@ traefik_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
 
 # DNS provider for ACME DNS challenge (cloudflare, route53, etc)
 traefik_dns_provider: "cloudflare"
-# traefik_cf_dns_api_token: "" # Set via environment variable or vault
+# traefik_cf_dns_api_token: "" # Supply explicitly if used
 
 # Log level
 traefik_log_level: "INFO"
 
 # Dashboard authentication (htpasswd format)
 # Generate with: htpasswd -nB admin | sed -e 's/\$/\$\$/g'
-# traefik_dashboard_auth: "admin:$$2y$$..." # Set via vault
+# traefik_dashboard_auth: "admin:$$2y$$..." # Supply explicitly if used
 
 # Validate backend certs (set to false for self-signed)
 traefik_insecure_skip_verify: true

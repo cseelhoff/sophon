@@ -20,12 +20,16 @@ Deploys Keycloak Identity and Access Management with SSO.
 | `keycloak_realm` | `sophon` | Realm name |
 | `keycloak_import_realm` | `true` | Auto-import realm config |
 
-## Secrets (via Vault)
+## Credential inputs
 
-| Variable | Description |
-|----------|-------------|
-| `keycloak_admin_password` | Admin password |
-| `keycloak_db_password` | PostgreSQL password |
+| Variable | Environment input |
+|----------|-------------------|
+| `keycloak_admin_password` | `SOPHON_KEYCLOAK_ADMIN_PASSWORD` |
+| `keycloak_db_password` | `SOPHON_KEYCLOAK_DB_PASSWORD` |
+| `keycloak_portainer_client_secret` | `SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET` |
+
+All are required by `site.yml`; none is generated or persisted on the controller.
+Reuse existing values on reruns. See [credential migration](../../docs/preconditions.md#existing-deployments).
 
 ## Dependencies
 

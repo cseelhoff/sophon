@@ -11,7 +11,7 @@
 # -----------------------------------------------------------------------------
 # NFS Connectivity Check (via Proxmox storage API)
 # -----------------------------------------------------------------------------
-- name: Check if NFS storage already exists and is online in Proxmox
+- name: Check if NFS storage is registered in Proxmox
   ansible.builtin.uri:
     url: "{{ proxmox_api }}/storage"
     method: GET
@@ -20,9 +20,22 @@
     validate_certs: "{{ proxmox_validate_certs }}"
   register: nfs_storage_check
 
+- name: Set NFS storage registration fact
+  ansible.builtin.set_fact:
+    nfs_storage_registered: "{{ nfs_storage_check.json.data | selectattr('storage', 'eq', nfs_storage_name) | list | length > 0 }}"
+
+- name: Check NFS storage availability on the Proxmox node
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage"
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: nfs_storage_status
+
 - name: Set NFS reachable fact
   ansible.builtin.set_fact:
-    nfs_already_reachable: "{{ nfs_storage_check.json.data | selectattr('storage', 'eq', nfs_storage_name) | list | length > 0 }}"
+    nfs_already_reachable: "{{ nfs_storage_status.json.data | selectattr('storage', 'eq', nfs_storage_name) | selectattr('active', 'defined') | selectattr('active', 'eq', 1) | list | length > 0 }}"
 
 # Always discover the NFS VM (if it exists) and surface its vmid as a fact
 # so downstream roles (e.g. kopia) can QGA-exec against it without needing
@@ -37,7 +50,7 @@
   when: nfs_existing_vm is not none
 
 - name: Continue deployment if NFS is not already reachable
-  when: not nfs_already_reachable
+  when: not nfs_already_reachable or nfs_existing_vm is none
   block:
     - name: Set existing VM fact
       ansible.builtin.set_fact:
@@ -413,6 +426,19 @@
         status_code: [200, 201]
       register: nfs_add_storage_result
       until: nfs_add_storage_result.status in [200, 201]
+      retries: 30
+      delay: 10
+      when: not nfs_storage_registered
+
+    - name: Wait for NFS storage to be active on the Proxmox node
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage/{{ nfs_storage_name }}/status"
+        method: GET
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: nfs_active_storage
+      until: (nfs_active_storage.json.data.active | default(0) | int) == 1
       retries: 30
       delay: 10
 

@@ -20,15 +20,36 @@ The phase that provisions Proxmox and brings up services using only prestaged
 artifacts. Fetches nothing. `site.yml` is the entry point.
 _Avoid_: install, phase 3, apply
 
+**Deployment progress**:
+The observed advancement and outcome of provisioning work in a particular
+Sophon run, not a statement of the site's current service health.
+_Avoid_: online status, service health
+
+**Deployment stage**:
+A top-level unit of work in a Sophon run, including the dependency checks,
+deployment, and configuration work it invokes; nested work belongs to that stage.
+_Avoid_: role status, task status
+
+**Deployment complete**:
+A component's deployment and configuration work completed successfully in a
+particular Sophon run; this does not assert that the component is currently online.
+_Avoid_: online, healthy, ready
+
+**Service health**:
+The observed ability of a Sophon service to perform its intended function at
+the time of a check, independently of a deployment run's outcome.
+_Avoid_: deployment progress, deployed
+
 **Artifact**:
 A file produced by Prestage and consumed by Deploy — a container image tar, a
 VM disk image, a keypair. Lives under `artifacts/`, never committed.
 _Avoid_: cache, asset, blob
 
 **Generated state**:
-Secrets and addresses Sophon creates on first run and reuses on every run
-after — admin passwords, the Kopia keypair, allocated IPs. Stored under
-`artifacts/`. Losing it means losing access to a running deployment.
+State Sophon creates on first run and reuses on every run after, such as the
+Kopia keypair. Stored under `artifacts/`. Losing it can mean losing access to a
+running deployment. Passwords are operator-supplied inputs, retained outside
+Sophon and passed through the environment or explicit Ansible overrides.
 _Avoid_: config, credentials, facts
 
 **Reconstructible state**:

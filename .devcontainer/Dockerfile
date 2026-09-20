@@ -24,13 +24,13 @@ RUN chmod 0755 /usr/local/bin/sophon-tailscale
 
 USER ${USERNAME}
 
-RUN curl --fail --location https://nixos.org/nix/install | sh -s -- --no-daemon \
-    && mkdir -p /home/${USERNAME}/.config/nix \
+RUN mkdir -p /home/${USERNAME}/.config/nix \
     && printf '%s\n' \
         'experimental-features = nix-command flakes' \
         'sandbox = false' \
         'filter-syscalls = false' \
-        > /home/${USERNAME}/.config/nix/nix.conf
+        > /home/${USERNAME}/.config/nix/nix.conf \
+    && curl --fail --location https://nixos.org/nix/install | sh -s -- --no-daemon
 
 COPY --chown=${USERNAME}:${USERNAME} flake.nix flake.lock /tmp/sophon-flake/
 

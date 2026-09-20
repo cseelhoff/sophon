@@ -22,10 +22,5 @@ traefik_enabled: true
 gitea_enabled: true
 kopia_enabled: true
 
-# Test credentials - generated at runtime for security
-# Uses Ansible's password lookup to generate random passwords
-# Passwords are displayed at end of playbook run
-portainer_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-openldap_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-keycloak_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-gitea_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+# Supply test credentials through the same SOPHON_* environment variables as
+# deployment. Tests must not generate or persist replacement passwords.

@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sophon | Deployment</title>
+  <style>
+    :root { color-scheme: light; --ink:#202b29; --muted:#5f6b68; --line:#d4dcd8; --green:#187349; --blue:#1468a4; --red:#bd343e; --amber:#936613; }
+    * { box-sizing:border-box; letter-spacing:0; }
+    body { margin:0; color:var(--ink); background:#f5f7f6; font:14px "DejaVu Sans", sans-serif; }
+    button { font:inherit; cursor:pointer; color:inherit; background:white; border:1px solid var(--line); border-radius:4px; }
+    button:focus-visible { outline:3px solid var(--blue); outline-offset:2px; }
+    header { display:flex; align-items:center; flex-wrap:wrap; gap:12px 28px; padding:18px 24px; border-bottom:1px solid var(--line); background:white; }
+    h1 { margin:0; font-size:24px; font-weight:700; }
+    h1 span { font-size:14px; font-weight:400; color:var(--muted); margin-left:12px; }
+    #run-state { font-weight:700; }
+    #run-time { margin-left:auto; font:12px "DejaVu Sans Mono", monospace; color:var(--muted); }
+    main { display:grid; grid-template-columns:250px minmax(0,1fr); min-height:calc(100vh - 70px); }
+    aside { border-right:1px solid var(--line); background:white; padding:20px 12px; }
+    h2 { font-size:12px; font-weight:700; margin:0 10px 16px; color:var(--muted); }
+    ol { list-style:none; padding:0; margin:0; }
+    .stage { width:100%; display:grid; grid-template-columns:24px minmax(0,1fr); gap:3px 8px; text-align:left; padding:12px 10px; margin-bottom:4px; border-color:transparent; min-height:65px; }
+    .stage:hover { background:#f2f6f4; }
+    .stage[aria-pressed="true"] { background:#edf5f1; border-color:#a3c7b6; }
+    .stage .symbol { grid-row:span 2; align-self:center; font-size:18px; text-align:center; }
+    .stage .name { font-weight:600; overflow-wrap:anywhere; }
+    .stage .state { color:var(--muted); font-size:12px; }
+    [data-state="completed"] .symbol { color:var(--green); }
+    [data-state="running"] .symbol { color:var(--blue); }
+    [data-state="failed"] .symbol { color:var(--red); }
+    [data-state="unknown"] .symbol, [data-state="interrupted"] .symbol { color:var(--amber); }
+    .workspace { min-width:0; padding:16px 20px; }
+    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
+    .toolbar strong { margin-right:auto; font-size:14px; }
+    .toolbar button { min-width:36px; height:36px; padding:0 10px; }
+    #zoom-level { width:48px; text-align:center; font:12px "DejaVu Sans Mono", monospace; }
+    #diagram-pane { height:calc(100vh - 198px); min-height:360px; overflow:auto; border:1px solid var(--line); border-radius:4px; background-color:white; background-image:radial-gradient(#dce3df .7px, transparent .7px); background-size:16px 16px; }
+    object { display:block; width:100%; aspect-ratio:1652 / 1075; }
+    #detail { padding:14px 0; display:flex; flex-wrap:wrap; gap:8px 20px; min-height:46px; color:var(--muted); font-size:12px; }
+    #detail strong { color:var(--ink); }
+    .workspace.has-tasks #diagram-pane { height:35vh; min-height:220px; }
+    #task-panel { border-top:1px solid var(--line); padding-top:12px; }
+    .task-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-bottom:10px; }
+    .task-heading h2 { margin:0 auto 0 0; font-size:14px; color:var(--ink); }
+    #task-filter { font:inherit; padding:6px 8px; background:white; border:1px solid var(--line); border-radius:4px; }
+    #task-results { max-height:43vh; min-height:100px; overflow:auto; }
+    .task-result { border-bottom:1px solid var(--line); background:white; }
+    .task-result summary { cursor:pointer; padding:10px 8px; overflow-wrap:anywhere; }
+    .task-result summary:focus-visible { outline:2px solid var(--blue); outline-offset:-2px; }
+    .task-name { font-weight:600; }
+    .task-state { display:inline-block; margin-left:10px; font-size:12px; color:var(--muted); }
+    .task-result[data-state="failed"] .task-state { color:var(--red); font-weight:700; }
+    .task-result[data-state="retrying"] .task-state, .task-result[data-state="ignored"] .task-state { color:var(--amber); }
+    .task-meta { margin:0; padding:4px 12px 10px; color:var(--muted); font:12px "DejaVu Sans Mono", monospace; overflow-wrap:anywhere; }
+    .task-output { margin:4px 12px 12px; padding:10px; max-height:220px; overflow:auto; background:#f3f6f4; font:12px/1.5 "DejaVu Sans Mono", monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .task-caption { margin:10px 12px 4px; font-size:12px; font-weight:600; }
+    #task-empty { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+    #notice { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--amber); background:#fff6dc; color:#614b19; overflow-wrap:anywhere; }
+    #notice:empty { display:none; }
+    #configure { min-height:36px; padding:0 14px; }
+    button:disabled { cursor:default; opacity:.55; }
+    dialog { width:min(760px, calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:white; }
+    dialog::backdrop { background:rgb(20 30 25 / .45); }
+    #deployment-form { display:flex; flex-direction:column; max-height:calc(100dvh - 36px); }
+    .form-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:18px 20px; border-bottom:1px solid var(--line); }
+    .form-heading h2 { margin:0; font-size:20px; color:var(--ink); }
+    .form-heading button, .form-actions button { min-height:38px; padding:0 16px; }
+    .form-body { overflow:auto; padding:0 20px 20px; }
+    #shell-command { width:100%; min-height:240px; white-space:pre; font:12px/1.5 monospace; }
+    .security-note { color:var(--muted); font-size:12px; line-height:1.5; }
+    fieldset { min-width:0; margin:0; padding:18px 0; border:0; border-bottom:1px solid var(--line); }
+    legend { padding:16px 0 0; font-weight:700; }
+    .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    .field { display:flex; flex-direction:column; gap:6px; min-width:0; font-size:13px; }
+    .field span { overflow-wrap:anywhere; }
+    .field input { width:100%; min-width:0; height:38px; padding:8px 10px; border:1px solid #aebbb4; border-radius:4px; background:white; color:var(--ink); font:inherit; }
+    .field input:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
+    .field small { color:var(--muted); font-size:11px; }
+    .form-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; padding:14px 20px; border-top:1px solid var(--line); }
+    #deploy-button { background:var(--green); border-color:var(--green); color:white; }
+    #form-error { margin:0; padding:12px 20px; color:var(--red); overflow-wrap:anywhere; }
+    #form-error:empty { display:none; }
+    @media (max-width:700px) {
+      header { padding:16px; gap:10px; }
+      #run-time { width:100%; margin:0; }
+      main { display:flex; flex-direction:column; }
+      .workspace { order:0; padding:14px 12px 0; }
+      aside { order:1; border-right:0; border-top:1px solid var(--line); padding:16px 12px; }
+      ol { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
+      #diagram-pane { height:42vh; min-height:280px; }
+      .stage { padding:10px 6px; }
+      h1 span { margin-left:8px; }
+    }
+    @media (prefers-reduced-motion:no-preference) { .stage { transition:background-color .15s; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sophon <span>Deployment</span></h1>
+    <span id="run-state" role="status" aria-live="polite">Connecting</span>
+    <span id="run-time"></span>
+    <button id="configure" type="button" disabled>Configure</button>
+  </header>
+  <main>
+    <aside><h2>DEPLOYMENT STAGES</h2><ol id="stages"></ol></aside>
+    <section class="workspace" aria-label="Deployment diagram">
+      <div class="toolbar">
+        <strong>Site diagram</strong>
+        <button id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">-</button>
+        <span id="zoom-level">Fit</span>
+        <button id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="fit" type="button" title="Fit diagram width">Fit</button>
+      </div>
+      <p id="notice" role="alert"></p>
+      <div id="diagram-pane"><object id="diagram" type="image/svg+xml" aria-label="Sophon site topology"></object></div>
+      <div id="detail" aria-live="polite"></div>
+      <section id="task-panel" aria-labelledby="task-title" hidden>
+        <div class="task-heading">
+          <h2 id="task-title">Task results</h2>
+          <select id="task-filter" aria-label="Task filter">
+            <option value="all">All tasks</option>
+            <option value="problems">Failures and recoveries</option>
+          </select>
+        </div>
+        <p id="task-empty"></p>
+        <div id="task-results"></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="deployment-dialog" aria-labelledby="settings-title">
+    <form id="deployment-form" method="dialog" autocomplete="off">
+      <div class="form-heading">
+        <h2 id="settings-title">Deployment settings</h2>
+        <button id="close-settings" type="button">Close</button>
+      </div>
+      <div class="form-body">
+        <p class="security-note">Settings include secrets inherited when this server started. Supply existing deployment credentials: passwords are never generated or saved as reusable controller secrets. Changes stay in this browser tab, not your shell. Run only one deployment at a time per trace directory.</p>
+        <div id="settings-fields"></div>
+        <section id="command-panel" hidden aria-labelledby="command-title">
+          <h3 id="command-title">Shell deployment command</h3>
+          <p class="security-note">Contains passwords and tokens in plain text. Copy only to a trusted terminal on this controller, in the project environment. Clipboard and shell history may retain secrets.</p>
+          <textarea id="shell-command" aria-label="Shell deployment command containing secrets" readonly spellcheck="false" autocomplete="off"></textarea>
+          <button id="copy-command" type="button">Copy</button>
+          <span id="copy-status" role="status"></span>
+        </section>
+      </div>
+      <p id="form-error" role="alert"></p>
+      <div class="form-actions">
+        <button id="generate-command" type="submit" value="command" disabled>Generate shell deployment command</button>
+        <button id="deploy-button" type="submit" value="run" disabled>Run</button>
+      </div>
+    </form>
+  </dialog>
+  <script>
+    const labels = {idle:'No deployment run', pending:'Not reached', running:'Running', completed:'Deployment complete', skipped:'Skipped', failed:'Failed', interrupted:'Interrupted', unknown:'Outcome unknown'};
+    const symbols = {pending:'-', running:'>', completed:'+', skipped:'/', failed:'!', interrupted:'!', unknown:'?'};
+    const colors = {pending:'#8c9690', running:'#1468a4', completed:'#187349', skipped:'#8c9690', failed:'#bd343e', interrupted:'#936613', unknown:'#936613'};
+    const stageList = document.getElementById('stages');
+    const diagram = document.getElementById('diagram');
+    const pane = document.getElementById('diagram-pane');
+    const notice = document.getElementById('notice');
+    let config, latest, selected, zoom = 1;
+    const rows = new Map();
+    let mapped = new Map();
+    let taskSnapshot = '';
+    let taskContext = '', taskExpansionRun = '';
+    const taskExpansion = new Map();
+    const taskPanel = document.getElementById('task-panel');
+    const taskResults = document.getElementById('task-results');
+    const taskFilter = document.getElementById('task-filter');
+    taskFilter.onchange = () => { if (latest) render(latest); };
+
+    function renderTasks(report, stage) {
+      taskPanel.hidden = !stage;
+      document.querySelector('.workspace').classList.toggle('has-tasks', Boolean(stage));
+      if (!stage) return;
+      const tasks = report.stages[stage].tasks;
+      const snapshot = JSON.stringify([report.run_id, stage, report.state, tasks, taskFilter.value]);
+      if (snapshot === taskSnapshot) return;
+      taskSnapshot = snapshot;
+      if (taskExpansionRun !== report.run_id) {
+        taskExpansion.clear();
+        taskExpansionRun = report.run_id;
+      }
+      const context = `${report.run_id}:${stage}`;
+      const scrollTop = taskContext === context ? taskResults.scrollTop : 0;
+      taskContext = context;
+      taskResults.replaceChildren();
+      document.getElementById('task-title').textContent = `${config.stages[stage]}: task results`;
+      let shown = 0;
+      const taskLabels = {ok:'OK', changed:'Changed', failed:'Failed', skipped:'Skipped', ignored:'Ignored failure', rescued:'Rescued', running:'Running', retrying:'Retrying', unknown:'Outcome unknown', interrupted:'Interrupted'};
+      for (const [index, task] of (tasks || []).entries()) {
+        const state = task.state === 'running' && report.state !== 'running'
+          ? (report.state === 'completed' ? 'unknown' : report.state) : task.state;
+        if (taskFilter.value === 'problems' && !['failed', 'ignored', 'rescued', 'retrying', 'unknown', 'interrupted'].includes(state)) continue;
+        shown++;
+        const item = document.createElement('details');
+        item.className = 'task-result';
+        item.dataset.state = state;
+        item.dataset.key = `${report.run_id}:${stage}:${task.id}:${index}`;
+        item.open = taskExpansion.get(item.dataset.key) ?? state === 'failed';
+        item.addEventListener('toggle', () => taskExpansion.set(item.dataset.key, item.open));
+        const summary = document.createElement('summary');
+        const name = document.createElement('span');
+        name.className = 'task-name';
+        name.textContent = task.name;
+        const status = document.createElement('span');
+        status.className = 'task-state';
+        status.textContent = `${taskLabels[state] || state}${task.duration === undefined ? '' : ` | ${task.duration}s`}`;
+        summary.append(name, status);
+        const meta = document.createElement('p');
+        meta.className = 'task-meta';
+        const coordinates = [task.action, task.source];
+        for (const [key, label] of [['rc','Exit code'], ['status','HTTP status'], ['attempts','Attempts']]) {
+          if (task[key] !== undefined) coordinates.push(`${label}: ${task[key]}`);
+        }
+        meta.textContent = coordinates.filter(Boolean).join(' | ');
+        item.append(summary, meta);
+        for (const [label, value] of [['Message', task.message], ['Standard error', task.stderr], ['Standard output', task.stdout], ['Failed loop items', task.items?.join('\n')]]) {
+          if (!value) continue;
+          const caption = document.createElement('p');
+          caption.className = 'task-caption';
+          caption.textContent = label;
+          const output = document.createElement('pre');
+          output.className = 'task-output';
+          output.textContent = value;
+          item.append(caption, output);
+        }
+        taskResults.append(item);
+      }
+      taskResults.scrollTop = scrollTop;
+      document.getElementById('task-empty').textContent = tasks === undefined
+        ? 'Task details were not recorded for this run. Private Controller log: artifacts/deployment/deploy.log.'
+        : shown ? '' : taskFilter.value === 'problems' ? 'No failures or recoveries recorded.' : 'No tasks recorded for this stage yet.';
+    }
+    const settingsDialog = document.getElementById('deployment-dialog');
+    const settingsForm = document.getElementById('deployment-form');
+    const settingsFields = document.getElementById('settings-fields');
+    const formError = document.getElementById('form-error');
+    const deployButton = document.getElementById('deploy-button');
+    const generateButton = document.getElementById('generate-command');
+    const commandPanel = document.getElementById('command-panel');
+    const commandText = document.getElementById('shell-command');
+    let settingsLoaded = false, submitting = false, pendingRun;
+    async function api(path, values) {
+      const response = await fetch(path, {
+        method: values === undefined ? 'GET' : 'POST', cache:'no-store',
+        headers:{'Content-Type':'application/json', 'X-Sophon-Token':config?.token || ''},
+        body:values === undefined ? undefined : JSON.stringify(values),
+        signal:AbortSignal.timeout(5000)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Dashboard request failed. Reopen the page if the server restarted.');
+      return result;
+    }
+    function updateDeployButton() {
+      generateButton.disabled = !settingsLoaded || submitting;
+      deployButton.disabled = !settingsLoaded || submitting || pendingRun !== undefined || latest?.state === 'running';
+    }
+    document.getElementById('close-settings').onclick = () => settingsDialog.close();
+    function clearCommand() {
+      commandText.value = '';
+      commandPanel.hidden = true;
+      document.getElementById('copy-status').textContent = '';
+    }
+    settingsForm.addEventListener('input', clearCommand);
+    settingsDialog.addEventListener('close', clearCommand);
+    document.getElementById('copy-command').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(commandText.value);
+        document.getElementById('copy-status').textContent = 'Copied. Clear your clipboard after use.';
+      } catch {
+        commandText.focus();
+        commandText.select();
+        document.getElementById('copy-status').textContent = 'Clipboard access unavailable. Press Ctrl+C (or Cmd+C) to copy the selected command.';
+      }
+    };
+    document.getElementById('configure').onclick = async () => {
+      if (settingsDialog.open) return;
+      formError.textContent = '';
+      settingsDialog.showModal();
+      if (settingsLoaded) return;
+      try {
+        const settings = await api('/settings.json');
+        settingsFields.replaceChildren();
+        const groups = new Map();
+        for (const field of settings.fields) {
+          if (!groups.has(field.group)) {
+            const group = document.createElement('fieldset');
+            const legend = document.createElement('legend');
+            legend.textContent = field.group;
+            const grid = document.createElement('div');
+            grid.className = 'field-grid';
+            group.append(legend, grid);
+            settingsFields.append(group);
+            groups.set(field.group, grid);
+          }
+          const label = document.createElement('label');
+          label.className = 'field';
+          const caption = document.createElement('span');
+          caption.textContent = field.label + (field.required ? ' *' : '');
+          const input = document.createElement('input');
+          input.name = field.name;
+          input.title = field.name;
+          input.type = ['number', 'email', 'password'].includes(field.kind) ? field.kind : 'text';
+          input.value = field.value;
+          input.maxLength = 4096;
+          input.required = field.required;
+          if (field.name === 'SOPHON_PORTAINER_ADMIN_PASSWORD') input.minLength = 12;
+          if (field.kind === 'ipv4') input.inputMode = 'decimal';
+          if (field.limits) {
+            input.min = field.limits[0];
+            input.max = field.limits[1];
+            input.step = '1';
+          }
+          label.append(caption, input);
+          if (field.kind === 'password') {
+            input.autocomplete = 'new-password';
+            const presence = document.createElement('small');
+            presence.textContent = field.required
+              ? 'Required. Included in generated commands; reuse the existing credential.'
+              : ['SOPHON_GITEA_DB_PASSWORD', 'SOPHON_KOPIA_ADMIN_PASSWORD', 'SOPHON_KOPIA_REPOSITORY_PASSWORD'].includes(field.name)
+                ? 'Empty reuses the supplied Portainer password. Keep existing deployment values.'
+                : 'Included in generated commands. Empty means unset.';
+            label.append(presence);
+          }
+          groups.get(field.group).append(label);
+        }
+        settingsLoaded = true;
+        updateDeployButton();
+      } catch (error) {
+        formError.textContent = error.message;
+      }
+    };
+    settingsForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const action = event.submitter?.value || 'command';
+      if (submitting || !settingsLoaded || (action === 'run' && deployButton.disabled) || !settingsForm.reportValidity()) return;
+      const values = Object.fromEntries(new FormData(settingsForm));
+      const target = `${values.SOPHON_PROXMOX_HOST} / ${values.SOPHON_PROXMOX_NODE}`;
+      if (action === 'run' && !confirm(`Run deployment to ${target}?\nBridge: ${values.SOPHON_VNET_INTERFACE}\nNFS: ${values.SOPHON_NFS_IP}\nInfraVM: ${values.SOPHON_INFRAVM_IP}\nDo not also run the copied command.`)) return;
+      submitting = true;
+      if (action === 'run') pendingRun = latest?.run_id || '';
+      for (const group of settingsFields.querySelectorAll('fieldset')) group.disabled = true;
+      document.getElementById('close-settings').disabled = true;
+      formError.textContent = '';
+      updateDeployButton();
+      try {
+        const result = await api(`/${action}`, values);
+        if (action === 'command') {
+          commandText.value = result.command;
+          commandPanel.hidden = false;
+          document.getElementById('copy-status').textContent = '';
+          commandText.focus();
+        } else {
+          settingsDialog.close();
+        }
+      } catch (error) {
+        formError.textContent = error.message;
+        if (action === 'run' && ['TimeoutError', 'TypeError', 'SyntaxError'].includes(error.name)) {
+          formError.textContent = 'Run request outcome unknown. Check progress and the controller log before retrying; do not also paste the command.';
+        } else if (action === 'run') {
+          pendingRun = undefined;
+        }
+      } finally {
+        submitting = false;
+        for (const group of settingsFields.querySelectorAll('fieldset')) group.disabled = false;
+        document.getElementById('close-settings').disabled = false;
+        updateDeployButton();
+      }
+    });
+    function setZoom(value) {
+      zoom = Math.min(5, Math.max(1, value));
+      diagram.style.width = `${zoom * 100}%`;
+      document.getElementById('zoom-level').textContent = zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`;
+      document.getElementById('zoom-out').disabled = zoom === 1;
+      document.getElementById('zoom-in').disabled = zoom === 5;
+    }
+    document.getElementById('zoom-in').onclick = () => setZoom(zoom + .5);
+    document.getElementById('zoom-out').onclick = () => setZoom(zoom - .5);
+    document.getElementById('fit').onclick = () => { setZoom(1); pane.scrollTo(0, 0); };
+    function mapDiagram() {
+      if (!config || !diagram.contentDocument?.documentElement || diagram.contentDocument.documentElement.localName !== 'svg') return;
+      mapped = new Map();
+      const documentSvg = diagram.contentDocument;
+      for (const [stage, cells] of Object.entries(config.cells)) {
+        const nodes = cells.map(cell => documentSvg.querySelector(`[data-cell-id="${cell}"]`)).filter(Boolean);
+        mapped.set(stage, nodes);
+        for (const node of nodes) {
+          node.setAttribute('role', 'img');
+          let border = node.querySelector('.deployment-border');
+          if (!border) {
+            const bounds = node.getBBox();
+            border = documentSvg.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            border.setAttribute('class', 'deployment-border');
+            for (const [key, value] of Object.entries({x:bounds.x-4, y:bounds.y-4, width:bounds.width+8, height:bounds.height+8, rx:4, fill:'none', 'stroke-width':2, 'pointer-events':'none'})) border.setAttribute(key, value);
+            node.append(border);
+          }
+        }
+      }
+      if (latest) render(latest);
+    }
+    diagram.addEventListener('load', mapDiagram);
+    function render(report) {
+      latest = report;
+      updateDeployButton();
+      document.getElementById('run-state').textContent = labels[report.state] || 'Outcome unknown';
+      document.getElementById('run-time').textContent = report.state === 'idle' ? '' : `Last event ${new Date(report.updated_at * 1000).toLocaleTimeString()} | Run ${report.run_id.slice(0, 8)}`;
+      for (const [stage, values] of Object.entries(report.stages)) {
+        const row = rows.get(stage);
+        if (!row) continue;
+        row.dataset.state = values.state;
+        row.querySelector('.symbol').textContent = symbols[values.state];
+        row.querySelector('.state').textContent = labels[values.state];
+        row.setAttribute('aria-pressed', String(stage === selected));
+        for (const node of mapped.get(stage) || []) {
+          for (const artwork of node.children) {
+            if (!artwork.classList.contains('deployment-border')) artwork.style.filter = values.state === 'completed' ? '' : 'grayscale(1)';
+          }
+          node.style.opacity = values.state === 'pending' ? '.38' : values.state === 'skipped' ? '.55' : '1';
+          node.setAttribute('aria-label', `${config.stages[stage]}: ${labels[values.state]}`);
+          node.querySelector('.deployment-border').setAttribute('stroke', colors[values.state]);
+        }
+      }
+      const focus = selected || report.current;
+      const detail = document.getElementById('detail');
+      detail.replaceChildren();
+      if (focus) {
+        const values = report.stages[focus];
+        const name = document.createElement('strong');
+        name.textContent = config.stages[focus];
+        const counters = document.createElement('span');
+        counters.textContent = `${values.ok} successful | ${values.skipped} skipped | ${values.rescued} rescued | ${values.ignored} ignored`;
+        detail.append(name, counters);
+      }
+      renderTasks(report, focus);
+    }
+    let statusSnapshot = '';
+    async function refresh() {
+      try {
+        const response = await fetch('/status.json', {cache:'no-store', signal:AbortSignal.timeout(4000)});
+        if (!response.ok) throw new Error('Status unavailable');
+        const snapshot = await response.text();
+        if (snapshot !== statusSnapshot) {
+          const report = JSON.parse(snapshot);
+          if (pendingRun !== undefined && report.run_id !== pendingRun && report.state !== 'idle') pendingRun = undefined;
+          render(report);
+          statusSnapshot = snapshot;
+        }
+        notice.textContent = '';
+      } catch {
+        statusSnapshot = '';
+        notice.textContent = 'Dashboard connection lost. Current outcome unknown.';
+        document.getElementById('run-state').textContent = 'Outcome unknown';
+        if (latest) {
+          const stale = structuredClone(latest);
+          stale.state = 'unknown';
+          for (const values of Object.values(stale.stages)) if (values.state === 'running') values.state = 'unknown';
+          render(stale);
+        }
+      }
+      setTimeout(refresh, 1000);
+    }
+    async function start() {
+      config = await api('/config.json');
+      document.getElementById('configure').disabled = false;
+      for (const [stage, label] of Object.entries(config.stages)) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.className = 'stage';
+        button.type = 'button';
+        for (const [className, text] of [['symbol','-'], ['name',label], ['state','Not reached']]) {
+          const element = document.createElement('span');
+          element.className = className;
+          element.textContent = text;
+          if (className === 'symbol') element.setAttribute('aria-hidden', 'true');
+          button.append(element);
+        }
+        button.onclick = () => {
+          selected = stage;
+          if (latest) render(latest);
+          const node = mapped.get(stage)?.[0];
+          if (node) {
+            const bounds = node.getBoundingClientRect();
+            pane.scrollTo({left:Math.max(0, bounds.x + bounds.width / 2 - pane.clientWidth / 2), top:Math.max(0, bounds.y + bounds.height / 2 - pane.clientHeight / 2)});
+          }
+          taskPanel.scrollIntoView({block:'nearest'});
+        };
+        item.append(button);
+        stageList.append(item);
+        rows.set(stage, button);
+      }
+      setZoom(1);
+      diagram.data = '/diagram.svg';
+      refresh();
+    }
+    start().catch(() => { notice.textContent = 'Dashboard configuration unavailable.'; });
+  </script>
+</body>
+</html>

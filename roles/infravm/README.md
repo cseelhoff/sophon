@@ -44,7 +44,7 @@ InfraVM is a CoreOS-based VM that:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `portainer_admin_password` | (auto-generated) | Initial admin password |
+| `portainer_admin_password` | (required) | Supplied through `SOPHON_PORTAINER_ADMIN_PASSWORD` or an Ansible override; at least 12 characters |
 | `portainer_port` | `9443` | HTTPS port for web UI |
 | `portainer_image_repo` | `docker.io/portainer/portainer-ee` | Portainer image repository |
 | `portainer_image_tag` | `2.41.0` | Portainer Business Edition image tag |
@@ -96,4 +96,4 @@ After successful deployment, displays:
 
 - Container images are cached on NFS for future deployments and air-gapped use
 - When cloudflared is enabled, Ansible connects via tunnel hostname instead of internal IP
-- Portainer admin password is auto-generated if not provided (save it!)
+- Supply the existing Portainer admin password on every run; no password is generated or saved on the controller.

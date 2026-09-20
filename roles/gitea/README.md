@@ -20,13 +20,16 @@ Deploys Gitea Git server with Actions runner support.
 | `gitea_domain` | `example.local` | Domain |
 | `gitea_oauth_enabled` | `false` | Enable Keycloak SSO |
 
-## Secrets (via Vault)
+## Credential inputs
 
 | Variable | Description |
 |----------|-------------|
-| `gitea_db_password` | PostgreSQL password |
-| `gitea_secret_key` | Session secret |
-| `gitea_oauth_client_secret` | OIDC client secret |
+| `gitea_admin_password` | Required `SOPHON_GITEA_ADMIN_PASSWORD` |
+| `gitea_db_password` | Optional `SOPHON_GITEA_DB_PASSWORD`; otherwise reuses the supplied Portainer password |
+| `gitea_oauth_client_secret` | Read from Keycloak by the Keycloak role |
+
+Reuse existing deployed credentials on reruns. No controller password generation
+or Vault setup is required.
 
 ## Dependencies
 

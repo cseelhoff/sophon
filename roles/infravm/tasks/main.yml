@@ -359,7 +359,7 @@
         status_code: [200]
       register: portainer_init
 
-    - name: Display generated Portainer admin credentials
+    - name: Display Portainer admin credentials
       ansible.builtin.debug:
         msg:
           - "============================================================"
@@ -368,13 +368,8 @@
           - "URL:      {{ infravm_portainer_url }}"
           - "Username: admin"
           - "Password: {{ portainer_admin_password }}"
-          - "Stored:   artifacts/secrets/portainer_admin_password"
+          - "Password supplied by the operator; retain it in your password manager."
           - "============================================================"
-
-# - name: Warn if admin already exists and password was auto-generated
-#   ansible.builtin.debug:
-#     msg: "WARNING: Admin already exists. If auth fails, set -e portainer_admin_password=<existing_password>"
-#   when: portainer_init_status == '409'
 
 - name: Authenticate with Portainer
   ansible.builtin.uri:

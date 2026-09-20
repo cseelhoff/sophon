@@ -3,3 +3,4 @@ secrets.yml
 *.qcow2
 artifacts/
 .tailscale/
+__pycache__/

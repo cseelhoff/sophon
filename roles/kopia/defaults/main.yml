@@ -38,8 +38,8 @@ kopia_admin_user: "admin"
 kopia_admin_password: "{{ portainer_admin_password }}"
 
 # Repository encryption password. Anyone with this passphrase can read all
-# snapshots; treat as a vault-managed secret in production. Defaults to the
-# generated portainer admin password so a fresh deploy "just works".
+# snapshots; retain it in your password manager. Defaults to the supplied
+# Portainer admin password; never change it implicitly on an existing repository.
 kopia_repository_password: "{{ portainer_admin_password }}"
 
 # -----------------------------------------------------------------------------
