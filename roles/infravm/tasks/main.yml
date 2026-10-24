@@ -256,7 +256,7 @@
         autostart: true
         agent: "enabled=1"
         net:
-          net0: "virtio,bridge={{ vnet_interface }},tag={{ vnet_vlan }}"
+          net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
         state: present
         timeout: 600
         virtio: "{{ infravm_virtio_disks }}"

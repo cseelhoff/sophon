@@ -58,6 +58,8 @@
     #task-empty { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
     #notice { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--amber); background:#382e1d; color:var(--amber); overflow-wrap:anywhere; }
     #notice:empty { display:none; }
+    #run-error { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--red); background:#352126; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; }
+    #run-error:empty { display:none; }
     #configure { min-height:36px; padding:0 14px; }
     button:disabled { cursor:default; opacity:.55; }
     dialog { width:min(760px, calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:var(--surface); }
@@ -77,6 +79,10 @@
     .field input { width:100%; min-width:0; height:38px; padding:8px 10px; border:1px solid var(--line); border-radius:4px; background:var(--background); color:var(--ink); font:inherit; }
     .field input:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
     .field small { color:var(--muted); font-size:11px; }
+    #cloudflare-token-help { color:var(--muted); font-size:12px; line-height:1.5; }
+    #cloudflare-token-help a { color:var(--blue); }
+    #cloudflare-token-help table { width:100%; border-collapse:collapse; margin:6px 0; }
+    #cloudflare-token-help th, #cloudflare-token-help td { padding:3px 6px; border-bottom:1px solid var(--line); text-align:left; overflow-wrap:anywhere; }
     .form-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; padding:14px 20px; border-top:1px solid var(--line); }
     #deploy-button { background:var(--green); border-color:var(--green); color:var(--background); }
     #form-error { margin:0; padding:12px 20px; color:var(--red); overflow-wrap:anywhere; }
@@ -113,6 +119,7 @@
         <button id="fit" type="button" title="Fit diagram width">Fit</button>
       </div>
       <p id="notice" role="alert"></p>
+      <p id="run-error" role="alert"></p>
       <div id="diagram-pane"><object id="diagram" type="image/svg+xml" aria-label="Sophon site topology"></object></div>
       <div id="detail" aria-live="polite"></div>
       <section id="task-panel" aria-labelledby="task-title" hidden>
@@ -153,6 +160,22 @@
       </div>
     </form>
   </dialog>
+  <template id="cloudflare-token-help-template">
+    <div id="cloudflare-token-help">
+      <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create a Cloudflare API token</a>
+      using Create Custom Token:
+      <table aria-label="Required Cloudflare API token permissions">
+        <thead><tr><th scope="col">Group</th><th scope="col">Permission</th><th scope="col">Access</th></tr></thead>
+        <tbody>
+          <tr><td>Zone</td><td>Zone</td><td>Read</td></tr>
+          <tr><td>Zone</td><td>DNS</td><td>Edit</td></tr>
+          <tr><td>Account</td><td>Cloudflare Tunnel</td><td>Edit</td></tr>
+        </tbody>
+      </table>
+      Scope Zone Resources to your specific domain and Account Resources to its owning account.
+      Paste the token secret, not a Global API Key or tunnel connector token.
+    </div>
+  </template>
   <script>
     const labels = {idle:'No deployment run', pending:'Not reached', running:'Running', completed:'Deployment complete', skipped:'Skipped', failed:'Failed', interrupted:'Interrupted', unknown:'Outcome unknown'};
     const symbols = {pending:'-', running:'>', completed:'+', skipped:'/', failed:'!', interrupted:'!', unknown:'?'};
@@ -335,7 +358,15 @@
                 : 'Included in generated commands. Empty means unset.';
             label.append(presence);
           }
-          groups.get(field.group).append(label);
+          if (field.name === 'SOPHON_CF_TOKEN') {
+            input.setAttribute('aria-describedby', 'cloudflare-token-help');
+            const wrapper = document.createElement('div');
+            wrapper.className = 'field';
+            wrapper.append(label, document.getElementById('cloudflare-token-help-template').content.cloneNode(true));
+            groups.get(field.group).append(wrapper);
+          } else {
+            groups.get(field.group).append(label);
+          }
         }
         settingsLoaded = true;
         updateDeployButton();
@@ -425,6 +456,15 @@
     function render(report) {
       latest = report;
       updateDeployButton();
+      const noStagesReached = Object.values(report.stages).every(stage => stage.state === 'pending');
+      const failure = report.state === 'failed'
+        ? report.error || (noStagesReached
+          ? 'Deployment failed before any stage started. Ansible may not have started, or initial playbook checks failed. If ansible-playbook is unavailable, stop the viewer and restart it from nix develop.'
+          : 'Deployment failed. Select a failed stage to inspect its task results.')
+        : '';
+      document.getElementById('run-error').textContent = failure
+        ? `${failure}${report.exit_code === undefined ? '' : `\nExit code: ${report.exit_code}`}\nPrivate Controller log: ${config.log_path}. Logs may contain secrets; redact before sharing.`
+        : '';
       document.getElementById('run-state').textContent = labels[report.state] || 'Outcome unknown';
       document.getElementById('run-time').textContent = report.state === 'idle' ? '' : `Last event ${new Date(report.updated_at * 1000).toLocaleTimeString()} | Run ${report.run_id.slice(0, 8)}`;
       for (const [stage, values] of Object.entries(report.stages)) {

@@ -287,7 +287,7 @@ def application(directory, assets, control, environment, start_response):
         body, content_type = json.dumps(settings_payload(control)).encode(), 'application/json'
     elif path == '/config.json':
         body = json.dumps({'stages': STAGES, 'cells': CELLS, 'labels': control['diagram_labels'],
-                           'token': control['token']}).encode()
+                           'token': control['token'], 'log_path': str(directory / 'deploy.log')}).encode()
         content_type = 'application/json'
     elif path in assets:
         body, content_type = assets[path]
@@ -375,6 +375,7 @@ def launch(directory, arguments):
     os.close(descriptor)
     process = None
     interrupted = False
+    startup_error = None
 
     def forward_signal(number, frame):
         nonlocal interrupted
@@ -388,7 +389,10 @@ def launch(directory, arguments):
         process = subprocess.Popen(['ansible-playbook', *arguments], env=environment)
         exit_code = process.wait()
     except OSError:
-        print('Could not start ansible-playbook. Enter the project environment first.', file=sys.stderr)
+        startup_error = ('Could not start ansible-playbook. Stop the viewer, enter the project environment '
+                         'with nix develop, then restart: python3 deployment.py --serve --port 41327. '
+                         'If using a custom port or --state-dir, keep those options when restarting.')
+        print(startup_error, file=sys.stderr)
         exit_code = 127
     finally:
         for number, handler in previous_signals.items():
@@ -401,6 +405,8 @@ def launch(directory, arguments):
     elif exit_code != 0:
         report['state'] = 'failed'
     report['exit_code'] = 128 - exit_code if exit_code < 0 else exit_code
+    if startup_error:
+        report['error'] = startup_error
     write_report(directory / 'status.json', report)
     return report['exit_code']
 

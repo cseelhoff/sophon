@@ -232,7 +232,7 @@
             agent: "enabled=1"
             scsihw: "virtio-scsi-pci"
             net:
-              net0: "virtio,bridge={{ vnet_interface }},tag={{ vnet_vlan }}"
+              net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
             virtio:
               virtio0: >-
                 {{ proxmox_disk_storage_id }}:0,import-from={{ proxmox_iso_storage_path }}/{{ nfs_image_filename }}.iso,size={{ nfs_os_disk_size }}

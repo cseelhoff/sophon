@@ -68,6 +68,50 @@ def check_hide_tasks(page, report_path):
     assert page.locator('#task-title').inner_text() == 'NFS VM: task results'
 
 
+def check_cloudflare_help(page):
+    page.get_by_role('button', name='Configure', exact=True).click()
+    token = page.locator('input[name="SOPHON_CF_TOKEN"]')
+    token.wait_for()
+    assert token.get_attribute('type') == 'password'
+    assert token.get_attribute('aria-describedby') == 'cloudflare-token-help'
+    help_text = page.locator('#cloudflare-token-help')
+    assert help_text.is_visible()
+    link = help_text.get_by_role('link')
+    assert link.get_attribute('href') == 'https://dash.cloudflare.com/profile/api-tokens'
+    assert link.get_attribute('rel') == 'noopener noreferrer'
+    rows = help_text.locator('tbody tr')
+    assert [row.locator('td').all_text_contents() for row in rows.all()] == [
+        ['Zone', 'Zone', 'Read'], ['Zone', 'DNS', 'Edit'], ['Account', 'Cloudflare Tunnel', 'Edit'],
+    ]
+    assert help_text.bounding_box()['y'] >= token.bounding_box()['y'] + token.bounding_box()['height']
+    page.get_by_role('button', name='Close', exact=True).click()
+
+
+def check_startup_error(page, report_path):
+    report = json.loads(report_path.read_text())
+    report.update(state='failed', current=None, exit_code=127)
+    for stage in report['stages'].values():
+        stage.update(state='pending', tasks=[])
+    report_path.write_text(json.dumps(report))
+    page.reload()
+    error = page.locator('#run-error')
+    error.get_by_text('Deployment failed before any stage started.', exact=False).wait_for()
+    assert 'Exit code: 127' in error.inner_text()
+    assert str(report_path.parent / 'deploy.log') in error.inner_text()
+    page.get_by_role('button', name='Prestage', exact=False).click()
+    assert error.is_visible()
+    assert page.locator('#task-results').inner_text() == ''
+    report['error'] = 'Could not start ansible-playbook. Restart the viewer from nix develop.'
+    report_path.write_text(json.dumps(report))
+    error.get_by_text(report['error'], exact=False).wait_for()
+    page.wait_for_timeout(1200)
+    assert report['error'] in error.inner_text(), 'Polling must not clear the failure message'
+    report.update(state='running', exit_code=0)
+    report.pop('error')
+    report_path.write_text(json.dumps(report))
+    error.wait_for(state='hidden')
+
+
 def test_dashboard():
     with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
         environment = {name: value for name, value in os.environ.items() if not name.startswith('SOPHON_')}
@@ -99,6 +143,8 @@ def test_dashboard():
                     assert page.get_by_role('separator', include_hidden=True).count() == 0
                     check_zoom(page)
                     check_hide_tasks(page, report_path)
+                    check_cloudflare_help(page)
+                    check_startup_error(page, report_path)
                     assert not errors, errors
                     page.close()
             finally:

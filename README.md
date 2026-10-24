@@ -66,6 +66,10 @@ ansible-playbook site.yml \
 
 ### Deployment diagram
 
+The optional VLAN setting applies to both the NFS VM and InfraVM. Leave it empty
+for an untagged bridge; Sophon then omits the Proxmox NIC `tag` property. Set a
+VLAN ID from 1 to 4094 when the bridge requires tagged traffic.
+
 Start the local dashboard from the same environment and repository directory:
 
 ```bash
@@ -153,8 +157,13 @@ deployment by itself. Ctrl+C stops a foreground server. An unfinished trace
 whose recorded process has exited is shown as unknown; this is advisory PID
 liveness, not locking or service health. A copied command that fails before
 Ansible initializes its callback leaves no trace: inspect the terminal/log,
-not the diagram, for that error. The terminal launcher also records startup
-failures and interruptions. The server serves only its explicit routes, not
+not stage task results, for that error. The dashboard shows a persistent failure
+summary and the private Controller log location, even if no stage was reached.
+New launcher startup failures also include recovery instructions; older reports
+show a generic pre-stage explanation and their exit code when recorded. If
+`ansible-playbook` cannot start, stop the viewer and restart it from `nix develop`.
+The terminal launcher also records startup failures and interruptions.
+The server serves only its explicit routes, not
 the repository or the rest of `artifacts/`.
 
 After editing the diagram, export it again to `sophon.svg` with cell IDs

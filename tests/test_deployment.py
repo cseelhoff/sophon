@@ -274,6 +274,48 @@ def test_launcher():
       server_process.stdout.close()
 
 
+def test_startup_failure():
+  with tempfile.TemporaryDirectory() as temporary:
+    directory = Path(temporary)
+    result = subprocess.run(
+      [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', temporary, '--', 'site.yml'],
+      env=dict(os.environ, PATH=temporary, SOPHON_PROXMOX_PASSWORD='PRIVATE_STARTUP_PASSWORD'),
+      cwd=ROOT, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 127
+    report = json.loads((directory / 'status.json').read_text())
+    assert report['state'] == 'failed' and report['exit_code'] == 127
+    assert report['current'] is None
+    assert all(stage['state'] == 'pending' for stage in report['stages'].values())
+    assert 'Could not start ansible-playbook' in report['error']
+    assert 'nix develop' in report['error']
+    assert 'PRIVATE_STARTUP_PASSWORD' not in json.dumps(report)
+
+
+def test_vm_network_config():
+  tasks = []
+  for role in ('nfs', 'infravm'):
+    remaining = list(yaml.safe_load((ROOT / f'roles/{role}/tasks/main.yml').read_text()))
+    networks = []
+    while remaining:
+      task = remaining.pop()
+      for section in ('block', 'rescue', 'always'):
+        remaining.extend(task.get(section, []))
+      network = task.get('community.proxmox.proxmox_kvm', {}).get('net', {}).get('net0')
+      if network:
+        networks.append(network)
+    assert len(networks) == 1, (role, networks)
+    for vlan in ('', '300', 300, 1, 4094):
+      expected = 'model=virtio,bridge=vmbr0' + (f',tag={vlan}' if vlan else '')
+      tasks.extend([
+        {'ansible.builtin.set_fact': {'vnet_interface': 'vmbr0', 'vnet_vlan': vlan}},
+        {'name': f'Render {role} network device', 'ansible.builtin.set_fact': {'rendered_network': networks[0]}},
+        {'ansible.builtin.assert': {'that': [f'rendered_network == {expected!r}']}},
+      ])
+  with tempfile.TemporaryDirectory() as temporary:
+    result, _ = run_fixture(Path(temporary), tasks)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_gui_settings():
   with tempfile.TemporaryDirectory() as temporary:
     environment = {name: value for name, value in os.environ.items() if not name.startswith('SOPHON_')}
@@ -659,6 +701,8 @@ def test_nfs_recovery():
 
 
 if __name__ == '__main__':
+  test_vm_network_config()
+  test_startup_failure()
   test_diagram()
   test_credential_inputs()
   test_shell_command()
