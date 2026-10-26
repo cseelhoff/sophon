@@ -79,6 +79,8 @@ FIELDS = {
     'SOPHON_DOMAIN': ('Domain', 'Site', 'host', '', True),
     'SOPHON_ACME_EMAIL': ('ACME email', 'Site', 'email', 'admin@example.com', False),
     'SOPHON_CF_TOKEN': ('Cloudflare API token', 'Site', 'password', '', False),
+    'SOPHON_ACME_PAYLOAD': ('Pre-issued certificates: base64 acme.json (optional; contains private keys)',
+                            'Site', 'certificate', '', False),
     'SOPHON_CF_TUNNEL_NAME': ('Cloudflare tunnel name', 'Site', 'text', 'sophon', False),
     'SOPHON_KEYCLOAK_REALM': ('Keycloak realm', 'Access', 'text', 'sophon', False),
     'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME': ('Realm display name', 'Access', 'text', '', False),
@@ -103,7 +105,7 @@ PHASE_STAGES = {
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter')}
 BOOTSTRAP_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
-                    if field[2] != 'password' and field[1] not in BOOTSTRAP_GROUPS and name != 'SOPHON_DOMAIN')
+                    if field[2] not in ('password', 'certificate') and field[1] not in BOOTSTRAP_GROUPS and name != 'SOPHON_DOMAIN')
 
 
 def field_provider(group):
@@ -124,7 +126,9 @@ def phase_fields(phase='bootstrap'):
 def new_control(environment, phase='bootstrap'):
     environment = {name: value for name, value in environment.items()
                    if not name.startswith('SOPHON_') or name in phase_fields(phase)}
-    return {'values': {name: environment.get(name) or definition[3] for name, definition in phase_fields(phase).items()},
+    values = {name: environment.get(name) or definition[3] for name, definition in phase_fields(phase).items()}
+    environment.pop('SOPHON_ACME_PAYLOAD', None)
+    return {'values': values,
             'environment': environment | {'SOPHON_DEPLOYMENT_PHASE': phase},
             'token': secrets.token_urlsafe(32), 'processes': [],
             'diagram_labels': {}, 'phase': phase}
@@ -136,7 +140,7 @@ def settings_payload(control):
         value = control['values'][name]
         fields.append({'name': name, 'label': label, 'group': group, 'kind': kind,
                        'required': required, 'configured': bool(value),
-                       'value': value,
+                       'value': '' if kind == 'certificate' else value,
                        'provider': field_provider(group), 'choices': CHOICES.get(name),
                        'limits': LIMITS.get(name)})
     return {'fields': fields}
@@ -146,9 +150,11 @@ def validate_settings(current, changes, phase='bootstrap'):
     definitions = phase_fields(phase)
     if not isinstance(changes, dict) or not changes.keys() <= definitions.keys():
         return None, 'Unexpected deployment setting.'
-    if any(not isinstance(value, str) or len(value) > 4096 or any(ord(character) < 32 for character in value)
-           for value in changes.values()):
-        return None, 'Settings must be single-line strings of at most 4096 characters.'
+    if any(not isinstance(value, str)
+           or len(value) > (2 * 1024 * 1024 if name == 'SOPHON_ACME_PAYLOAD' else 4096)
+           or (name != 'SOPHON_ACME_PAYLOAD' and any(ord(character) < 32 for character in value))
+           for name, value in changes.items()):
+        return None, 'Settings must be bounded strings: 4096 characters per single-line setting, or 2 MiB for certificates.'
     values = current | changes
     provider = values.get('SOPHON_HYPERVISOR', 'proxmox').strip()
     if provider not in CHOICES['SOPHON_HYPERVISOR']:
@@ -156,7 +162,7 @@ def validate_settings(current, changes, phase='bootstrap'):
     for name, (label, group, kind, default, required) in definitions.items():
         if field_provider(group) not in (None, provider):
             continue
-        value = values[name] if kind == 'password' else values[name].strip()
+        value = values[name] if kind in ('password', 'certificate') else values[name].strip()
         values[name] = value
         if required and not value.strip():
             return None, f'{group}: {label} ({name}) is required.'
@@ -188,7 +194,22 @@ def validate_settings(current, changes, phase='bootstrap'):
                 return None, 'VM name must contain 1-80 letters, digits, dots, underscores or hyphens.'
         except ValueError:
             return None, f'{label} is not a valid {kind} value.'
+    if values.get('SOPHON_ACME_PAYLOAD'):
+        import certificates
+        try:
+            certificates.decode_payload(values['SOPHON_ACME_PAYLOAD'], values['SOPHON_DOMAIN'])
+        except (ValueError, OSError) as error:
+            return None, str(error)
     return values, None
+
+
+def stage_certificates(values):
+    values = dict(values)
+    encoded = values.pop('SOPHON_ACME_PAYLOAD', '')
+    if encoded:
+        import certificates
+        certificates.import_payload(encoded, values['SOPHON_DOMAIN'], ROOT / 'artifacts/traefik/acme.json')
+    return values
 
 
 def trace_environment(directory, environment):
@@ -199,6 +220,7 @@ def trace_environment(directory, environment):
         environment.get('ANSIBLE_CALLBACKS_ENABLED'), 'sophon_progress']))
     environment['SOPHON_PROGRESS_FILE'] = str(directory / 'status.json')
     environment['ANSIBLE_LOG_PATH'] = str(directory / 'ansible.log')
+    environment.pop('SOPHON_ACME_PAYLOAD', None)
     for name in ('ANSIBLE_RUN_TAGS', 'ANSIBLE_SKIP_TAGS'):
         environment.pop(name, None)
     return environment
@@ -206,7 +228,8 @@ def trace_environment(directory, environment):
 
 def shell_command(directory, values, environment, phase='bootstrap'):
     traced = trace_environment(directory, environment)
-    exports = values | {'SOPHON_DEPLOYMENT_PHASE': phase}
+    exports = {name: value for name, value in values.items() if name != 'SOPHON_ACME_PAYLOAD'}
+    exports['SOPHON_DEPLOYMENT_PHASE'] = phase
     if phase == 'bootstrap':
         exports |= {name: traced[name] for name in (
             'ANSIBLE_CALLBACK_PLUGINS', 'ANSIBLE_CALLBACKS_ENABLED', 'SOPHON_PROGRESS_FILE', 'ANSIBLE_LOG_PATH')}
@@ -241,7 +264,7 @@ def action_request(directory, control, environment):
         length = int(environment.get('CONTENT_LENGTH', '0'))
     except ValueError:
         return '400 Bad Request', {'error': 'Invalid request length.'}
-    if not 0 < length <= 32768:
+    if not 0 < length <= 2 * 1024 * 1024 + 32768:
         return '413 Content Too Large', {'error': 'Deployment settings exceed the request limit.'}
     try:
         changes = json.loads(environment['wsgi.input'].read(length))
@@ -252,6 +275,10 @@ def action_request(directory, control, environment):
     values, error = validate_settings(control['values'], changes, control['phase'])
     if error:
         return '400 Bad Request', {'error': error}
+    try:
+        values = stage_certificates(values)
+    except (OSError, ValueError):
+        return '500 Internal Server Error', {'error': 'Could not stage private certificates. Check project permissions and identity paths.'}
     if environment['PATH_INFO'] == '/command':
         return '200 OK', {'command': shell_command(directory, values, control['environment'], control['phase'])}
     try:

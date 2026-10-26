@@ -463,7 +463,8 @@ udevadm() { [[ $1 == settle ]]; }
     def test_wrapper_argument_and_environment_boundary(self):
         source = (SCRIPTS / "sophon-controller").read_text()
         allowed = source.split("for name in", 1)[1].split("\ndo", 1)[0].replace("\\", "").split()
-        self.assertEqual(set(allowed), set(phase_fields("services")))
+        self.assertEqual(set(allowed), {name for name, field in phase_fields("services").items()
+                                       if field[2] != "certificate"})
         with fixture() as directory:
             ready = directory / "ready"
             ready.touch()
@@ -475,6 +476,7 @@ udevadm() { [[ $1 == settle ]]; }
                        SOPHON_INFRAVM_IP="10.0.60.2", SOPHON_VNET_DNS="1.1.1.1",
                        SOPHON_NFS_IP="forbidden", SOPHON_VNET_GATEWAY="forbidden",
                        SOPHON_KOPIA_ADMIN_PASSWORD="forbidden", SOPHON_PROXMOX_PASSWORD="forbidden",
+                       SOPHON_ACME_PAYLOAD="forbidden",
                        SOPHON_DEPLOYMENT_PHASE="bootstrap", CONTAINER_HOST="ssh://forbidden")
             for args in ([], ["--dashboard", "--port", "41327"], ["--run", "--state-dir", "/workspace/artifacts/deployment/services"],
                          ["--help"], ["--", "--tags", "gitea"]):

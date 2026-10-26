@@ -3,9 +3,13 @@ import io
 import json
 import os
 from pathlib import Path
+import pty
+import select
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -25,6 +29,38 @@ def service_values():
 
 
 class ConsoleTests(unittest.TestCase):
+    def test_large_certificate_paste_is_not_echoed_or_truncated_in_a_real_terminal(self):
+        pid, terminal = pty.fork()
+        if pid == 0:
+            os.execv(sys.executable, [sys.executable, '-c',
+                f'import sys,termios; sys.path.insert(0,{str(ROOT)!r}); import console; '
+                'before=termios.tcgetattr(0); value=console.read_certificate("CERTIFICATE: "); '
+                'assert termios.tcgetattr(0)==before; '
+                'assert value=="X"*120000; print("COMPLETE_PRIVATE_PASTE",flush=True)'])
+        try:
+            output = b''
+            deadline = time.monotonic() + 15
+            while b'CERTIFICATE: ' not in output:
+                self.assertLess(time.monotonic(), deadline, 'Certificate prompt did not start')
+                if select.select([terminal], [], [], 1)[0]:
+                    output += os.read(terminal, 4096)
+            data = b'X' * 120000 + b'\n'
+            while data:
+                data = data[os.write(terminal, data):]
+            while b'COMPLETE_PRIVATE_PASTE' not in output:
+                self.assertLess(time.monotonic(), deadline, 'Large certificate input was truncated or blocked')
+                if select.select([terminal], [], [], 1)[0]:
+                    output += os.read(terminal, 4096)
+            self.assertNotIn(b'XXXX', output)
+            _, status = os.waitpid(pid, 0)
+            pid = None
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+        finally:
+            os.close(terminal)
+            if pid is not None:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+
     def test_run_dispatch_and_hidden_input(self):
         environment = service_values()
         with patch.dict(os.environ, environment, clear=True), \
@@ -36,7 +72,7 @@ class ConsoleTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main(['--state-dir', '/workspace/state']), 19)
             run.assert_called_once_with(['--phase', 'services', '--state-dir', '/workspace/state', '--', 'site.yml'])
-            self.assertEqual(hidden.call_count, sum(field[2] == 'password'
+            self.assertEqual(hidden.call_count, sum(field[2] in ('password', 'certificate')
                                                    for field in deployment.phase_fields('services').values()))
             self.assertNotIn('FIXTURE_SECRET_VALUE', output.getvalue())
 

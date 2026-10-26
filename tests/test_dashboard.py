@@ -79,6 +79,14 @@ def check_cloudflare_help(page):
     assert domain.input_value() == ''
     assert token.get_attribute('type') == 'password'
     assert token.get_attribute('aria-describedby') == 'cloudflare-token-help'
+    certificate = page.locator('textarea[name="SOPHON_ACME_PAYLOAD"]')
+    assert certificate.is_visible()
+    assert certificate.get_attribute('maxlength') == str(2 * 1024 * 1024)
+    assert certificate.get_attribute('autocomplete') == 'off'
+    assert certificate.get_attribute('required') is None
+    certificate.fill('X' * 120000)
+    assert len(certificate.input_value()) == 120000
+    certificate.fill('')
     help_text = page.locator('#cloudflare-token-help')
     assert help_text.is_visible()
     link = help_text.get_by_role('link')

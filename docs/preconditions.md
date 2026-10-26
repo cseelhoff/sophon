@@ -30,7 +30,7 @@ laptop to the guest is required. After reboot log in as `core` and run
 |---|---|
 | Offline installation completed | CoreOS and the project, collections, archives and runner are on persistent disk; both ISOs may be detached |
 | Portainer reachable on `<infravm_ip>:9443` | Phase 2 uses Portainer, not a hypervisor API |
-| Pre-issued certificates imported when there is no egress | Carry the private certificate ISO before service deployment; leave the Cloudflare token on the connected machine |
+| Pre-issued certificates imported when there is no egress | Run `python3 certificates.py issue` on the connected machine; paste its base64 payload in Step 4. Private certificate ISO transport remains an alternative. Keep the Cloudflare token on the connected machine |
 | Service names resolve to `infravm_ip` in the runner | Container-only host entries supply this before CoreDNS starts; Keycloak and Traefik checks use service FQDNs — see [ADR-0007](adr/0007-controller-resolves-service-names-through-coredns.md) |
 
 Phase 2 asks for the domain; bootstrap and dashboard startup do not require it.

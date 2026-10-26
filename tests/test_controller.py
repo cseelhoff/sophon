@@ -214,7 +214,8 @@ class ControllerTests(unittest.TestCase):
                           isinstance(target, ast.Name) and target.id == "FIELDS" for target in node.targets))
         fields = ast.literal_eval(fields)
         expected = {name for name, field in fields.items()
-                    if field[1] not in ("Hypervisor", "Proxmox", "vCenter", "Network", "VM")}
+                    if field[1] not in ("Hypervisor", "Proxmox", "vCenter", "Network", "VM")
+                    and field[2] != "certificate"}
         expected.update((
             "SOPHON_VNET_GATEWAY", "SOPHON_VNET_CIDR", "SOPHON_NFS_IP",
             "SOPHON_KOPIA_ADMIN_PASSWORD", "SOPHON_KOPIA_REPOSITORY_PASSWORD",

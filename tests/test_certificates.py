@@ -1,4 +1,5 @@
 import base64
+import contextlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import io
 from datetime import datetime, timedelta, timezone
@@ -78,6 +79,160 @@ class CertificateTests(unittest.TestCase):
         result = certificates.validate(self.source, 'Fixture.Example.')
         self.assertEqual(set(result), {f'{service}.fixture.example' for service in certificates.SERVICES})
         self.assertTrue(all(datetime.fromisoformat(expiry) > self.now for expiry in result.values()))
+
+    def test_issue_command_reuses_valid_store_and_prints_only_base64(self):
+        state = self.directory / 'state' / 'fixture.example'
+        state.mkdir(parents=True, mode=0o700)
+        (state / 'acme.json').write_bytes(self.source.read_bytes())
+        (state / 'acme.json').chmod(0o600)
+        with contextlib.redirect_stdout(io.StringIO()) as output, \
+                contextlib.redirect_stderr(io.StringIO()), \
+                patch('subprocess.Popen') as process, \
+                patch('getpass.getpass') as secret:
+            self.assertEqual(certificates.main([
+                'issue', '--domain', 'fixture.example', '--email', 'admin@fixture.example',
+                '--state-dir', str(self.directory / 'state')]), 0)
+        self.assertEqual(json.loads(base64.b64decode(output.getvalue().strip())), self.payload)
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
+        process.assert_not_called()
+        secret.assert_not_called()
+
+    def test_issue_command_prompts_secret_and_runs_a_real_private_issuer_process(self):
+        executable = self.directory / 'traefik'
+        received = self.directory / 'issuer-arguments.json'
+        executable.write_text(
+            f'#!{sys.executable}\n'
+            'import json,os,sys,time\nfrom pathlib import Path\n'
+            f'Path({str(received)!r}).write_text(json.dumps(dict(args=sys.argv[1:],pid=os.getpid(),'
+            'token=os.environ.get("CF_DNS_API_TOKEN"))))\n'
+            'target=next(arg.split("=",1)[1] for arg in sys.argv if ".acme.storage=" in arg)\n'
+            f'Path(target).write_bytes(Path({str(self.source)!r}).read_bytes())\n'
+            'Path(target).chmod(0o600)\ntime.sleep(60)\n')
+        executable.chmod(0o700)
+        environment = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'])
+        environment.pop('CF_DNS_API_TOKEN', None)
+        with patch.dict(os.environ, environment, clear=True), \
+                patch('getpass.getpass', return_value='FAKE_CLOUDFLARE_TOKEN') as secret, \
+                patch('builtins.input', side_effect=['fixture.example', 'admin@fixture.example']), \
+                contextlib.redirect_stdout(io.StringIO()) as output, \
+                contextlib.redirect_stderr(io.StringIO()) as progress:
+            self.assertEqual(certificates.main([
+                'issue', '--engine', 'traefik', '--state-dir', str(self.directory / 'issued'), '--timeout', '10']), 0)
+        invocation = json.loads(received.read_text())
+        self.assertNotIn('FAKE_CLOUDFLARE_TOKEN', ' '.join(invocation['args']) + output.getvalue() + progress.getvalue())
+        self.assertEqual(invocation['token'], 'FAKE_CLOUDFLARE_TOKEN')
+        self.assertEqual(json.loads(base64.b64decode(output.getvalue().strip())), self.payload)
+        secret.assert_called_once()
+        with self.assertRaises(ProcessLookupError):
+            os.kill(invocation['pid'], 0)
+        private = self.directory / 'issued/fixture.example'
+        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((private / 'issuer.log').stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((private / 'acme.json').stat().st_mode), 0o600)
+
+    def test_invalid_issuer_inputs_never_export_a_payload(self):
+        for arguments in (['--domain', '../../escape'], ['--domain', 'fixture.example', '--timeout', '0']):
+            with self.subTest(arguments=arguments), contextlib.redirect_stdout(io.StringIO()) as output, \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                certificates.main(['issue', '--state-dir', str(self.directory), *arguments])
+            self.assertEqual(error.exception.code, 1)
+            self.assertEqual(output.getvalue(), '')
+
+    def test_failed_issuer_exports_nothing_and_keeps_its_log_private(self):
+        executable = self.directory / 'traefik'
+        executable.write_text(f'#!{sys.executable}\nprint("FAKE_PRIVATE_ISSUER_DETAIL")\nraise SystemExit(27)\n')
+        executable.chmod(0o700)
+        with patch.dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
+                        CF_DNS_API_TOKEN='FAKE_TOKEN'), \
+                contextlib.redirect_stdout(io.StringIO()) as output, \
+                contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit) as stopped:
+            certificates.main(['issue', '--domain', 'fixture.example', '--email', 'admin@fixture.example',
+                               '--engine', 'traefik', '--state-dir', str(self.directory / 'failed')])
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertEqual(output.getvalue(), '')
+        self.assertIn('issuer exited', error.getvalue())
+        self.assertNotIn('FAKE_PRIVATE_ISSUER_DETAIL', error.getvalue())
+        self.assertEqual(stat.S_IMODE((self.directory / 'failed/fixture.example/issuer.log').stat().st_mode), 0o600)
+
+    def test_payload_import_is_private_atomic_and_rejects_bad_input_without_replacement(self):
+        encoded = base64.b64encode(self.source.read_bytes()).decode()
+        self.assertGreater(len(encoded), 4096)
+        destination = self.directory / 'imported/acme.json'
+        certificates.import_payload(encoded, 'fixture.example', destination)
+        self.assertEqual(json.loads(destination.read_bytes()), self.payload)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
+        for invalid in ('not base64!', base64.b64encode(b'{"letsencrypt":{"Account":{}}}').decode(),
+                        base64.b64encode(b'[]').decode(), 'x' * (certificates.MAX_PAYLOAD + 1)):
+            with self.subTest(length=len(invalid)), self.assertRaises(ValueError):
+                certificates.import_payload(invalid, 'fixture.example', destination)
+            self.assertEqual(json.loads(destination.read_bytes()), self.payload)
+        with self.assertRaises(ValueError):
+            certificates.import_payload(encoded, 'wrong.example', destination)
+
+    def test_service_payload_is_staged_but_never_forwarded_in_environment_or_command(self):
+        import deployment
+        from test_console import service_values
+        encoded = base64.b64encode(self.source.read_bytes()).decode()
+        settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example', 'SOPHON_ACME_PAYLOAD': encoded}
+        current = deployment.new_control(settings, 'services')
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', current['environment'])
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.SITE_FIELDS)
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.phase_fields('bootstrap'))
+        values, error = deployment.validate_settings(current['values'], {}, 'services')
+        self.assertIsNone(error)
+        with patch('deployment.ROOT', self.directory):
+            staged = deployment.stage_certificates(values)
+            command = deployment.shell_command(self.directory, staged, current['environment'], 'services')
+        self.assertNotIn(encoded, command)
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', staged)
+        self.assertEqual(json.loads((self.directory / 'artifacts/traefik/acme.json').read_bytes()), self.payload)
+
+    def test_dashboard_accepts_large_certificate_import_without_putting_it_in_the_command(self):
+        import deployment
+        from test_console import service_values
+        encoded = base64.b64encode(self.source.read_bytes() + b' ' * 32768).decode()
+        changes = {'SOPHON_ACME_PAYLOAD': encoded, 'SOPHON_DOMAIN': 'fixture.example'}
+        data = json.dumps(changes).encode()
+        self.assertGreater(len(data), 32768)
+        control = deployment.new_control(service_values(), 'services')
+        environment = {
+            'SERVER_PORT': '12345', 'HTTP_ORIGIN': 'http://127.0.0.1:12345',
+            'HTTP_X_SOPHON_TOKEN': control['token'], 'CONTENT_TYPE': 'application/json',
+            'CONTENT_LENGTH': str(len(data)), 'PATH_INFO': '/command', 'wsgi.input': io.BytesIO(data),
+        }
+        with patch('deployment.ROOT', self.directory):
+            status, response = deployment.action_request(self.directory, control, environment)
+        self.assertEqual(status, '200 OK', response)
+        self.assertNotIn(encoded, response['command'])
+        imported = self.directory / 'artifacts/traefik/acme.json'
+        self.assertEqual(json.loads(imported.read_bytes()), self.payload)
+        self.assertEqual(stat.S_IMODE(imported.stat().st_mode), 0o600)
+
+    def test_console_wizard_imports_only_after_confirmation_and_never_exports_the_payload(self):
+        import console
+        from test_console import service_values
+        encoded = base64.b64encode(self.source.read_bytes()).decode()
+        for confirmed in (False, True):
+            root = self.directory / ('confirmed' if confirmed else 'cancelled')
+            settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example'}
+            with self.subTest(confirmed=confirmed), patch.dict(os.environ, settings, clear=False), \
+                    patch('console.deployment.ROOT', root), \
+                    patch('console.deployment.load_site_settings', return_value={}), \
+                    patch('console.deployment.main', return_value=0) as run, \
+                    patch('console.sys.stdin.isatty', return_value=True), \
+                    patch('console.getpass.getpass', side_effect=lambda prompt:
+                          encoded if prompt.startswith('Pre-issued certificates') else ''), \
+                    patch('builtins.input', side_effect=lambda prompt:
+                          'y' if confirmed and prompt.endswith('[y/N] ') else ''), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(console.main([]), 0)
+                self.assertNotIn(encoded, output.getvalue())
+                self.assertFalse(os.environ.get('SOPHON_ACME_PAYLOAD'), 'Wizard forwarded the certificate payload')
+            target = root / 'artifacts/traefik/acme.json'
+            self.assertEqual(target.exists(), confirmed)
+            self.assertEqual(run.call_count, int(confirmed))
+            if confirmed:
+                self.assertEqual(json.loads(target.read_bytes()), self.payload)
 
     def test_missing_expired_wrong_host_and_wrong_private_key_fail(self):
         entries = self.payload['letsencrypt']['Certificates']

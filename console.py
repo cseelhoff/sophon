@@ -5,8 +5,26 @@ import getpass
 import os
 from pathlib import Path
 import sys
+import termios
 
 import deployment
+
+
+def read_certificate(prompt):
+    if not os.isatty(sys.stdin.fileno()):
+        return getpass.getpass(prompt)
+    descriptor = sys.stdin.fileno()
+    original = termios.tcgetattr(descriptor)
+    settings = termios.tcgetattr(descriptor)
+    settings[3] &= ~termios.ICANON
+    settings[6][termios.VMIN] = 1
+    settings[6][termios.VTIME] = 0
+    try:
+        # Canonical TTY input truncates lines at about 4 KiB; certificate stores are much larger.
+        termios.tcsetattr(descriptor, termios.TCSANOW, settings)
+        return getpass.getpass(prompt)
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSANOW, original)
 
 
 def main(argv=None):
@@ -39,12 +57,16 @@ def main(argv=None):
     if not options.run:
         if not sys.stdin.isatty():
             parser.error('Interactive setup requires a terminal; use --run with exported settings for automation.')
-        print('Sophon Phase 2: configure services on this InfraVM. Inputs are not saved.')
+        print('Sophon Step 4: configure services on this InfraVM. Inputs are not saved.')
         print('Empty input keeps the displayed default or an already supplied secret.')
         try:
             for name, (label, group, kind, default, required) in deployment.phase_fields('services').items():
                 value = values[name]
-                if kind == 'password':
+                if kind == 'certificate':
+                    answer = read_certificate(f'{label} (or @/workspace/path/to/payload.txt): ')
+                    if answer.startswith('@'):
+                        answer = Path(answer[1:]).read_text()
+                elif kind == 'password':
                     answer = getpass.getpass(f'{label} ({name})' + (' [configured]' if value else '') + ': ')
                 else:
                     answer = input(f'{label} ({name})' + (f' [{value}]' if value else '') + ': ')
@@ -60,11 +82,20 @@ def main(argv=None):
         except (EOFError, KeyboardInterrupt):
             print('\nDeployment cancelled; no service changes were made.', file=sys.stderr)
             return 130
+        except (OSError, ValueError) as error:
+            print(f'Certificate input failed: {error}', file=sys.stderr)
+            return 2
     else:
         values, error = deployment.validate_settings(values, {}, 'services')
         if error:
             print(f'Configuration rejected: {error}', file=sys.stderr)
             return 2
+    try:
+        values = deployment.stage_certificates(values)
+    except (OSError, ValueError) as error:
+        print(f'Certificate import failed: {error}', file=sys.stderr)
+        return 2
+    os.environ.pop('SOPHON_ACME_PAYLOAD', None)
     os.environ.update(values)
     extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
     return deployment.main(arguments + ['--', 'site.yml', *extra])

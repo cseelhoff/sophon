@@ -17,6 +17,7 @@ sites must carry pre-issued certificates separately before deploying services.
 
 | Document | What's in it |
 |---|---|
+| [instructions.md](instructions.md) | User input checklist and Phase 1/2 walkthrough for Proxmox, vCenter, and offline certificate handoff |
 | [CONTEXT.md](CONTEXT.md) | Glossary — the words this project uses and what they mean |
 | [docs/preconditions.md](docs/preconditions.md) | What must be true before you run anything |
 | [docs/architecture.md](docs/architecture.md) | How the pieces fit and what depends on what |
@@ -91,11 +92,14 @@ project is `/var/lib/sophon/project` on the host, `/workspace` in the runner.
 Both ISOs can be detached after installation. Retain credentials in your
 password manager; later reruns require the same existing values.
 
-**No guest internet:** before starting the service wizard, import the separate
-private certificate ISO using the [sneakernet runbook](docs/runbooks/sneakernet-refresh.md).
+**No guest internet:** run `python3 certificates.py issue` on a connected machine.
+It prompts for the domain, ACME email and hidden Cloudflare token, issues/reuses
+the certificates, and outputs one private base64 `acme.json` payload. Paste that
+into the installed service wizard's optional **Pre-issued certificates** field.
 Leave the Cloudflare token empty on the disconnected VM. The token remains on
 the connected machine; neither reusable installation ISO contains certificates
-or private keys.
+or private keys. See the [sneakernet runbook](docs/runbooks/sneakernet-refresh.md)
+and [four-step walkthrough](instructions.md).
 
 If host setup fails, inspect `journalctl -u sophon-host-bootstrap` and retry
 with `sudo systemctl restart sophon-host-bootstrap`; do not reinstall.
