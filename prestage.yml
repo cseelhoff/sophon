@@ -3,11 +3,9 @@
 # Sophon Prestage Playbook
 # =============================================================================
 # Populates artifacts/ with everything Deploy needs: container image tars, the
-# CoreDNS Docker Discovery build, and the Alpine NFS VM disk.
-#
-# site.yml runs the same role automatically, so this playbook is only needed
-# when Prestage and Deploy happen on different machines — build artifacts on a
-# connected host, carry artifacts/ to the disconnected site, deploy there.
+# offline runner, Ansible collections, the stock CoreOS ISO and the artifact ISO.
+# bootstrap.yml runs these tasks automatically. Site network settings are
+# entered later at the live console, not during connected preparation.
 #
 # Usage:
 #   ansible-playbook prestage.yml
@@ -19,3 +17,4 @@
     - name: Stage artifacts
       ansible.builtin.include_role:
         name: prestage
+        tasks_from: bootstrap

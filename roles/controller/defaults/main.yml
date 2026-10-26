@@ -1,0 +1,17 @@
+---
+controller_vm_name: sophon-controller
+controller_marker: sophon-controller-v1
+controller_cores: 4
+controller_memory: 4096
+controller_os_disk_size: 20G
+controller_data_disk_size: 100G
+controller_image_path: "{{ playbook_dir }}/artifacts/controller-vm/sophon-controller-alpine.qcow2"
+controller_iso_path: "{{ playbook_dir }}/artifacts/bootstrap/sophon-deployment.iso"
+controller_ssh_public_key: "{{ lookup('env', 'SOPHON_CONTROLLER_SSH_PUBLIC_KEY') | default('', true) }}"
+controller_console_password: "{{ lookup('env', 'SOPHON_CONTROLLER_PASSWORD') | default('', true) }}"
+controller_dns: "{{ vnet_dns | default('') }}"
+controller_ready_retries: 180
+controller_ready_delay: 10
+# Kept compatible with InfraVM and the service roles; never invoke roles/nfs.
+nfs_storage_name: sophon-nfs
+proxmox_disk_storage_id: local-lvm

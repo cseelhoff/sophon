@@ -1,0 +1,24 @@
+---
+- name: Require a valid Controller Proxmox task identifier
+  ansible.builtin.assert:
+    that:
+      - controller_upid is string
+      - controller_upid is match('^UPID:')
+    fail_msg: "Proxmox did not return a task UPID."
+
+- name: Wait for Controller Proxmox task
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/tasks/{{ controller_upid | urlencode }}/status"
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: controller_task_status
+  until: controller_task_status.json.data.status == 'stopped'
+  retries: 180
+  delay: 5
+  no_log: true
+
+- name: Require successful Controller Proxmox task
+  ansible.builtin.assert:
+    that: controller_task_status.json.data.exitstatus == 'OK'
+    fail_msg: "Controller Proxmox task failed; inspect the task log on Proxmox."

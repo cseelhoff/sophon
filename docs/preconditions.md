@@ -1,59 +1,80 @@
 # Preconditions
 
-What must be true before `ansible-playbook site.yml` will succeed. Most of
-these are not checked, and most produce a confusing failure several roles later
-rather than an immediate one.
+What must be true for the two-phase deployment. Bootstrap and service deployment
+have different access and credential requirements.
 
-## Controller
+## Bootstrap laptop
 
-The machine you run Ansible from.
+Enter `nix develop`, then start `python3 deployment.py --phase bootstrap --serve`.
+Connected preparation requires internet, sufficient space for both ISOs,
+container archives, the runner image and the ISO, and working image-building
+tools. Provisioning afterward uses only Proxmox management HTTPS.
+
+Supply Proxmox management access, node, ISO/disk storage, bridge/VLAN and VM size.
+No guest IP, console password, SSH key or domain is needed on the laptop.
+Fresh deployments are supported. Conflicting unmarked InfraVMs are preserved
+and rejected; compatible marked VMs are started without rewriting their disks.
+
+## InfraVM console
+
+Use the hypervisor console to run the installer from the Sophon ISO in stock
+CoreOS live media. Choose a fresh blank disk and supply static networking and a
+local console password for `core`. Neither SSH nor network access from the
+laptop to the guest is required. After reboot log in as `core` and run
+`sophon-controller`; the local runner needs no Proxmox access.
 
 | Requirement | Why |
 |---|---|
-| `nix develop` shell entered | Provides Ansible, `skopeo`, `butane`, `libguestfs`, `fuse-nfs` at the versions the playbooks expect |
-| Galaxy collections installed | `ansible-galaxy install -r requirements.yml` |
-| An SSH public key at `~/.ssh/id_rsa.pub` | Baked into InfraVM's Ignition as `infravm_ssh_public_key`; without it you have no console-free recovery path |
-| Routed L3 access to the vnet | The Controller talks directly to the NFS export and to Portainer on `<infravm_ip>:9443`. There is no bootstrap tunnel — see [ADR-0002](adr/0002-controller-requires-direct-vnet-access.md) |
-| DNS resolution for `<domain>` pointing at CoreDNS on `infravm_ip` | Keycloak configuration and Traefik checks run against `https://auth.<domain>` etc. from the Controller — see [ADR-0007](adr/0007-controller-resolves-service-names-through-coredns.md) |
+| Offline installation completed | CoreOS and the project, collections, archives and runner are on persistent disk; both ISOs may be detached |
+| Portainer reachable on `<infravm_ip>:9443` | Phase 2 uses Portainer, not the Proxmox API |
+| Service names resolve to `infravm_ip` in the runner | Container-only host entries supply this before CoreDNS starts; Keycloak and Traefik checks use service FQDNs — see [ADR-0007](adr/0007-controller-resolves-service-names-through-coredns.md) |
 
-The DNS requirement is circular on a first run: CoreDNS does not exist until
-the `coredns` role has run. That role therefore ends with a preflight that
-resolves `traefik.<domain>` through the Controller's own resolver and asserts
-the answer is `infravm_ip`. On a first run it stops there with an actionable
-message; point the resolver at `infravm_ip` (or add the service names to
-`/etc/hosts`) and re-run. Deploy is idempotent, so the second run picks up
-where the first stopped.
+Phase 2 asks for the domain; bootstrap and dashboard startup do not require it.
+Before each service run, the playbook updates container-only host entries for the domain apex and
+`traefik`, `auth`, `ldap`, `git`, `portainer`, and `dns` service names,
+pointing them at InfraVM. This avoids a first-run DNS dependency before CoreDNS
+starts, without changing the host's resolver. Other clients still
+need appropriate DNS. The CoreDNS role checks the runner's service-name
+resolution and reports a mismatch rather than silently using a public address.
 
-Sophon never edits the Controller's network configuration. Checking is the
-role's job; changing it is the operator's.
+The live-console installer configures the static address and upstream DNS.
+External service-name resolution and operator access remain operator-managed.
+No Tailscale subnet advertisement or other connectivity method is installed.
 
 ## Proxmox host
 
 | Requirement | Notes |
 |---|---|
 | API reachable over HTTPS | `proxmox_host`, `proxmox_port` (default 8006) |
-| Root credentials | `proxmox_password` — used for both the API and shell-on-node execution |
+| Root credentials | `proxmox_password` — API authentication and ISO uploads, Phase 1 only |
 | Correct node name | `proxmox_node` defaults to `proxmox`; on most installs it is not that |
 | A storage for ISOs and one for VM disks | `proxmox_iso_storage_id` (default `local`), `proxmox_disk_storage_id` (default `local-lvm`) |
 | A bridge, and a VLAN if you use one | `vnet_interface` (default `vmbr0`), `vnet_vlan` |
-| QEMU Guest Agent usable | The NFS VM is configured entirely through QGA before it has a network identity |
+
+No QEMU Guest Agent, hypervisor shell execution, fw_cfg delivery or guest SSH
+access is needed. Phase 2 is local to InfraVM.
+
+InfraVM has both the normal graphical console and a serial socket. The installer
+configures both consoles on the installed system. The unchanged live ISO may
+require starting `sudo systemctl start serial-getty@ttyS0.service` from its
+graphical console before serial-based test automation can log in.
 
 `proxmox_validate_certs` defaults to `false`. If your Proxmox has a trusted
 certificate, set it to `true`.
 
 ## Addresses
 
-Two addresses are inputs, not discoveries. Choose them from a part of the vnet
-that your DHCP server will not hand out
+The InfraVM address is an input at the live console, not a discovery. Choose
+it from a part of the vnet that your DHCP server will not hand out
 ([ADR-0011](adr/0011-addresses-are-operator-supplied.md)).
 
 | Variable | What it is |
 |---|---|
-| `nfs_ip` | Static address for `sophon-nfs` |
 | `infravm_ip` | Static address for `sophon-infravm`; also the address CoreDNS serves on and the address every service FQDN resolves to |
 
-Gateway, prefix length and upstream DNS are derived from the Proxmox network
-configuration and do not normally need supplying.
+Gateway, prefix length and upstream DNS are explicit live-console inputs.
+Installed network defaults supply `SOPHON_INFRAVM_IP` and `SOPHON_VNET_DNS`
+to the service runner. NFS addressing and backup credentials are not required.
 
 ## Domain and certificates
 
@@ -62,6 +83,11 @@ This is the precondition that catches people out.
 `domain_name` must be a **publicly registered domain whose DNS is managed by
 Cloudflare**. Not `homelab.local`, not `sophon.internal`, not a domain parked
 at another registrar's nameservers.
+
+Supply it in the console wizard, optional dashboard, or as `SOPHON_DOMAIN`
+in the runner's environment. It is not bundled into either ISO.
+Portainer's hostname routing is configured when Traefik is deployed in Phase 2;
+its initial API access uses the InfraVM IP and port 9443.
 
 Traefik obtains certificates from Let's Encrypt using the DNS-01 challenge,
 which requires writing a TXT record into the real public zone. A private TLD
@@ -117,26 +143,29 @@ sufficient. See [ADR-0010](adr/0010-portainer-is-the-deployment-substrate.md).
 
 ## Prestage
 
-`artifacts/` must be populated before any provisioning happens. `site.yml` does
-this for you by running the `prestage` role first, so a Controller with internet
-access needs nothing extra.
+`artifacts/` must be populated before provisioning. `bootstrap.yml` runs
+connected preparation automatically, including the offline runner, collections,
+the full CoreOS live ISO, static installer helper, and Sophon deployment ISO.
 
-If the Controller is disconnected, `ansible-playbook prestage.yml` must have
-been run successfully on a machine with internet access and `artifacts/` copied
-across. Deploy itself fetches nothing
+If the bootstrap laptop is disconnected, `ansible-playbook prestage.yml` must
+have completed beforehand. The media are reusable across sites. Phase 2 uses
+the writable project installed at `/var/lib/sophon/project`, not laptop files.
+Provisioning itself fetches nothing
 ([ADR-0001](adr/0001-air-gapped-a-supported-deployment-mode.md)). See
 [prestage.md](../prestage.md) for the runbook.
 
 ## Credentials
 
-Supply credentials through the controller's environment or explicit Ansible
-overrides. `site.yml` validates them before provisioning, including on tagged
-runs. Empty or whitespace-only values fail with the environment-variable name;
+Supply management credentials only on the bootstrap laptop, and the independent
+`core` console password only at installation. Enter service credentials on
+InfraVM; they are not placed on
+the deployment ISO. `site.yml` validates service credentials before deployment.
+Empty or whitespace-only values fail with the environment-variable name;
 the Portainer admin password must contain at least 12 characters.
 
 | Required environment variable | Ansible variable |
 |---|---|
-| `SOPHON_PROXMOX_PASSWORD` | `proxmox_password` |
+| `SOPHON_PROXMOX_PASSWORD` (Phase 1 only) | `proxmox_password` |
 | `SOPHON_PORTAINER_ADMIN_PASSWORD` | `portainer_admin_password` |
 | `SOPHON_KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` |
 | `SOPHON_KEYCLOAK_DB_PASSWORD` | `keycloak_db_password` |
@@ -146,10 +175,9 @@ the Portainer admin password must contain at least 12 characters.
 | `SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD` | `openldap_example_user_password` |
 | `SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD` | `openldap_example_admin_password` |
 
-The optional `SOPHON_GITEA_DB_PASSWORD`, `SOPHON_KOPIA_ADMIN_PASSWORD`, and
-`SOPHON_KOPIA_REPOSITORY_PASSWORD` override their corresponding Ansible variables.
-When unset or empty, each reuses the supplied Portainer admin password, preserving
-the existing shared-password defaults. Set them explicitly if the deployed
+The optional `SOPHON_GITEA_DB_PASSWORD` overrides its Ansible variable.
+When unset or empty, it reuses the supplied Portainer admin password.
+Set it explicitly if the deployed
 values differ. LDAP config and bind credentials retain their existing reuse of
 the LDAP admin password unless overridden with Ansible variables.
 
@@ -163,7 +191,7 @@ read -rsp 'Existing Gitea admin password: ' SOPHON_GITEA_ADMIN_PASSWORD; printf 
 export SOPHON_GITEA_ADMIN_PASSWORD
 ```
 
-Repeat for each required credential, or enter them in the dashboard. Dashboard
+Repeat for each required credential, or use the console wizard/dashboard. Dashboard
 values are not saved between browser reloads. Passwords are no longer generated
 or saved as reusable controller secrets; Ansible Vault is not required.
 Deployed service configuration and logs may still contain credentials.
@@ -185,48 +213,31 @@ is not a supported password-rotation procedure for an existing service.
 
 Once all values are safely retained and verified, the old password files can be
 retired separately. Do not delete all of `artifacts/`: it still contains needed
-SSH keys and other private deployment state.
+certificates and other private deployment state.
 
-## Summary: a complete invocation
+## Summary: the two entry points
 
-Every site setting is read from the environment, so describe the site once:
-
-```bash
-export SOPHON_PROXMOX_HOST=10.0.60.1
-export SOPHON_PROXMOX_PORT=8006
-export SOPHON_PROXMOX_NODE=pve-01
-export SOPHON_PROXMOX_PASSWORD='<proxmox root password>'
-export SOPHON_PROXMOX_ISO_STORAGE=local
-export SOPHON_DOMAIN=example.com
-export SOPHON_NFS_IP=10.0.60.10
-export SOPHON_INFRAVM_IP=10.0.60.11
-export SOPHON_VNET_INTERFACE=vmbr1
-export SOPHON_VNET_VLAN=60
-export SOPHON_VNET_GATEWAY=10.0.60.1
-export SOPHON_VNET_CIDR=24
-export SOPHON_ACME_EMAIL=admin@example.com
-export SOPHON_CF_TOKEN='<cloudflare api token>'
-export SOPHON_PORTAINER_LICENSE_KEY='<licence key>'
-```
-
-Load all credentials listed above as well. The placeholders illustrate the
-inputs, not a recommendation to put real secrets in shell history.
-
-Then deploy, and redeploy, with:
+On the bootstrap laptop:
 
 ```bash
-ansible-playbook site.yml
+nix develop
+python3 deployment.py --phase bootstrap --serve
 ```
 
-`SOPHON_KEYCLOAK_REALM` is optional and defaults to `sophon`. Required passwords
-have no generated fallback.
+Use Configure/Run for Phase 1, then the hypervisor live console:
 
-Splitting the run this way is not just ergonomics. `site.yml` has no memory of
-which subnet a deployment lives on, so a single vnet flag dropped from a long
-`-e` line silently retargets the whole deploy at a different network. Exporting
-the set once removes that failure mode from every subsequent run.
+```bash
+sudo mkdir -p /mnt/sophon
+sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
+sudo bash /mnt/sophon/install.sh
+```
 
-`-e` still takes precedence over the environment for one-off overrides.
+After installation/reboot, log in as `core` and run `sophon-controller`.
+The wizard requests service settings and confirms before running Ansible.
+For exported service settings, use `sophon-controller --run`; the optional
+web interface is `sophon-controller --dashboard`. Do not run these concurrently.
+`SOPHON_KEYCLOAK_REALM` defaults to `sophon`; required passwords have no
+generated fallback. See [the quickstart](../README.md#quickstart) for details.
 
 Do not paste credentials into a tracked file. Retain them in your password
 manager and supply them to the environment of the invocation.

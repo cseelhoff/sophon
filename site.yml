@@ -1,58 +1,23 @@
 ---
-# =============================================================================
-# Sophon Infrastructure Master Playbook
-# =============================================================================
-# Deploys all services in the correct order with automatic connectivity routing
-#
-# DEPLOYMENT MODES:
-# ─────────────────────────────────────────────────────────────────────────────
-# Online Mode (default):
-#   ansible-playbook site.yml
-#
-# Air-Gapped Mode (after running prestage.yml and nfs-upload.yml):
-#   ansible-playbook site.yml -e proxmox_airgapped=true
-#
-# With Cloudflared tunnel (for remote access when Bootstrap cannot reach NFS):
-#   infravm_cloudflared_tunnel_token=xxx ansible-playbook site.yml
-#
-# Skip prompts (CI/scripting):
-#   Export the site settings once (SOPHON_PROXMOX_HOST, SOPHON_DOMAIN,
-#   SOPHON_CF_TOKEN, SOPHON_VNET_*, ... -- see group_vars/all.yml for the full
-#   list and docs/preconditions.md for a worked example), then just:
-#     ansible-playbook site.yml
-#
-# WORKFLOW:
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Check/deploy NFS server (if not already in Proxmox)
-# 2. Check Bootstrap connectivity to NFS
-# 3. Deploy InfraVM (CoreOS with NFS mount + optional cloudflared container)
-# 4. Load container images on InfraVM (via SSH)
-# 5. Initialize Portainer
-# 6. Deploy CoreDNS, Traefik, and other services via Portainer Stacks
-#
-# AIR-GAPPED WORKFLOW:
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 1 (on internet):   ansible-playbook prestage.yml
-# --- SWITCH NETWORKS ---
-# Phase 2 (on air-gapped): ansible-playbook nfs-upload.yml
-# Phase 3 (on air-gapped): ansible-playbook site.yml -e proxmox_airgapped=true
-#
-# TAGS:
-# ─────────────────────────────────────────────────────────────────────────────
-#   ansible-playbook site.yml --tags "traefik,gitea"
-
-- name: Deploy Sophon
+- name: Deploy services from InfraVM's Controller runner
   hosts: localhost
+  gather_facts: false
   pre_tasks:
+    - name: Require the Controller deployment runner
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'SOPHON_DEPLOYMENT_PHASE') == 'services'
+          - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
+        fail_msg: "Run sophon-controller on installed InfraVM. Bootstrap is a separate laptop operation."
+      tags: [always]
     - name: Validate deployment credentials
       ansible.builtin.assert:
         that:
           - lookup('vars', item) is string
           - lookup('vars', item) | trim | length > 0
-        fail_msg: "Supply SOPHON_{{ item | upper }} in the environment or override {{ item }} with -e."
+        fail_msg: "Supply SOPHON_{{ item | upper }} through sophon-controller on InfraVM."
         quiet: true
       loop:
-        - proxmox_password
         - portainer_admin_password
         - keycloak_admin_password
         - keycloak_db_password
@@ -62,115 +27,59 @@
         - openldap_example_user_password
         - openldap_example_admin_password
         - gitea_db_password
-        - kopia_admin_password
-        - kopia_repository_password
       tags: [always]
-
     - name: Validate Portainer password length
       ansible.builtin.assert:
-        that:
-          - portainer_admin_password | length >= 12
-        fail_msg: "SOPHON_PORTAINER_ADMIN_PASSWORD (portainer_admin_password) must contain at least 12 characters."
-        quiet: true
+        that: portainer_admin_password | length >= 12
+        fail_msg: "SOPHON_PORTAINER_ADMIN_PASSWORD must contain at least 12 characters."
       tags: [always]
-
+    - name: Validate Phase 2 service-name inputs
+      ansible.builtin.assert:
+        that:
+          - domain_name | length > 0
+          - domain_name | length <= 253
+          - domain_name is match('^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?\Z')
+          - infravm_ip is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
+          - infravm_ip.split('.') | map('int') | max <= 255
+        fail_msg: "Supply a valid SOPHON_DOMAIN and SOPHON_INFRAVM_IP on InfraVM."
+      tags: [always]
+    - name: Configure service-name resolution inside the runner
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} SOPHON SERVICE NAMES"
+        unsafe_writes: true
+        block: |
+          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns'] %}
+          {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
+          {% endfor %}
+      tags: [always]
   tasks:
-    # No-op once artifacts/ is populated, so a disconnected site never reaches
-    # the network here. Run prestage.yml separately to stage on another machine.
-    - name: Stage artifacts
-      ansible.builtin.include_role: { name: prestage }
-      tags: [sophon_stage_prestage]
-
-    - name: Authenticate with Proxmox
-      ansible.builtin.include_role: { name: proxmox }
-      tags: [sophon_stage_proxmox]
-
-    - name: Deploy NFS Server
-      ansible.builtin.include_role: { name: nfs }
-      tags: [sophon_stage_nfs]
-
-    - name: Deploy InfraVM
-      ansible.builtin.include_role: { name: infravm }
+    - name: Initialize Portainer on InfraVM
+      ansible.builtin.include_role:
+        name: infravm
+        tasks_from: portainer
       tags: [sophon_stage_infravm]
-
     - name: Deploy CoreDNS Docker Discovery
-      ansible.builtin.include_role: { name: coredns }
+      ansible.builtin.include_role:
+        name: coredns
       tags: [sophon_stage_coredns]
-
     - name: Deploy Traefik
-      ansible.builtin.include_role: { name: traefik }
+      ansible.builtin.include_role:
+        name: traefik
       tags: [sophon_stage_traefik]
-
     - name: Deploy OpenLDAP
-      ansible.builtin.include_role: { name: openldap }
+      ansible.builtin.include_role:
+        name: openldap
       tags: [sophon_stage_openldap]
-
     - name: Deploy Keycloak
-      ansible.builtin.include_role: { name: keycloak }
+      ansible.builtin.include_role:
+        name: keycloak
       tags: [sophon_stage_keycloak]
-
     - name: Deploy Gitea
-      ansible.builtin.include_role: { name: gitea }
+      ansible.builtin.include_role:
+        name: gitea
       tags: [sophon_stage_gitea]
-
-    - name: Deploy Kopia
-      ansible.builtin.include_role: { name: kopia }
-      tags: [sophon_stage_kopia]
-
-
-    # - name: Display final IP configuration
-    #   ansible.builtin.debug:
-    #     msg: |
-    #       ═══════════════════════════════════════════════════════════════════
-    #       IP ADDRESS CONFIGURATION
-    #       ═══════════════════════════════════════════════════════════════════
-    #       NFS Server IP:    {{ nfs_ip }}
-    #       InfraVM IP:       {{ infravm_ip }}
-    #       Gateway:          {{ vnet_gateway }}
-    #       CIDR:             {{ vnet_cidr }}
-    #       Vnet:             {{ vnet_interface }}
-    #       ═══════════════════════════════════════════════════════════════════
-
-    # - name: Set global SSH connection facts
-    #   ansible.builtin.set_fact:
-    #     infravm_ansible_host: "{{ 'infra.' ~ domain_name if infravm_cloudflared_tunnel_token | default('') != '' else infravm_ip }}"
-
-    # =============================================================================
-    # Final Summary
-    # =============================================================================
-
-    - name: Display deployment credentials
-      tags: [sophon_stage_end]
+    - name: Finish service deployment
       ansible.builtin.debug:
-        msg: |
-          ============================================================================
-          SOPHON DEPLOYMENT COMPLETE
-          ============================================================================
-
-          InfraVM:
-            IP:              {{ infravm_ip }}
-            SSH:             ssh admin@{{ infravm_ansible_host | default(infravm_ip) }}
-            NFS Mount:       /mnt/nfs -> {{ nfs_ip }}:/export
-
-          Portainer:
-            URL:             https://{{ infravm_ip }}:9443
-            Username:        admin
-            Password:        {{ portainer_admin_password }}
-
-          Other Credentials:
-            Keycloak Admin:      {{ keycloak_admin_password }}
-            Gitea Admin:         {{ gitea_admin_password }}
-            Kopia UI:            {{ kopia_admin_password }}
-            Kopia Repository:    {{ kopia_repository_password }}
-            OpenLDAP Admin:      {{ openldap_admin_password }}
-
-          LDAP Example Users (auto-seeded):
-            Standard user:       uid={{ openldap_example_user_uid }}  password: {{ openldap_example_user_password }}
-              groups:            cn=users, cn=posix-users
-            Admin user:          uid={{ openldap_example_admin_uid }}  password: {{ openldap_example_admin_password }}
-              groups:            cn=users, cn=ldap-admins, cn=portainer-admins, cn=posix-users
-
-          ============================================================================
-          Store these credentials in your password manager!
-          ============================================================================
-      when: portainer_admin_password is defined or infravm_ip is defined
+        msg: "Deployment complete. Portainer: {{ infravm_portainer_url }}. Retain credentials in your password manager."
+      tags: [sophon_stage_end]

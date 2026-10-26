@@ -1,24 +1,40 @@
 # Sophon
 
 Sophon provisions a self-contained homelab onto a Proxmox host. Everything the
-deployment needs is staged ahead of time, then applied from an Ansible
-controller sitting on the same local network. The site is normally
+deployment needs is staged ahead of time, then applied in Bootstrap and Service
+deployment. The site is normally
 internet-connected; a site with no egress is a supported degraded mode.
 
 ## Language
 
 **Prestage**:
 The connected phase that produces every artifact the deployment will need. The
-`prestage` role is the only part of Sophon permitted to touch the internet.
-`site.yml` invokes it automatically; `prestage.yml` runs it standalone when
-Prestage and Deploy happen on different machines. No-op once `artifacts/` is
-populated.
-_Avoid_: build, download step, phase 1
+connected preparation is independent of the networks used for provisioning.
+_Avoid_: deployment, service configuration
 
 **Deploy**:
-The phase that provisions Proxmox and brings up services using only prestaged
-artifacts. Fetches nothing. `site.yml` is the entry point.
-_Avoid_: install, phase 3, apply
+The overall operation comprising Bootstrap, Handoff, and Service deployment.
+_Avoid_: a single controller session
+
+**Bootstrap**:
+The first deployment phase: prepare the installation media and provision the
+target InfraVM through the hypervisor management network.
+_Avoid_: service deployment
+
+**Handoff**:
+The operator-managed transition from the Bootstrap laptop to InfraVM.
+It implies no particular physical connection, VPN, tunnel, or routing arrangement.
+_Avoid_: automatic network switch
+
+**Service deployment**:
+The site-local deployment of Portainer and services from the Controller runner
+on InfraVM, without hypervisor management access or credentials.
+_Avoid_: bootstrap, full provisioning
+
+**Deployment bundle**:
+The offline project and its service artifacts, excluding passwords, API tokens,
+private keys, and prior deployment state.
+_Avoid_: backup, credential store
 
 **Deployment progress**:
 The observed advancement and outcome of provisioning work in a particular
@@ -41,8 +57,8 @@ the time of a check, independently of a deployment run's outcome.
 _Avoid_: deployment progress, deployed
 
 **Artifact**:
-A file produced by Prestage and consumed by Deploy — a container image tar, a
-VM disk image, a keypair. Lives under `artifacts/`, never committed.
+A file produced by Prestage and consumed by Deploy, such as a container image
+archive or VM disk image. Distinct from generated identity state.
 _Avoid_: cache, asset, blob
 
 **Generated state**:
@@ -87,23 +103,32 @@ _Avoid_: cert sync, manual renewal
 ## Machines and networks
 
 **Controller**:
-The machine running Ansible. Performs both Prestage and Deploy, and must have
-routed access to the vnet during Deploy.
-_Avoid_: Bootstrap, admin box, jump host
+The execution environment running Ansible for the current deployment phase.
+_Avoid_: assuming one machine performs every phase, dedicated Controller VM
+
+**Bootstrap laptop**:
+The initial operator machine that prepares artifacts and performs Bootstrap
+through the hypervisor management network.
+_Avoid_: Controller runner
+
+**Controller runner**:
+The containerized deployment environment on InfraVM that runs site-local
+Ansible automation.
+_Avoid_: Controller VM, NFS VM, Bootstrap laptop
 
 **vnet**:
-The Proxmox bridge the NFS VM and InfraVM attach to, and the subnet Sophon
-allocates their addresses from.
+The guest network InfraVM and an optional NFS VM attach to; InfraVM's static
+address is chosen by the operator during installation.
 _Avoid_: bridge, LAN, network
 
 **NFS VM**:
-The Alpine VM exporting `/export`. Backing store for Proxmox, for InfraVM's
-container data, and for the Kopia repository.
-_Avoid_: storage VM, sophon-nfs
+An optional separate storage VM used when an external backup destination is
+required; it is not a prerequisite for installing InfraVM or starting services.
+_Avoid_: Controller VM, bootstrap artifact server, generic storage for all service data
 
 **InfraVM**:
-The Fedora CoreOS VM that runs every Sophon service as a rootless Podman
-container.
+The Fedora CoreOS VM that runs the Controller runner and every Sophon service
+as rootless Podman containers.
 _Avoid_: CoreOS VM, container host, sophon-infravm
 
 ## Naming and reachability

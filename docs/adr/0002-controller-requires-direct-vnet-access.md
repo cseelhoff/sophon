@@ -24,3 +24,8 @@ Sophon works around.
   resolution is required for Sophon's own API calls.
 - A VLAN-tagged or otherwise isolated vnet is an operator problem to solve
   before running `site.yml`, not a Sophon problem.
+# Superseded for bootstrap
+
+The bootstrap laptop no longer needs direct vnet access. See
+[ADR-0012](0012-two-phase-controller-handoff.md). The site-local Controller VM
+still needs to reach service endpoints during Phase 2.

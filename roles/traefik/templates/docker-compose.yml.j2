@@ -6,8 +6,8 @@ services:
       - /bin/sh
       - -c
       - |
-        printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/traefik/resolv.conf
         touch /etc/traefik/dynamic.yml
+        printf 'http:\n  services:\n    portainer:\n      loadBalancer:\n        servers:\n          - url: "http://portainer:9000"\n' > /etc/traefik/portainer.yml
     volumes:
       - traefik_config:/etc/traefik
 
@@ -28,11 +28,6 @@ services:
     depends_on:
       traefik-init:
         condition: service_completed_successfully
-    entrypoint:
-      - /bin/sh
-      - -c
-      - "cat /etc/traefik/resolv.conf > /etc/resolv.conf && exec traefik $$@"
-      - --
     volumes:
       - traefik_config:/etc/traefik:ro
       - traefik_data:/data
@@ -67,6 +62,11 @@ services:
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.{{ domain_name | lower | regex_replace('\\.$', '') }}`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls=true"
+      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portainer.service=portainer@file"
 
 volumes:
   traefik_config:

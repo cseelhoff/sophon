@@ -70,6 +70,8 @@
           git
           cacert
           buildah
+          podman
+          xorriso
           mkpasswd
           dig
           bubblewrap
@@ -92,6 +94,7 @@
       in
       {
         packages = {
+          sophon-bootstrap-tools = pkgs.pkgsStatic.busybox;
           fuseNfs = fuseNfs;
 
           sophon-dev-env = pkgs.buildEnv {
@@ -106,6 +109,8 @@
             extraCommands = ''
               mkdir -p workspace tmp etc/nix
               chmod 1777 tmp
+              echo 'root:x:0:0:root:/tmp:/bin/bash' > etc/passwd
+              echo 'root:x:0:' > etc/group
               cat > etc/nix/nix.conf <<'EOF'
               experimental-features = nix-command flakes
               sandbox = false

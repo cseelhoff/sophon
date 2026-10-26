@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent
 STAGES = {
     'prestage': 'Prestage',
     'proxmox': 'Proxmox authentication',
-    'nfs': 'NFS VM',
+    'nfs': 'NFS VM (optional)',
     'infravm': 'InfraVM',
     'coredns': 'CoreDNS',
     'traefik': 'Traefik',
@@ -33,14 +33,14 @@ STAGES = {
 }
 CELLS = {
     'prestage': [
-        '_SmIZJivoSQWszKZv9Yz-16', '_SmIZJivoSQWszKZv9Yz-52',
+        '_SmIZJivoSQWszKZv9Yz-52',
         '_SmIZJivoSQWszKZv9Yz-53', '_SmIZJivoSQWszKZv9Yz-54',
         '_SmIZJivoSQWszKZv9Yz-55', '_SmIZJivoSQWszKZv9Yz-56',
         '_SmIZJivoSQWszKZv9Yz-57', '_SmIZJivoSQWszKZv9Yz-62',
     ],
     'proxmox': ['_SmIZJivoSQWszKZv9Yz-3'],
     'nfs': ['_SmIZJivoSQWszKZv9Yz-65'],
-    'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5', '_SmIZJivoSQWszKZv9Yz-12'],
+    'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5'],
     'coredns': ['497KWN3HuOLj0ZWtI1qn-3'],
     'traefik': ['BveltJdI-pWs-qTDEDWz-51'],
     'openldap': ['BveltJdI-pWs-qTDEDWz-50'],
@@ -53,13 +53,15 @@ FIELDS = {
     'SOPHON_PROXMOX_PORT': ('API port', 'Proxmox', 'number', '8006', True),
     'SOPHON_PROXMOX_NODE': ('Node', 'Proxmox', 'text', 'proxmox', True),
     'SOPHON_PROXMOX_ISO_STORAGE': ('ISO storage', 'Proxmox', 'text', 'local', True),
+    'SOPHON_PROXMOX_DISK_STORAGE': ('VM disk storage', 'Proxmox', 'text', 'local-lvm', True),
     'SOPHON_PROXMOX_PASSWORD': ('Password', 'Proxmox', 'password', '', True),
     'SOPHON_VNET_INTERFACE': ('Bridge', 'Network', 'text', 'vmbr0', True),
     'SOPHON_VNET_VLAN': ('VLAN', 'Network', 'number', '', False),
-    'SOPHON_VNET_GATEWAY': ('Gateway', 'Network', 'ipv4', '', True),
-    'SOPHON_VNET_CIDR': ('Prefix length', 'Network', 'number', '', True),
-    'SOPHON_NFS_IP': ('NFS VM address', 'Network', 'ipv4', '', True),
-    'SOPHON_INFRAVM_IP': ('InfraVM address', 'Network', 'ipv4', '', True),
+    'SOPHON_INFRAVM_CORES': ('CPU cores', 'VM', 'number', '8', True),
+    'SOPHON_INFRAVM_MEMORY': ('Memory (MiB)', 'VM', 'number', '8192', True),
+    'SOPHON_INFRAVM_DISK_GB': ('Disk size (GiB)', 'VM', 'number', '100', True),
+    'SOPHON_VNET_DNS': ('Upstream DNS', 'Site', 'ipv4', '', False),
+    'SOPHON_INFRAVM_IP': ('InfraVM address', 'Site', 'ipv4', '', True),
     'SOPHON_DOMAIN': ('Domain', 'Site', 'host', '', True),
     'SOPHON_ACME_EMAIL': ('ACME email', 'Site', 'email', 'admin@example.com', False),
     'SOPHON_CF_TOKEN': ('Cloudflare API token', 'Site', 'password', '', False),
@@ -76,21 +78,40 @@ FIELDS = {
     'SOPHON_PORTAINER_LICENSE_KEY': ('Portainer licence key', 'Access', 'password', '', False),
     'SOPHON_PORTAINER_ADMIN_PASSWORD': ('Portainer admin password', 'Access', 'password', '', True),
     'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password', 'Access', 'password', '', False),
-    'SOPHON_KOPIA_ADMIN_PASSWORD': ('Kopia admin password', 'Access', 'password', '', False),
-    'SOPHON_KOPIA_REPOSITORY_PASSWORD': ('Kopia repository password', 'Access', 'password', '', False),
 }
-LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094), 'SOPHON_VNET_CIDR': (1, 32)}
+LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
+          'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),
+          'SOPHON_INFRAVM_DISK_GB': (40, 1048576)}
+PHASE_STAGES = {
+    'bootstrap': ('prestage', 'proxmox', 'infravm'),
+    'services': ('infravm', 'coredns', 'traefik', 'openldap', 'keycloak', 'gitea'),
+}
+SITE_FIELDS = tuple(name for name, field in FIELDS.items()
+                    if field[2] != 'password' and name not in
+                    ('SOPHON_DOMAIN', 'SOPHON_INFRAVM_CORES', 'SOPHON_INFRAVM_MEMORY', 'SOPHON_INFRAVM_DISK_GB',
+                     'SOPHON_VNET_INTERFACE', 'SOPHON_VNET_VLAN')
+                    and not name.startswith(('SOPHON_PROXMOX_', 'SOPHON_CONTROLLER_')))
 
 
-def new_control(environment):
-    return {'values': {name: environment.get(name) or definition[3] for name, definition in FIELDS.items()},
-            'environment': dict(environment), 'token': secrets.token_urlsafe(32), 'processes': [],
-            'diagram_labels': {}}
+def phase_fields(phase='bootstrap'):
+    if phase == 'bootstrap':
+        return {name: field for name, field in FIELDS.items() if field[1] in ('Proxmox', 'Network', 'VM')}
+    return {name: field for name, field in FIELDS.items()
+            if field[1] not in ('Proxmox', 'Network', 'VM')}
+
+
+def new_control(environment, phase='bootstrap'):
+    environment = {name: value for name, value in environment.items()
+                   if not name.startswith('SOPHON_') or name in phase_fields(phase)}
+    return {'values': {name: environment.get(name) or definition[3] for name, definition in phase_fields(phase).items()},
+            'environment': environment | {'SOPHON_DEPLOYMENT_PHASE': phase},
+            'token': secrets.token_urlsafe(32), 'processes': [],
+            'diagram_labels': {}, 'phase': phase}
 
 
 def settings_payload(control):
     fields = []
-    for name, (label, group, kind, default, required) in FIELDS.items():
+    for name, (label, group, kind, default, required) in phase_fields(control['phase']).items():
         value = control['values'][name]
         fields.append({'name': name, 'label': label, 'group': group, 'kind': kind,
                        'required': required, 'configured': bool(value),
@@ -99,14 +120,15 @@ def settings_payload(control):
     return {'fields': fields}
 
 
-def validate_settings(current, changes):
-    if not isinstance(changes, dict) or not changes.keys() <= FIELDS.keys():
+def validate_settings(current, changes, phase='bootstrap'):
+    definitions = phase_fields(phase)
+    if not isinstance(changes, dict) or not changes.keys() <= definitions.keys():
         return None, 'Unexpected deployment setting.'
     if any(not isinstance(value, str) or len(value) > 4096 or any(ord(character) < 32 for character in value)
            for value in changes.values()):
         return None, 'Settings must be single-line strings of at most 4096 characters.'
     values = current | changes
-    for name, (label, group, kind, default, required) in FIELDS.items():
+    for name, (label, group, kind, default, required) in definitions.items():
         value = values[name] if kind == 'password' else values[name].strip()
         values[name] = value
         if required and not value.strip():
@@ -132,12 +154,6 @@ def validate_settings(current, changes):
                 return None, f'{label} must be an email address.'
         except ValueError:
             return None, f'{label} is not a valid {kind} value.'
-    addresses = [ipaddress.IPv4Address(values[name]) for name in
-                 ('SOPHON_VNET_GATEWAY', 'SOPHON_NFS_IP', 'SOPHON_INFRAVM_IP')]
-    network = ipaddress.IPv4Network(f"{addresses[0]}/{values['SOPHON_VNET_CIDR']}", strict=False)
-    if len(set(addresses)) != 3 or any(address not in network or address in
-                                     (network.network_address, network.broadcast_address) for address in addresses):
-        return None, 'Gateway and VM addresses must be distinct usable addresses in the same subnet.'
     return values, None
 
 
@@ -154,21 +170,29 @@ def trace_environment(directory, environment):
     return environment
 
 
-def shell_command(directory, values, environment):
+def shell_command(directory, values, environment, phase='bootstrap'):
     traced = trace_environment(directory, environment)
-    exports = values | {name: traced[name] for name in (
-        'ANSIBLE_CALLBACK_PLUGINS', 'ANSIBLE_CALLBACKS_ENABLED', 'SOPHON_PROGRESS_FILE', 'ANSIBLE_LOG_PATH')}
-    # ponytail: one operator per trace directory; files are not process locks.
-    return '\n'.join([
+    exports = values | {'SOPHON_DEPLOYMENT_PHASE': phase}
+    if phase == 'bootstrap':
+        exports |= {name: traced[name] for name in (
+            'ANSIBLE_CALLBACK_PLUGINS', 'ANSIBLE_CALLBACKS_ENABLED', 'SOPHON_PROGRESS_FILE', 'ANSIBLE_LOG_PATH')}
+    lines = [
         '# Contains secrets. Do not share; your terminal may save this in history.',
+        'unset ' + ' '.join(name for name in FIELDS if name not in phase_fields(phase)),
         *[f'export {name}={shlex.quote(value)}' for name, value in exports.items()],
         'unset ANSIBLE_RUN_TAGS ANSIBLE_SKIP_TAGS',
+    ]
+    if phase == 'services':
+        return '\n'.join(lines + [
+            f'sophon-controller --run --state-dir {shlex.quote(str(directory))}', ''])
+    # ponytail: one operator per trace directory; files are not process locks.
+    return '\n'.join(lines + [
         '(', '  umask 077',
         f'  cd -- {shlex.quote(str(ROOT))} || exit',
         f'  mkdir -p -- {shlex.quote(str(directory))} || exit',
         '  touch -- "$ANSIBLE_LOG_PATH" && chmod 600 -- "$ANSIBLE_LOG_PATH" || exit',
         '  rm -f -- "$SOPHON_PROGRESS_FILE" || exit',
-        '  ansible-playbook site.yml', ')', '',
+        '  ansible-playbook bootstrap.yml', ')', '',
     ])
 
 
@@ -191,17 +215,19 @@ def action_request(directory, control, environment):
         return '408 Request Timeout', {'error': 'Deployment settings were not fully received.'}
     except (ValueError, UnicodeError):
         return '400 Bad Request', {'error': 'Invalid JSON settings.'}
-    values, error = validate_settings(control['values'], changes)
+    values, error = validate_settings(control['values'], changes, control['phase'])
     if error:
         return '400 Bad Request', {'error': error}
     if environment['PATH_INFO'] == '/command':
-        return '200 OK', {'command': shell_command(directory, values, control['environment'])}
+        return '200 OK', {'command': shell_command(directory, values, control['environment'], control['phase'])}
     try:
         descriptor = os.open(directory / 'deploy.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(descriptor, 'w') as output:
             os.fchmod(output.fileno(), 0o600)
             process = subprocess.Popen(
-                [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', str(directory), '--', 'site.yml'],
+                [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', str(directory),
+                 '--phase', control['phase'],
+                 '--', 'bootstrap.yml' if control['phase'] == 'bootstrap' else 'site.yml'],
                 cwd=ROOT, env=control['environment'] | values, stdin=subprocess.DEVNULL,
                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         control['processes'].append(process)
@@ -286,7 +312,10 @@ def application(directory, assets, control, environment, start_response):
             return [b'Forbidden']
         body, content_type = json.dumps(settings_payload(control)).encode(), 'application/json'
     elif path == '/config.json':
-        body = json.dumps({'stages': STAGES, 'cells': CELLS, 'labels': control['diagram_labels'],
+        stages = {key: ('Portainer' if key == 'infravm' and control['phase'] == 'services' else STAGES[key])
+                  for key in PHASE_STAGES.get(control['phase'], STAGES)}
+        body = json.dumps({'stages': stages, 'cells': {key: CELLS[key] for key in stages},
+                           'phase': control['phase'], 'labels': control['diagram_labels'],
                            'token': control['token'], 'log_path': str(directory / 'deploy.log')}).encode()
         content_type = 'application/json'
     elif path in assets:
@@ -342,7 +371,7 @@ def load_diagram():
     return ET.tostring(root, encoding='utf-8'), labels
 
 
-def serve(directory, port=0):
+def serve(directory, port=0, phase='bootstrap'):
     try:
         diagram, labels = load_diagram()
     except ValueError as error:
@@ -352,7 +381,7 @@ def serve(directory, port=0):
         '/': ((ROOT / 'dashboard' / 'index.html').read_bytes(), 'text/html; charset=utf-8'),
         '/diagram.svg': (diagram, 'image/svg+xml'),
     }
-    control = new_control(os.environ)
+    control = new_control(os.environ, phase)
     control['diagram_labels'] = labels
     with make_server('127.0.0.1', port, partial(application, directory, assets, control),
                      server_class=DashboardServer) as server:
@@ -411,25 +440,54 @@ def launch(directory, arguments):
     return report['exit_code']
 
 
-def main():
+def load_site_settings():
+    site_file = ROOT / 'site.json'
+    if not site_file.exists():
+        return {}
+    site = json.loads(site_file.read_text())
+    if not isinstance(site, dict) or not site.keys() <= set(SITE_FIELDS) or any(
+            not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 for c in value)
+            for value in site.values()):
+        raise ValueError('site.json must contain only supported non-secret site settings')
+    return site
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description='Local Sophon deployment progress viewer')
-    parser.add_argument('--state-dir', type=Path, default=ROOT / 'artifacts' / 'deployment')
+    parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--serve', action='store_true', help='Serve the dashboard; deployment starts only on request')
     parser.add_argument('--port', type=int, default=0, help='Dashboard port with --serve (default: choose a free port)')
+    parser.add_argument('--phase', choices=PHASE_STAGES, default=os.environ.get('SOPHON_DEPLOYMENT_PHASE', 'bootstrap'),
+                        help='bootstrap on the laptop; services on installed InfraVM')
     parser.add_argument('arguments', nargs=argparse.REMAINDER, help='-- site.yml [Ansible arguments]')
-    options = parser.parse_args()
+    options = parser.parse_args(argv)
+    try:
+        for name, value in load_site_settings().items():
+            os.environ.setdefault(name, value)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    if options.phase == 'services':
+        if os.environ.get('SOPHON_DEPLOYMENT_PHASE') != 'services':
+            parser.error('Start Phase 2 using sophon-controller on installed InfraVM.')
+    for name in list(os.environ):
+        if name.startswith('SOPHON_') and name not in phase_fields(options.phase):
+            os.environ.pop(name, None)
+    os.environ['SOPHON_DEPLOYMENT_PHASE'] = options.phase
     if not 0 <= options.port <= 65535:
         parser.error('--port must be between 0 and 65535')
-    directory = options.state_dir.resolve()
+    directory = (options.state_dir or ROOT / 'artifacts' / 'deployment' / options.phase).resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if options.serve:
-        return serve(directory, options.port)
+        return serve(directory, options.port, options.phase)
     arguments = options.arguments
     if arguments and arguments[0] == '--':
         arguments = arguments[1:]
     if not arguments:
         parser.print_help()
         return 2
+    expected = 'bootstrap.yml' if options.phase == 'bootstrap' else 'site.yml'
+    if arguments[0] in ('site.yml', 'bootstrap.yml') and arguments[0] != expected:
+        parser.error(f'{options.phase} requires {expected}; choose the correct deployment phase.')
     return launch(directory, arguments)
 
 

@@ -33,10 +33,12 @@ def check_zoom(page):
     page.get_by_role('button', name='Fit', exact=True).click()
 
 
-def check_hide_tasks(page, report_path):
+def check_hide_tasks(page, report_path, phase):
     diagram = page.locator('#diagram-pane')
     original_height = diagram.bounding_box()['height']
-    stage = page.get_by_role('button', name='InfraVM', exact=False)
+    first, second = ('InfraVM', 'Proxmox authentication') if phase == 'bootstrap' else ('Portainer', 'CoreDNS')
+    second_key = 'proxmox' if phase == 'bootstrap' else 'coredns'
+    stage = page.get_by_role('button', name=first, exact=False)
     stage.click()
     panel = page.locator('#task-panel')
     results = page.locator('#task-results')
@@ -51,27 +53,30 @@ def check_hide_tasks(page, report_path):
     assert stage.evaluate('e => e === document.activeElement')
     report = json.loads(report_path.read_text())
     report['updated_at'] += 1
-    report.update(state='failed', current='nfs')
-    report['stages']['nfs']['state'] = 'failed'
+    report.update(state='failed', current=second_key)
+    report['stages'][second_key]['state'] = 'failed'
     report_path.write_text(json.dumps(report))
     page.locator('#run-state').get_by_text('Failed', exact=True).wait_for()
     assert panel.is_hidden(), 'Progress updates must not reopen hidden task results'
     assert abs(diagram.bounding_box()['height'] - original_height) < 2
     stage.click()
     assert panel.is_visible()
-    assert page.locator('#task-title').inner_text() == 'InfraVM: task results'
+    assert page.locator('#task-title').inner_text() == f'{first}: task results'
     page.get_by_role('button', name='Hide task results').focus()
     page.keyboard.press('Enter')
     assert panel.is_hidden()
-    page.get_by_role('button', name='NFS VM', exact=False).click()
+    page.get_by_role('button', name=second, exact=False).click()
     assert panel.is_visible()
-    assert page.locator('#task-title').inner_text() == 'NFS VM: task results'
+    assert page.locator('#task-title').inner_text() == f'{second}: task results'
 
 
 def check_cloudflare_help(page):
     page.get_by_role('button', name='Configure', exact=True).click()
     token = page.locator('input[name="SOPHON_CF_TOKEN"]')
     token.wait_for()
+    domain = page.locator('input[name="SOPHON_DOMAIN"]')
+    assert domain.is_visible() and domain.get_attribute('required') is not None
+    assert domain.input_value() == ''
     assert token.get_attribute('type') == 'password'
     assert token.get_attribute('aria-describedby') == 'cloudflare-token-help'
     help_text = page.locator('#cloudflare-token-help')
@@ -87,7 +92,26 @@ def check_cloudflare_help(page):
     page.get_by_role('button', name='Close', exact=True).click()
 
 
-def check_startup_error(page, report_path):
+def check_run_confirmation(page, phase):
+    page.get_by_role('button', name='Configure', exact=True).click()
+    page.locator('#deploy-button:not([disabled])').wait_for()
+    for field in page.locator('#settings-fields input[required]').all():
+        if not field.input_value():
+            field.fill('24' if field.get_attribute('type') == 'number' else 'TEST_NOT_A_REAL_SECRET')
+    messages = []
+
+    def cancel(dialog):
+        messages.append(dialog.message)
+        dialog.dismiss()
+
+    page.once('dialog', cancel)
+    page.get_by_role('button', name='Run', exact=True).click()
+    assert len(messages) == 1 and 'undefined' not in messages[0], messages
+    assert ('No Proxmox access is used.' in messages[0]) == (phase == 'services')
+    page.get_by_role('button', name='Close', exact=True).click()
+
+
+def check_startup_error(page, report_path, phase):
     report = json.loads(report_path.read_text())
     report.update(state='failed', current=None, exit_code=127)
     for stage in report['stages'].values():
@@ -98,7 +122,7 @@ def check_startup_error(page, report_path):
     error.get_by_text('Deployment failed before any stage started.', exact=False).wait_for()
     assert 'Exit code: 127' in error.inner_text()
     assert str(report_path.parent / 'deploy.log') in error.inner_text()
-    page.get_by_role('button', name='Prestage', exact=False).click()
+    page.get_by_role('button', name='Prestage' if phase == 'bootstrap' else 'Portainer', exact=False).click()
     assert error.is_visible()
     assert page.locator('#task-results').inner_text() == ''
     report['error'] = 'Could not start ansible-playbook. Restart the viewer from nix develop.'
@@ -112,11 +136,13 @@ def check_startup_error(page, report_path):
     error.wait_for(state='hidden')
 
 
-def test_dashboard():
+def test_dashboard(phase):
     with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
         environment = {name: value for name, value in os.environ.items() if not name.startswith('SOPHON_')}
+        if phase == 'services':
+            environment['SOPHON_DEPLOYMENT_PHASE'] = 'services'
         server = subprocess.Popen(
-            [sys.executable, str(ROOT / 'deployment.py'), '--serve', '--state-dir', temporary],
+            [sys.executable, str(ROOT / 'deployment.py'), '--phase', phase, '--serve', '--state-dir', temporary],
             env=environment, stdout=subprocess.PIPE, text=True)
         try:
             url = server.stdout.readline().strip()
@@ -124,7 +150,7 @@ def test_dashboard():
             with urlopen(url + 'status.json', timeout=5) as response:
                 report = json.load(response)
             report.update(state='completed', run_id='browser-fixture')
-            for stage in ('infravm', 'nfs'):
+            for stage in ('infravm', 'proxmox', 'coredns'):
                 report['stages'][stage].update(state='completed', ok=40, tasks=[
                     {'id': str(index), 'name': f'Task {index}', 'state': 'ok', 'action': 'debug', 'source': 'fixture.yml'}
                     for index in range(40)
@@ -142,9 +168,23 @@ def test_dashboard():
                     page.locator('#configure:not([disabled])').wait_for()
                     assert page.get_by_role('separator', include_hidden=True).count() == 0
                     check_zoom(page)
-                    check_hide_tasks(page, report_path)
-                    check_cloudflare_help(page)
-                    check_startup_error(page, report_path)
+                    if phase == 'bootstrap':
+                        assert 'sudo bash /mnt/sophon/install.sh' in page.locator('#phase-note').inner_text()
+                    else:
+                        assert 'No Proxmox credentials' in page.locator('#phase-note').inner_text()
+                    check_hide_tasks(page, report_path, phase)
+                    if phase == 'services':
+                        check_cloudflare_help(page)
+                    else:
+                        page.get_by_role('button', name='Configure', exact=True).click()
+                        page.locator('input[name="SOPHON_INFRAVM_DISK_GB"]').wait_for()
+                        assert page.locator('input[name="SOPHON_CONTROLLER_PASSWORD"]').count() == 0
+                        assert page.locator('input[name="SOPHON_INFRAVM_IP"]').count() == 0
+                        assert page.locator('input[name="SOPHON_CF_TOKEN"]').count() == 0
+                        assert page.locator('input[name="SOPHON_DOMAIN"]').count() == 0
+                        page.get_by_role('button', name='Close', exact=True).click()
+                    check_run_confirmation(page, phase)
+                    check_startup_error(page, report_path, phase)
                     assert not errors, errors
                     page.close()
             finally:
@@ -156,5 +196,6 @@ def test_dashboard():
 
 
 if __name__ == '__main__':
-    test_dashboard()
+    for phase in ('bootstrap', 'services'):
+        test_dashboard(phase)
     print('Dashboard browser checks passed')

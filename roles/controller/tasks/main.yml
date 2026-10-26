@@ -1,0 +1,349 @@
+---
+# The caller authenticates via roles/proxmox and discovers the vnet first.
+# No dependency on the legacy NFS role and no laptop-to-vnet connection.
+- name: Validate Controller identity and network inputs
+  ansible.builtin.assert:
+    that:
+      - controller_vm_name == 'sophon-controller'
+      - controller_marker == 'sophon-controller-v1'
+      - proxmox_api is defined
+      - proxmox_ticket is defined
+      - proxmox_csrf is defined
+      - nfs_ip is match('^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$')
+      - vnet_gateway is match('^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$')
+      - (vnet_cidr | string) is match('^[0-9]+$')
+      - vnet_cidr | int > 0
+      - vnet_cidr | int < 33
+      - controller_dns is match('^[0-9a-fA-F:.]+$')
+      - vnet_interface is match('^[A-Za-z0-9_.-]+$')
+      - (vnet_vlan | default('') | string) == '' or (vnet_vlan | string) is match('^[0-9]+$')
+      - controller_data_disk_size is match('^[1-9][0-9]*G$')
+      - controller_os_disk_size is match('^[1-9][0-9]*G$')
+      - portainer_image_tarname is match('^[A-Za-z0-9][A-Za-z0-9_.-]*[.]tar$')
+    fail_msg: "Controller requires resolved nfs_ip, vnet gateway/prefix/DNS and prestaged artifact names."
+
+- name: Validate independent Controller login inputs
+  ansible.builtin.assert:
+    that:
+      - controller_ssh_public_key is match('^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[^ ]+|sk-[^ ]+) [A-Za-z0-9+/=]+( [^\\r\\n]*)?$')
+      - controller_console_password | length > 0
+      - "'\n' not in controller_console_password"
+      - "'\r' not in controller_console_password"
+      - "'\u0000' not in controller_console_password"
+    fail_msg: "Supply SOPHON_CONTROLLER_SSH_PUBLIC_KEY and an independent SOPHON_CONTROLLER_PASSWORD."
+  no_log: true
+
+- name: Discover all VMs including conflicting templates
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/cluster/resources?type=vm"
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: controller_discovery
+  no_log: true
+
+- name: Identify Controller and legacy NFS VMs
+  ansible.builtin.set_fact:
+    controller_existing: "{{ controller_discovery.json.data | selectattr('name', 'defined') | selectattr('name', 'eq', controller_vm_name) | list }}"
+    controller_legacy: "{{ controller_discovery.json.data | selectattr('name', 'defined') | selectattr('name', 'eq', 'sophon-nfs') | list }}"
+
+- name: Refuse legacy deployments and ambiguous Controller ownership before any mutation
+  ansible.builtin.assert:
+    that:
+      - controller_legacy | length == 0
+      - controller_existing | length <= 1
+    fail_msg: >-
+      Fresh deployment only: found a legacy sophon-nfs VM or multiple sophon-controller VMs.
+      No VM or disk has been modified. Migration/deletion must be handled separately.
+
+- name: Verify ownership of an existing Controller before any mutation
+  when: controller_existing | length == 1
+  block:
+    - name: Require a running local QEMU Controller, not a template
+      ansible.builtin.assert:
+        that:
+          - controller_existing[0].type == 'qemu'
+          - controller_existing[0].node == proxmox_node
+          - controller_existing[0].template | default(0) | int == 0
+          - controller_existing[0].status == 'running'
+        fail_msg: "Existing Controller must be a running VM on this node for read-only ownership verification; refusing to change it."
+
+    - name: Read existing Controller configuration
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ controller_existing[0].vmid }}/config"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: controller_existing_config
+      no_log: true
+
+    - name: Require explicit Controller VM description marker
+      ansible.builtin.assert:
+        that:
+          - controller_existing_config.json.data.description | default('') == controller_marker
+          - controller_existing_config.json.data.virtio1 is defined
+        fail_msg: "Existing sophon-controller has no matching description marker/data disk; refusing to modify it."
+
+    - name: Read guest ownership marker without changing the guest
+      ansible.builtin.include_role:
+        name: proxmox
+        tasks_from: qga_exec
+      vars:
+        qga_vmid: "{{ controller_existing[0].vmid }}"
+        qga_command: "test \"$(cat /etc/sophon-controller-marker)\" = {{ controller_marker | quote }}"
+
+    - name: Require matching Controller guest marker
+      ansible.builtin.assert:
+        that: proxmox_qga_result.success
+        fail_msg: "Existing Controller guest ownership marker is absent or mismatched; no changes allowed."
+
+- name: Create a fresh Controller from prestaged artifacts
+  when: controller_existing | length == 0
+  block:
+    - name: Inspect prestaged Controller OS and deployment ISO
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      loop:
+        - "{{ controller_image_path }}"
+        - "{{ controller_iso_path }}"
+      register: controller_artifacts
+
+    - name: Require regular prestaged artifacts and sufficient persistent space
+      ansible.builtin.assert:
+        that:
+          - controller_artifacts.results[0].stat.isreg | default(false)
+          - controller_artifacts.results[1].stat.isreg | default(false)
+          - controller_artifacts.results[0].stat.size | default(0) | int > 0
+          - controller_artifacts.results[1].stat.size | default(0) | int > 0
+          - >-
+            (controller_data_disk_size | regex_replace('G$', '') | int) * 1073741824
+            > (controller_artifacts.results[1].stat.size | int) * 3 + 2147483648
+        fail_msg: "Run bootstrap prestage first; data disk needs >3x ISO size plus 2 GiB for imported/unpacked content."
+
+    - name: Name immutable uploaded artifacts by SHA256
+      ansible.builtin.set_fact:
+        controller_image_filename: "sophon-controller-{{ controller_artifacts.results[0].stat.checksum }}.qcow2.iso"
+        controller_iso_filename: "sophon-deployment-{{ controller_artifacts.results[1].stat.checksum }}.iso"
+
+    - name: Discover previously uploaded immutable artifacts
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage/{{ proxmox_iso_storage_id }}/content?content=iso"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: controller_preuploaded
+      no_log: true
+
+    - name: Upload Controller OS and deployment ISO
+      ansible.builtin.include_tasks: upload.yml
+      vars:
+        controller_upload_source: "{{ controller_upload.path }}"
+        controller_upload_filename: "{{ controller_upload.filename }}"
+      loop:
+        - path: "{{ controller_image_path }}"
+          filename: "{{ controller_image_filename }}"
+        - path: "{{ controller_iso_path }}"
+          filename: "{{ controller_iso_filename }}"
+      loop_control:
+        loop_var: controller_upload
+        label: "{{ controller_upload.filename }}"
+      when: >-
+        (controller_preuploaded.json.data
+          | selectattr('volid', 'eq', proxmox_iso_storage_id ~ ':iso/' ~ controller_upload.filename)
+          | list | length) == 0
+
+    - name: Allocate Controller VM ID
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/cluster/nextid"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: controller_nextid
+      no_log: true
+
+    - name: Create marked Controller with dedicated blank data disk and offline ISO
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu"
+        method: POST
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+          CSRFPreventionToken: "{{ proxmox_csrf }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        body_format: form-urlencoded
+        body:
+          vmid: "{{ controller_nextid.json.data }}"
+          name: "{{ controller_vm_name }}"
+          description: "{{ controller_marker }}"
+          cores: "{{ controller_cores }}"
+          memory: "{{ controller_memory }}"
+          ostype: l26
+          onboot: 1
+          agent: enabled=1
+          net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if (vnet_vlan | default('') | string | length) > 0 else '' }}"
+          virtio0: "{{ proxmox_disk_storage_id }}:0,import-from={{ proxmox_iso_storage_path }}/{{ controller_image_filename }},size={{ controller_os_disk_size }}"
+          virtio1: "{{ proxmox_disk_storage_id }}:{{ controller_data_disk_size | regex_replace('G$', '') }}"
+          ide2: "{{ proxmox_iso_storage_id }}:iso/{{ controller_iso_filename }},media=cdrom"
+          boot: order=virtio0
+      register: controller_create
+      no_log: true
+
+    - name: Wait for Controller disk import and VM creation
+      ansible.builtin.include_tasks: wait_task.yml
+      vars:
+        controller_upid: "{{ controller_create.json.data }}"
+
+    - name: Set fresh Controller ID
+      ansible.builtin.set_fact:
+        controller_vmid: "{{ controller_nextid.json.data }}"
+
+    - name: Start the newly created Controller
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ controller_vmid }}/status/start"
+        method: POST
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+          CSRFPreventionToken: "{{ proxmox_csrf }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: controller_start
+      no_log: true
+
+    - name: Wait for Controller startup task
+      ansible.builtin.include_tasks: wait_task.yml
+      vars:
+        controller_upid: "{{ controller_start.json.data }}"
+
+- name: Publish Controller ID for compatible NFS consumers
+  ansible.builtin.set_fact:
+    controller_vmid: "{{ controller_existing[0].vmid if controller_existing | length else controller_vmid }}"
+    nfs_vmid: "{{ controller_existing[0].vmid if controller_existing | length else controller_vmid }}"
+
+- name: Wait for Controller QEMU Guest Agent through Proxmox only
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ controller_vmid }}/agent/ping"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200, 500, 595]
+  register: controller_agent
+  until: controller_agent.status == 200
+  retries: 60
+  delay: 5
+  no_log: true
+
+- name: Configure operator login and persistent network through QGA only
+  ansible.builtin.include_role:
+    name: proxmox
+    tasks_from: qga_exec
+    apply:
+      no_log: true
+  vars:
+    qga_vmid: "{{ controller_vmid }}"
+    qga_command: "{{ lookup('template', 'configure.sh.j2') }}"
+  no_log: true
+
+- name: Require successful private Controller configuration
+  ansible.builtin.assert:
+    that: proxmox_qga_result.success
+    fail_msg: "Controller QGA configuration failed; inspect the VM console and /var/log/sophon-import.log."
+
+# The common qga_exec helper has a 30-second wait. Importing an offline Nix
+# runner can take much longer, so this single read-only readiness command uses
+# the same API with a separate long polling budget.
+- name: Begin guest readiness check through QGA
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ controller_vmid }}/agent/exec"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    body_format: form-urlencoded
+    body:
+      command: /bin/sh
+      input-data: |
+        set -eu
+        for attempt in $(seq 1 {{ controller_ready_retries | int }}); do
+          if [ -f /var/lib/sophon/controller-failed ]; then
+            cat /var/lib/sophon/controller-failed >&2
+            exit 1
+          fi
+          if [ -f /var/lib/sophon/controller-ready ]; then
+            test "$(cat /var/lib/sophon/controller-ready)" = {{ controller_marker | quote }}
+            mountpoint -q /export
+            test "$(cat /export/.sophon-controller-data)" = {{ controller_marker | quote }}
+            test -s /export/containers/{{ portainer_image_tarname | quote }}
+            test -s /export/sophon/artifacts/kopia/id_ed25519
+            test -s /export/sophon/artifacts/kopia/known_hosts
+            exit 0
+          fi
+          sleep {{ controller_ready_delay | int }}
+        done
+        echo 'Controller import timed out; inspect /var/log/sophon-import.log' >&2
+        exit 1
+  register: controller_ready_exec
+  no_log: true
+
+- name: Wait for offline import, Kopia state and NFS Portainer tar
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ controller_vmid }}/agent/exec-status?pid={{ controller_ready_exec.json.data.pid }}"
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: controller_ready_status
+  until: controller_ready_status.json.data.exited | default(0) | int == 1
+  retries: "{{ controller_ready_retries | int + 6 }}"
+  delay: "{{ controller_ready_delay }}"
+  no_log: true
+
+- name: Require successful persistent Controller readiness
+  ansible.builtin.assert:
+    that:
+      - controller_ready_status.json.data.exitcode | default(-1) | int == 0
+    fail_msg: "Controller import failed or timed out. See /var/log/sophon-import.log on its console; InfraVM must not be created."
+
+- name: Discover Proxmox NFS registration without changing existing storage
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/storage"
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: controller_storage
+  no_log: true
+
+- name: Identify existing Controller NFS registration
+  ansible.builtin.set_fact:
+    controller_nfs_storage: "{{ controller_storage.json.data | selectattr('storage', 'eq', nfs_storage_name) | list }}"
+
+- name: Reject conflicting NFS storage registration
+  ansible.builtin.assert:
+    that:
+      - controller_nfs_storage | length <= 1
+      - >-
+        controller_nfs_storage | length == 0 or
+        (controller_nfs_storage[0].type == 'nfs' and
+         controller_nfs_storage[0].server | default('') == nfs_ip and
+         controller_nfs_storage[0].export | default('') == '/export')
+    fail_msg: "Existing sophon-nfs storage belongs to another server/export; refusing to change it."
+
+- name: Register ready Controller NFS export through Proxmox API
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/storage"
+    method: POST
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+      CSRFPreventionToken: "{{ proxmox_csrf }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    body_format: form-urlencoded
+    body:
+      storage: "{{ nfs_storage_name }}"
+      type: nfs
+      server: "{{ nfs_ip }}"
+      export: /export
+      content: images,iso,backup,snippets
+      options: vers=4.1
+  when: controller_nfs_storage | length == 0
+  no_log: true

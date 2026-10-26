@@ -10,4 +10,5 @@ collections:
   - name: community.docker
     version: ">=3.0.0"
   - name: community.proxmox
-    version: ">=1.0.0"
+    # The pinned Nix environment provides proxmoxer 2.2; collection 2.x needs 2.3.
+    version: "1.6.0"

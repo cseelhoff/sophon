@@ -1,247 +1,83 @@
-# Sophon Prestaging Runbook
+# Sophon prestaging runbook
 
-Prestage is the only phase that touches the internet. It pulls container
-images, builds the CoreDNS Docker Discovery image, and builds the NFS VM disk,
-writing everything into `artifacts/`.
+Prestage prepares the complete offline installation media without touching live
+infrastructure. `bootstrap.yml` runs it automatically; run it separately to
+prepare a disconnected bootstrap laptop.
 
-**`site.yml` runs Prestage for you.** If the machine deploying is the machine
-with internet access, you never run this playbook by hand — deploy and it
-stages what is missing first.
-
-Run `prestage.yml` directly when Prestage and Deploy happen on **different
-machines**: stage here, copy `artifacts/` to the disconnected site, deploy
-there. Deploy fetches nothing — see
-[ADR-0001](docs/adr/0001-air-gapped-a-supported-deployment-mode.md).
-
-Either way Prestage is a no-op once every artifact exists, so it never reaches
-the network at a site that already has `artifacts/`.
-
-This repo intentionally ignores `artifacts/`. The directory is a local cache
-and secret/artifact staging area, not source. Run these commands from the repo
-root.
-
-## Enter the Tool Shell
-
-```bash
+```sh
 nix develop
-```
-
-The shell provides Ansible, Podman/Buildah-related tools, `guestfish`,
-`qemu-img`, `proot`, `butane`, and the other utilities used below.
-
-## 1. Run the Prestage Playbook
-
-This runs the checked-in Ansible prestage playbook. It pulls standard container
-images, builds the CoreDNS Docker Discovery image tar, and builds the NFS VM
-qcow2 cache. Artifacts already on disk are left alone; pass
-`-e prestage_force=true` to re-fetch and rebuild everything.
-
-```bash
 ansible-playbook prestage.yml
 ```
 
-Expected output includes at least these files, depending on variable overrides
-such as `portainer_image_repo` and `portainer_image_tag`:
+No domain, guest network, console password, SSH key, or service credential is
+needed to prepare reusable media.
 
-```text
-artifacts/containers/portainer-portainer-ee_2.41.0.tar
-artifacts/containers/library-traefik_v3.2.tar
-artifacts/containers/gitea-gitea_1.22.tar
-artifacts/containers/library-postgres_16-alpine.tar
-artifacts/containers/kopia-kopia_0.21.1.tar
-artifacts/containers/bitnamilegacy-openldap_2.6.10-debian-12-r4.tar
-artifacts/containers/ldez-traefik-certs-dumper_v2.8.3.tar
-artifacts/containers/keycloak-keycloak_26.5.tar
-artifacts/containers/coredns-dockerdiscovery.tar
-artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
+## Outputs
+
+- `artifacts/coreos/fedora-coreos-live.iso`: unchanged full upstream live ISO,
+  verified using the official stable stream's SHA256.
+- `artifacts/bootstrap/sophon-deployment.iso`: project snapshot, installer,
+  static BusyBox helper, offline Python/Ansible runner, vendored collections,
+  and all required container archives, with a checksum manifest.
+
+The deployment ISO uses label `SOPHON_DEPLOY`, Rock Ridge/Joliet names and ISO
+level 3 to support archives larger than 4 GiB. Only allowlisted source and
+explicitly expected artifacts are bundled. Private keys, tokens, passwords,
+runtime logs and laptop site settings are excluded.
+
+The cache also retains upstream metadata, image archives, collections, runner
+and helper. Keep `artifacts/` with the matching project when a disconnected
+laptop will run Phase 1: the two ISO files alone are sufficient for the guest,
+but are not a replacement for the laptop's prestage cache. Prestage verifies
+the cached CoreOS ISO and rebuilds the bundle locally to capture source changes.
+With a complete valid cache it does not fetch metadata, pull containers, run
+Galaxy, build the runner/helper, or update CoreDNS sources.
+
+Use `ansible-playbook prestage.yml -e prestage_force=true` while connected to
+refresh cached inputs. This may require substantial disk space and downloads.
+Missing or invalid inputs fail explicitly rather than silently using registries
+from the installed guest.
+
+## Disconnected deployment
+
+Copy the repository and complete `artifacts/` cache to the bootstrap laptop.
+Start the bootstrap dashboard:
+
+```sh
+nix develop
+python3 deployment.py --phase bootstrap --serve --port 41327
 ```
 
-## 2. Manual CoreDNS Docker Discovery Build
+Supply Proxmox management credentials, node/storage, bridge/VLAN and VM size.
+Phase 1 creates one blank InfraVM disk, uploads both real ISOs with
+content-addressed names, attaches them and starts the VM.
 
-The playbook already performs this build. Use these commands only when you want
-to rebuild the artifact by hand.
+Open its live console:
 
-The CoreDNS role expects this exact local artifact:
-
-```text
-artifacts/containers/coredns-dockerdiscovery.tar
+```sh
+sudo mkdir -p /mnt/sophon
+sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
+sudo bash /mnt/sophon/install.sh
 ```
 
-Build it from `github.com/cseelhoff-ms/coredns-dockerdiscovery`:
+Enter guest networking and the `core` console password, confirm a fresh target
+disk, and let the installer reboot. Log in as `core` and run
+`sophon-controller`. It prompts for the domain and service credentials; the
+optional dashboard is `sophon-controller --dashboard --port 41327`.
+Both ISOs can be detached after persistent installation.
 
-```bash
-mkdir -p artifacts/containers
+## Rebuild only the deployment ISO
 
-COREDNS_SRC="${XDG_CACHE_HOME:-$HOME/.cache}/sophon/coredns-dockerdiscovery"
-
-if [ ! -d "$COREDNS_SRC/.git" ]; then
-  git clone https://github.com/cseelhoff-ms/coredns-dockerdiscovery.git "$COREDNS_SRC"
-else
-  git -C "$COREDNS_SRC" pull --ff-only
-fi
-
-podman build -t coredns-dockerdiscovery:latest "$COREDNS_SRC"
-podman save -o artifacts/containers/coredns-dockerdiscovery.tar coredns-dockerdiscovery:latest
+```sh
+python3 bundle.py --bootstrap-tools artifacts/bootstrap/busybox
 ```
 
-The upstream Dockerfile builds CoreDNS with the `docker` plugin registered and
-packages the runtime image as `coredns-dockerdiscovery:latest`, which matches the
-image name used by `roles/coredns/templates/docker-compose.yml.j2`.
+The existing `artifacts/containers/manifest.json` declares the expected archives;
+`--container` can instead be repeated to declare every archive explicitly.
+Missing scripts, helper, runner, collections or archives abort without replacing
+a previous ISO. See [the role contract](roles/prestage/README.md).
 
-## 3. Manual NFS VM Image Build
-
-The playbook already performs this build. Use these commands only when you want
-to rebuild the artifact by hand or debug the image builder.
-
-The NFS role consumes this cache path:
-
-```text
-artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
-```
-
-The repo has a standalone builder under `nfs_vm_build/`. The currently active
-NFS role also requires `openssh` in the image so Kopia can provision an SFTP
-backend, so the command below writes a chroot setup script that mirrors the
-current role behavior.
-
-```bash
-mkdir -p artifacts/nfs-vm-build
-
-cp nfs_vm_build/build-alpine-image artifacts/nfs-vm-build/build-alpine-image
-chmod +x artifacts/nfs-vm-build/build-alpine-image
-
-cat > artifacts/nfs-vm-build/nfs-chroot-setup.sh <<'EOF'
-#!/bin/sh
-set -ex
-
-rc-update add qemu-guest-agent default
-rc-update add rpcbind default
-rc-update add nfs default
-rc-update add sshd default
-rc-update add networking boot
-rc-update add hostname boot
-
-mkdir -p /export
-chmod 755 /export
-
-echo "/export *(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=100)" > /etc/exports
-echo "sophon-nfs" > /etc/hostname
-
-cat > /etc/network/interfaces <<'IFACE'
-auto lo
-iface lo inet loopback
-
-auto eth0
-iface eth0 inet dhcp
-IFACE
-EOF
-
-chmod +x artifacts/nfs-vm-build/nfs-chroot-setup.sh
-
-LIBGUESTFS_BACKEND=direct \
-artifacts/nfs-vm-build/build-alpine-image \
-  --image-size 10G \
-  --image-format qcow2 \
-  --branch v3.21 \
-  --packages "qemu-guest-agent nfs-utils openssh parted e2fsprogs openrc util-linux" \
-  --script-chroot artifacts/nfs-vm-build/nfs-chroot-setup.sh \
-  artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
-```
-
-You can also skip this manual build if you are running `site.yml` online. The
-NFS role will build the same cache automatically when Proxmox does not already
-have the `sophon-nfs-alpine.qcow2` image.
-
-## 4. How Artifacts Reach the Site
-
-You do not copy anything by hand. `site.yml` uses two transports.
-
-**Portainer's image tar** travels over NFS. The `nfs` role mounts the export on
-the Controller with `fuse-nfs` (unprivileged, vendored in `flake.nix`) and
-copies `portainer-portainer-ee_<tag>.tar` into `/export/containers`. InfraVM's
-`sophon-init.service` `podman load`s it at first boot. This route exists only
-because Portainer cannot deliver its own image.
-
-**Every other image** is uploaded through Portainer itself. Each service role
-declares a `*_image_tars` list and passes it to `roles/portainer_stack`, which
-POSTs each tar to `/api/endpoints/<id>/docker/images/load` before creating or
-updating the stack. This happens on every run, so changing an image tag in a
-role's defaults takes effect on the next `site.yml` — no VM rebuild.
-
-If a tar named in `*_image_tars` is missing from `artifacts/containers/`, the
-play fails on the Controller and names the file. Compose files set
-`pull_policy: never`, so a gap cannot be hidden by a registry pull.
-
-Both routes need the Controller to have routed access to the vnet
-(`nfs_ip` and `infravm_ip`). See
-[ADR-0005](docs/adr/0005-artifacts-reach-the-site-over-a-fuse-mounted-nfs-export.md).
-
-> If you add a service, add its images to `prestage_container_images` in
-> `prestage.yml` *and* to the role's `*_image_tars`. Nothing keeps the two
-> lists in agreement. See [docs/known-gaps.md](docs/known-gaps.md).
-
-## 5. Deployment-Generated Kopia Artifacts
-
-These artifacts are generated only after the NFS VM exists, because the role
-creates a matching SFTP user on that VM and records its SSH host key:
-
-```text
-artifacts/kopia/id_ed25519
-artifacts/kopia/id_ed25519.pub
-artifacts/kopia/known_hosts
-```
-
-For the default NFS-backed Kopia setup, run the normal deployment. Include the
-usual variables for your environment:
-
-```bash
-ansible-playbook site.yml \
-  -e proxmox_host=<proxmox-host> \
-  -e proxmox_password=<proxmox-password> \
-  -e domain_name=<domain> \
-  -e nfs_ip=<nfs-vm-ip> \
-  -e infravm_ip=<infravm-ip>
-```
-
-If you use a different SFTP backend, set `nfs_provision_kopia_user=false` and
-create `artifacts/kopia/id_ed25519` plus `artifacts/kopia/known_hosts` yourself
-before running the Kopia role.
-
-## 6. Deployment-Generated Traefik ACME Artifact
-
-Traefik writes this secret backup after certificates have actually been issued:
-
-```text
-artifacts/traefik/acme.json
-```
-
-The Traefik role backs it up after deploy when `traefik_acme_backup_after_deploy`
-is true. To force an on-demand snapshot after Traefik has issued certs, run:
-
-```bash
-ansible-playbook traefik-backup-acme.yml \
-  -e domain_name=<domain> \
-  -e infravm_ip=<infravm-ip> \
-  -e portainer_admin_password=<portainer-admin-password>
-```
-
-Treat `artifacts/traefik/acme.json` as a secret. It contains ACME account and
-certificate private keys.
-
-## 7. Optional Verification
-
-```bash
-find artifacts -maxdepth 3 -type f -print | sort
-
-test -f artifacts/containers/coredns-dockerdiscovery.tar
-test -f artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
-```
-
-After deployment has provisioned Kopia and Traefik has issued certs, these should
-also exist:
-
-```bash
-test -f artifacts/kopia/id_ed25519
-test -f artifacts/kopia/known_hosts
-test -f artifacts/traefik/acme.json
-```
+The normal flow builds no Alpine/NFS/Controller disk, imports no qcow2 image and
+uses no NFS transport. Legacy builders remain in the repository but are not
+invoked. Backup infrastructure and Kopia are deferred; see
+[ADR-0013](docs/adr/0013-two-iso-infravm-installation.md).

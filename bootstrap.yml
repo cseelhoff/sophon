@@ -1,0 +1,43 @@
+---
+- name: Bootstrap Sophon through Proxmox management
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Validate bootstrap inputs
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item) | trim | length > 0
+        fail_msg: "Supply {{ item }} before bootstrap. Service credentials belong in Phase 2."
+        quiet: true
+      loop:
+        - SOPHON_PROXMOX_HOST
+        - SOPHON_PROXMOX_PASSWORD
+  tasks:
+    - name: Prepare offline deployment artifacts and ISO
+      ansible.builtin.include_role:
+        name: prestage
+        tasks_from: bootstrap
+      tags: [sophon_stage_prestage]
+    - name: Authenticate with Proxmox
+      ansible.builtin.include_role:
+        name: proxmox
+        public: true
+      tags: [sophon_stage_proxmox]
+    - name: Create InfraVM with a fresh disk and two ISOs
+      ansible.builtin.include_role:
+        name: infravm
+        tasks_from: bootstrap
+      tags: [sophon_stage_infravm]
+    - name: Hand off to the InfraVM live console
+      ansible.builtin.debug:
+        msg: |
+          Bootstrap complete. Open InfraVM's hypervisor console in the CoreOS live
+          environment and run:
+            sudo mkdir -p /mnt/sophon
+            sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
+            sudo bash /mnt/sophon/install.sh
+          The installer confirms the fresh disk and asks for networking and the
+          core console password, then installs offline and reboots. Log in as core
+          on the installed system and run sophon-controller to configure services.
+          No SSH keys or NFS server are required.
+      tags: [sophon_stage_end]

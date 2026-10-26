@@ -78,3 +78,9 @@ instead of surfacing as a stack that will not start.
 
 `prestage_container_images` in `prestage.yml` and the per-role
 `*_image_tars` lists must be kept in agreement by hand. Nothing enforces it.
+# Superseded for bootstrap transport
+
+New deployments import a deployment ISO inside the Controller VM instead of
+mounting NFS from the bootstrap laptop. See
+[ADR-0012](0012-two-phase-controller-handoff.md). InfraVM still reads Portainer's
+boot image from NFS; other service images travel through the Portainer API.

@@ -1,67 +1,9 @@
 ---
-# =============================================================================
-# InfraVM Role - CoreOS VM running all containers
-# =============================================================================
-# This role creates a CoreOS VM and deploys Portainer + all services.
-
-# =============================================================================
-# VM Configuration
-# =============================================================================
 infravm_vm_name: "sophon-infravm"
-infravm_cores: 8
-infravm_memory: 8192
+infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
+infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(8192, true) | int }}"
 infravm_cpu_type: "x86-64-v2-AES"
-infravm_disk_size: "100G"
-
-# User Configuration
-infravm_username: "core"
-# Password for the core user (defaults to proxmox_password if not set)
-infravm_password: "{{ proxmox_password }}"
-
-# SSH public key for core user (required for Ansible access)
-infravm_ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub', errors='ignore') | default('') }}"
-
-# Butane template location
-infravm_butane_template: "{{ playbook_dir }}/roles/infravm/templates/infravm.bu.j2"
-
-
-# =============================================================================
-# Cloudflared Settings (optional - enables tunnel access)
-# =============================================================================
-# Tunnel token for Cloudflared access to InfraVM
-infravm_cloudflared_tunnel_token: ""
-
-# Container image for cloudflared
-infravm_cloudflared_image: "docker.io/cloudflare/cloudflared:latest"
-
-# =============================================================================
-# NFS Settings
-# =============================================================================
-# NFS mount options for InfraVM
-# rw is required so backup containers (kopia) can write into /var/mnt/nfs.
-# The NFS server squashes all client uids to 1000:100 (see nfs role), which
-# matches the rootless podman user on this VM, so writes land cleanly.
-infravm_nfs_mount_options: "rw,noatime,vers=4.1"
-
-# =============================================================================
-# Container Images (loaded at boot via sophon-init.service in Butane/Ignition)
-# =============================================================================
-# List of container images to load on InfraVM
-# These are cached on NFS at /export/containers/<basename>.tar
-# Portainer URL is defined in group_vars/all.yml so it is visible to all
-# roles (infravm, coredns, portainer_stack, keycloak) regardless of which
-# play includes them.
-
-
-# =============================================================================
-# CoreOS Image
-# =============================================================================
-infravm_coreos_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/\
-  43.20260413.3.2/x86_64/fedora-coreos-43.20260413.3.2-qemu.x86_64.qcow2.xz"
-infravm_coreos_xz_filename: "{{ infravm_coreos_url | basename }}"
-infravm_coreos_qcow2_filename: "{{ infravm_coreos_xz_filename | regex_replace('\\.xz$', '') }}"
-infravm_coreos_iso_filename: "{{ infravm_coreos_qcow2_filename }}.iso"
-
-# Local directory used for fallback download/upload of the CoreOS image when
-# the Proxmox host cannot fetch it directly (e.g. air-gapped or no egress).
-infravm_local_download_dir: "{{ lookup('env', 'HOME') }}/.cache/sophon/coreos"
+infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(100, true) | int }}"
+infravm_coreos_iso_path: "{{ playbook_dir }}/artifacts/coreos/fedora-coreos-live.iso"
+infravm_bundle_iso_path: "{{ playbook_dir }}/artifacts/bootstrap/sophon-deployment.iso"
+infravm_bootstrap_marker: "sophon-infravm-two-iso-v1"

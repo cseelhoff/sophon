@@ -1,9 +1,9 @@
 # Sophon
 
-Sophon provisions a self-contained homelab onto a Proxmox host: an Alpine NFS
-server, a Fedora CoreOS VM, and a set of services — DNS, reverse proxy,
-directory, SSO, Git, and backup — running as rootless Podman containers and
-managed through Portainer.
+Sophon provisions a self-contained Fedora CoreOS InfraVM onto Proxmox, then
+deploys DNS, reverse proxy, directory, SSO, and Git services as rootless Podman
+containers managed through Portainer. The Ansible/controller runner is a
+container on InfraVM itself; no early NFS or separate Controller VM is needed.
 
 It is built for internet-connected homelabs but stages every artifact ahead of
 time, so the same playbooks work against a Proxmox host with no egress at all.
@@ -24,49 +24,102 @@ time, so the same playbooks work against a Proxmox host with no egress at all.
 | [docs/adr/](docs/adr/) | Why things are the way they are |
 | [docs/known-gaps.md](docs/known-gaps.md) | Where the code disagrees with the design |
 
-## Two phases
+## Two deployment phases
 
-Sophon runs in two phases, and the split is deliberate.
+Connected **Prestage** prepares two complete deployment media:
 
-**Prestage** is the only part that touches the internet. It pulls container
-images, builds the CoreDNS Docker Discovery image, and builds the Alpine NFS VM
-disk, writing everything into `artifacts/`.
+- `artifacts/coreos/fedora-coreos-live.iso`: the unchanged, full upstream
+  CoreOS live ISO, verified against official stream metadata.
+- `artifacts/bootstrap/sophon-deployment.iso`: the reusable project, scripts,
+  offline runner, collections, static installer helper, and container archives.
 
-**Deploy** fetches nothing. It provisions Proxmox and brings up every service
-using only what Prestage produced.
+1. **Bootstrap laptop:** creates InfraVM with a blank disk and both ISOs,
+   using only Proxmox management access; there is no disk-image conversion,
+   QEMU Ignition injection, guest-agent setup, or NFS connection.
+2. **InfraVM console:** the operator installs CoreOS offline, enters guest
+   networking and the `core` console password, and reboots; the host bootstrap
+   starts rootless Portainer, and the local controller runner deploys services.
 
-Prestage always runs, even when the target has full internet access — it is the
-only thing that keeps the disconnected path working without a second, untested
-code path (see
-[ADR-0001](docs/adr/0001-air-gapped-a-supported-deployment-mode.md)). If you are
-connected, `site.yml` runs it for you and you never think about it. It is a
-no-op once `artifacts/` is populated, so it costs nothing on later runs and
-never reaches the network at a disconnected site.
+Networking, passwords, SSH keys, and site-specific settings are not embedded
+in the two reusable ISOs. No SSH key or SSH connection is required. The domain
+and service credentials are collected after installation. NFS/Kopia are deferred
+to a separately designed opt-in backup workflow.
+See [ADR-0013](docs/adr/0013-two-iso-infravm-installation.md).
 
-Run `prestage.yml` by hand only when the two phases happen on **different
-machines** — stage on a connected host, carry `artifacts/` in, deploy there.
+**Fresh deployments only:** conflicting existing InfraVMs are preserved and
+rejected unless marked as this two-ISO workflow. Rerunning Phase 1 never replaces
+an existing disk or reinstalls CoreOS. Other legacy VMs are not changed.
 
 ## Quick start
 
-Load the required `SOPHON_*` credentials from your password manager into the
-controller environment first; see [credential inputs](docs/preconditions.md#credentials).
-Deployment validates them before provisioning and never generates replacement
-passwords. Existing installations must reuse their existing credentials.
+Start Phase 1 on the bootstrap laptop:
 
 ```bash
 nix develop
-
-ansible-playbook site.yml \
-  -e proxmox_host=10.0.60.2 \
-  -e proxmox_password=<password> \
-  -e domain_name=example.com \
-  -e nfs_ip=10.0.60.10 \
-  -e infravm_ip=10.0.60.11
+python3 deployment.py --phase bootstrap --serve --port 41327
 ```
+
+Choose **Configure** and supply Proxmox access, ISO/disk storage, bridge/VLAN,
+and VM CPU, memory, and disk size. The displayed minimum disk size is only a
+floor; the installer checks actual media size and available space.
+
+Open the new InfraVM's hypervisor console in the live CoreOS environment:
+
+```sh
+sudo mkdir -p /mnt/sophon
+sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
+sudo bash /mnt/sophon/install.sh
+```
+
+Confirm the fresh installation disk, static IP/prefix, gateway, DNS, and a
+console password for `core`. The script rejects nonblank or mounted disks,
+verifies bundle checksums, installs offline, and copies the artifacts to disk.
+It does not run the large Ansible image from the live environment's RAM.
+After reboot, log in as `core` and run:
+
+```sh
+sophon-controller
+```
+
+The console wizard asks for the domain and service credentials using hidden
+password prompts, confirms deployment, and shows Ansible output. The writable
+project is `/var/lib/sophon/project` on the host, `/workspace` in the runner.
+Both ISOs can be detached after installation. Retain credentials in your
+password manager; later reruns require the same existing values.
+
+If host setup fails, inspect `journalctl -u sophon-host-bootstrap` and retry
+with `sudo systemctl restart sophon-host-bootstrap`; do not reinstall.
+Portainer also closes uninitialized setup after an idle timeout. If this happens
+while entering service settings, restart that host service and rerun the wizard.
+The restart preserves Portainer's data and reopens its initialization window.
+
+For the optional dashboard, run `sophon-controller --dashboard --port 41327`.
+It listens on loopback; browser connectivity is your responsibility, not an
+installation prerequisite. Run this instead of the console wizard, not alongside
+it. The runner has no SSH, privileged host access, or mounted Podman socket:
+only Portainer gets the rootless socket and Ansible uses its HTTP interface.
+
+For a terminal run, use `python3 deployment.py --phase bootstrap -- bootstrap.yml`
+on the laptop, or export service settings and run `sophon-controller --run`
+on installed InfraVM. Do not use the legacy deployment on an existing VM.
+
+No laptop site settings are transferred automatically.
+If you use custom Ansible overrides such as container image versions during
+Prestage/bootstrap, change the corresponding non-secret project defaults before
+bundling so service deployment uses the same versions.
+Arbitrary `-e` values are deliberately not serialized into the ISO.
+
+Phase 2 refreshes service-name entries inside the runner before each deployment,
+so changing the domain in Configure takes effect without restarting the runner.
+Traefik configures Portainer's hostname route in Phase 2; InfraVM's first boot
+exposes only the domain-independent Portainer API on port 9443.
+The managed Podman network forwards service-container DNS to InfraVM's CoreDNS;
+the installation's upstream DNS remains the host resolver. Gitea deployment
+waits for its initializer to finish successfully, including OIDC configuration.
 
 ### Deployment diagram
 
-The optional VLAN setting applies to both the NFS VM and InfraVM. Leave it empty
+The optional VLAN setting applies to InfraVM. Leave it empty
 for an untagged bridge; Sophon then omits the Proxmox NIC `tag` property. Set a
 VLAN ID from 1 to 4094 when the bridge requires tagged traffic.
 
@@ -76,17 +129,19 @@ Start the local dashboard from the same environment and repository directory:
 python3 deployment.py --serve --port 41327
 ```
 
-Open the printed loopback URL and choose **Configure**. All supported `SOPHON_*`
+Open the printed loopback URL and choose **Configure**. Only the current phase's supported `SOPHON_*`
 settings, **including actual secret values**, prepopulate from the environment
 inherited at server startup. Password fields are visually masked, not omitted.
-All required passwords must be supplied. Clearing an optional field explicitly
-clears its exported value. Empty Gitea database and Kopia password overrides reuse
+All required passwords for that phase must be supplied. Clearing an optional field explicitly
+clears its exported value. An empty Gitea database password override reuses
 the supplied Portainer password, preserving the existing defaults. No password
 lookup, controller password file, or password-file lock is used.
 
 - **Generate shell deployment command** produces safely quoted exports for the
-  entire form, the progress callback, `SOPHON_PROGRESS_FILE`, and
-  `ANSIBLE_LOG_PATH`, followed by `ansible-playbook site.yml`. Generation alone
+  entire form. Bootstrap invokes `ansible-playbook bootstrap.yml` with tracing.
+  Phase 2 invokes `sophon-controller --run` from the InfraVM host shell,
+  keeping Ansible and trace files inside the runner.
+  Generation alone
   does not start a deployment. Use **Copy** to paste it into sh, bash, or zsh on
   this controller, with the project environment active. The exports remain in
   that shell; deployment runs in a subshell to preserve your working directory.
@@ -113,14 +168,14 @@ runs can overwrite each other's progress. Do not both click Run and paste the
 command. The page disables Run while the displayed run is active, but that is
 not a concurrency guarantee.
 
-Ansible's native log appends to `artifacts/deployment/ansible.log` with mode `0600`.
+Ansible's native log appends to `artifacts/deployment/<phase>/ansible.log` with mode `0600`.
 Browser runs additionally capture console output (including startup errors) in
-`artifacts/deployment/deploy.log`, overwritten per Run with mode `0600`. These
+`artifacts/deployment/<phase>/deploy.log`, overwritten per Run with mode `0600`. These
 logs may contain secrets and are never served to the browser. For terminal
 prompts or custom Ansible arguments, the optional launcher remains available:
 
 ```bash
-python3 deployment.py -- site.yml
+python3 deployment.py --phase bootstrap -- bootstrap.yml
 ```
 
 Pass the same inventory and extra variables you normally give `ansible-playbook`.
@@ -130,7 +185,7 @@ viewer supports full runs, not check mode, task-start overrides, or tag-filtered
 runs. Ordinary `ansible-playbook` commands remain unchanged.
 
 The callback atomically writes structured progress to
-`artifacts/deployment/status.json`; the browser polls it about once a second,
+`artifacts/deployment/<phase>/status.json`; the browser polls it about once a second,
 updating the SVG and steps only when the report changes. It does not parse or
 tail the raw Ansible log. Both Run and copied commands target the same trace
 directory (override it with `--state-dir` when starting the server).
@@ -170,16 +225,16 @@ After editing the diagram, export it again to `sophon.svg` with cell IDs
 preserved, update `CELLS` in `deployment.py` if mapped cells were replaced, and
 restart the server. Missing mapped cells fail validation at startup. All stages
 now have mapped icons, including the production Proxmox cluster and Kopia.
-InfraVM includes Portainer and the `coreos.qcow2` icon. That label is an alias for
-the versioned Fedora CoreOS disk configured by `infravm_coreos_url`; its preparation
-and import happen in InfraVM, not Prestage. Labels are extracted from the SVG for
+InfraVM includes Portainer, but the old `coreos.qcow2` and NFS disk icons are
+untracked: the current workflow uses a blank disk and two real ISOs.
+Labels are extracted from the SVG for
 tooltips and the selected stage's details; hover other labeled elements to see
 that they are not tracked by this viewer.
 
 Prestage maps only depicted artifacts produced by the current role:
-`alpine-nfs.qcow2`, `portainer.tar`, `coredns.tar`, `openldap.tar`, `traefik.tar`,
+`portainer.tar`, `coredns.tar`, `openldap.tar`, `traefik.tar`,
 `keycloak.tar`, `gitea.tar`, and `postgres.tar`. These are diagram aliases, not
-literal artifact paths: the NFS disk is `sophon-nfs-alpine.qcow2`, CoreDNS is
+literal artifact paths: CoreDNS is
 `coredns-dockerdiscovery.tar`, and other container archives have vendor/version
 names. Their colour follows the overall Prestage outcome, not individual file
 verification. Depicted `.sql` backups, `.yml` files, and unsupported
@@ -211,8 +266,8 @@ Stage on a connected machine, copy `artifacts/` across, then deploy:
 # Connected machine
 ansible-playbook prestage.yml
 
-# At the site, after copying artifacts/ into the repo
-ansible-playbook site.yml -e ...
+# At the site, after copying the repo and artifacts/ to the bootstrap laptop
+python3 deployment.py --phase bootstrap -- bootstrap.yml
 ```
 
 Read [docs/preconditions.md](docs/preconditions.md) first. Several required
@@ -231,12 +286,11 @@ Never paste credentials into tracked files.
 
 ## What gets deployed
 
-Two VMs on Proxmox:
+One required VM on Proxmox:
 
 | VM | OS | Role |
 |---|---|---|
-| `sophon-nfs` | Alpine | Exports `/export` — Proxmox storage, container data, artifact staging, Kopia repository |
-| `sophon-infravm` | Fedora CoreOS | Runs every service as a rootless Podman container |
+| `sophon-infravm` | Fedora CoreOS | Runs the controller and service workloads as rootless Podman containers |
 
 Services on InfraVM, deployed in this order:
 
@@ -248,7 +302,8 @@ Services on InfraVM, deployed in this order:
 | OpenLDAP | `ldap.<domain>` | Directory |
 | Keycloak | `auth.<domain>` | SSO, federated against OpenLDAP |
 | Gitea | `git.<domain>` | Git server, SSO via Keycloak |
-| Kopia | `kopia.<domain>` | Encrypted backup to the NFS VM over SFTP |
+
+Kopia and backup-server provisioning are not part of this run.
 
 ## Running without egress
 
@@ -335,14 +390,24 @@ an existing installation with this credential-input model.
 ```bash
 yamllint .
 ansible-lint
-ansible-playbook --syntax-check site.yml prestage.yml
+ansible-playbook --syntax-check bootstrap.yml site.yml prestage.yml
+
+python3 tests/test_deployment.py
+python3 tests/test_phases.py
+python3 tests/test_console.py
+python3 tests/test_installer.py
+python3 tests/test_bundle.py
+python3 tests/test_controller.py
+# With Playwright and Chromium installed:
+python3 tests/test_dashboard.py
 
 # Molecule role tests (roles/*/molecule/)
 molecule test
 ```
 
-`tests/test.yml` holds override values for local integration runs:
-`ansible-playbook site.yml -e @tests/test.yml`.
+`tests/test.yml` holds legacy override examples, not live integration fixtures.
+Run the Python suites above for local, non-provisioning checks. A real service
+deployment must run inside the Controller runner and use the site's own values.
 
 ## Backup / Restore
 

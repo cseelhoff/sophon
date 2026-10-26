@@ -60,6 +60,7 @@
     #notice:empty { display:none; }
     #run-error { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--red); background:#352126; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; }
     #run-error:empty { display:none; }
+    #phase-note { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--blue); background:var(--surface); color:var(--ink); overflow-wrap:anywhere; }
     #configure { min-height:36px; padding:0 14px; }
     button:disabled { cursor:default; opacity:.55; }
     dialog { width:min(760px, calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:var(--surface); }
@@ -120,6 +121,7 @@
       </div>
       <p id="notice" role="alert"></p>
       <p id="run-error" role="alert"></p>
+      <p id="phase-note"></p>
       <div id="diagram-pane"><object id="diagram" type="image/svg+xml" aria-label="Sophon site topology"></object></div>
       <div id="detail" aria-live="polite"></div>
       <section id="task-panel" aria-labelledby="task-title" hidden>
@@ -143,7 +145,7 @@
         <button id="close-settings" type="button">Close</button>
       </div>
       <div class="form-body">
-        <p class="security-note">Settings include secrets inherited when this server started. Supply existing deployment credentials: passwords are never generated or saved as reusable controller secrets. Changes stay in this browser tab, not your shell. Run only one deployment at a time per trace directory.</p>
+        <p class="security-note">Only settings for this deployment phase are shown. Secrets stay off the deployment ISO. Form changes stay in this browser tab, not your shell. Run only one deployment at a time per trace directory.</p>
         <div id="settings-fields"></div>
         <section id="command-panel" hidden aria-labelledby="command-title">
           <h3 id="command-title">Shell deployment command</h3>
@@ -379,8 +381,10 @@
       const action = event.submitter?.value || 'command';
       if (submitting || !settingsLoaded || (action === 'run' && deployButton.disabled) || !settingsForm.reportValidity()) return;
       const values = Object.fromEntries(new FormData(settingsForm));
-      const target = `${values.SOPHON_PROXMOX_HOST} / ${values.SOPHON_PROXMOX_NODE}`;
-      if (action === 'run' && !confirm(`Run deployment to ${target}?\nBridge: ${values.SOPHON_VNET_INTERFACE}\nNFS: ${values.SOPHON_NFS_IP}\nInfraVM: ${values.SOPHON_INFRAVM_IP}\nDo not also run the copied command.`)) return;
+      const target = config.phase === 'services'
+        ? `Run Phase 2 service deployment on this InfraVM?\nPortainer: ${values.SOPHON_INFRAVM_IP}:9443\nNo Proxmox access is used.`
+        : `Create a blank InfraVM on ${values.SOPHON_PROXMOX_HOST} / ${values.SOPHON_PROXMOX_NODE}?\nBridge: ${values.SOPHON_VNET_INTERFACE}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`;
+      if (action === 'run' && !confirm(`${target}\nDo not also run the copied command.`)) return;
       submitting = true;
       if (action === 'run') pendingRun = latest?.run_id || '';
       for (const group of settingsFields.querySelectorAll('fieldset')) group.disabled = true;
@@ -466,6 +470,11 @@
         ? `${failure}${report.exit_code === undefined ? '' : `\nExit code: ${report.exit_code}`}\nPrivate Controller log: ${config.log_path}. Logs may contain secrets; redact before sharing.`
         : '';
       document.getElementById('run-state').textContent = labels[report.state] || 'Outcome unknown';
+      document.getElementById('phase-note').textContent = config.phase === 'services'
+        ? 'Phase 2: deploy services from this InfraVM. No Proxmox credentials or management-network access are used.'
+        : report.state === 'completed'
+          ? 'Bootstrap complete. In the InfraVM live console, mount the SOPHON_DEPLOY ISO read-only at /mnt/sophon and run sudo bash /mnt/sophon/install.sh. Confirm the fresh disk, networking, and core console password. After reboot, log in as core and run sophon-controller.'
+          : 'Phase 1: prepare the stock CoreOS and Sophon artifact ISOs, then create a blank InfraVM through Proxmox. Guest networking and credentials are entered later at its console.';
       document.getElementById('run-time').textContent = report.state === 'idle' ? '' : `Last event ${new Date(report.updated_at * 1000).toLocaleTimeString()} | Run ${report.run_id.slice(0, 8)}`;
       for (const [stage, values] of Object.entries(report.stages)) {
         const row = rows.get(stage);
@@ -487,7 +496,7 @@
           node.querySelector('.deployment-border').setAttribute('stroke', colors[values.state]);
         }
       }
-      const focus = tasksHidden ? undefined : selected || report.current;
+      const focus = tasksHidden ? undefined : selected || (config.stages[report.current] ? report.current : undefined);
       const detail = document.getElementById('detail');
       detail.replaceChildren();
       if (focus) {

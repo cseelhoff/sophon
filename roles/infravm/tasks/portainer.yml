@@ -1,0 +1,172 @@
+---
+- name: Wait for Portainer API to be ready
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/status"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: portainer_status
+  until: portainer_status.status | default(-1) == 200
+  retries: 60
+  delay: 3
+  changed_when: false
+
+- name: Check if Portainer admin is already initialized
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/users/admin/check"
+    method: GET
+    validate_certs: false
+    status_code: [204, 404]
+  register: portainer_admin_check
+  changed_when: false
+
+- name: when block for if admin not initialized
+  when: portainer_admin_check.status == 404
+  block:
+    - name: Validate Portainer password meets requirements
+      ansible.builtin.assert:
+        that:
+          - portainer_admin_password | length >= 12
+        fail_msg: "Portainer requires password of at least 12 characters. Got {{ portainer_admin_password | length }}."
+
+    - name: Initialize Portainer admin user
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/users/admin/init"
+        method: POST
+        body_format: json
+        body:
+          Username: "admin"
+          Password: "{{ portainer_admin_password }}"
+        validate_certs: false
+        status_code: [200]
+      register: portainer_init
+
+    - name: Display Portainer admin credentials
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "PORTAINER ADMIN CREDENTIALS"
+          - "============================================================"
+          - "URL:      {{ infravm_portainer_url }}"
+          - "Username: admin"
+          - "Password: {{ portainer_admin_password }}"
+          - "Password supplied by the operator; retain it in your password manager."
+          - "============================================================"
+
+- name: Authenticate with Portainer
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    validate_certs: false
+    status_code: 200
+  register: portainer_auth
+  changed_when: false
+
+# =============================================================================
+# Portainer Business Edition license registration (no-op for CE)
+# =============================================================================
+# Posts the license key to /api/licenses if not already registered.
+# Idempotent: GET /api/licenses returns currently attached licenses; we skip
+# the POST if any license with the same key prefix is already present.
+- name: Register Portainer Business Edition license
+  when: portainer_license_key | default('') | length > 0
+  block:
+    - name: List currently registered Portainer licenses
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/licenses"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: portainer_licenses
+      changed_when: false
+
+    - name: Attach Portainer Business Edition license
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/licenses/add"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+        body_format: json
+        body:
+          key: "{{ portainer_license_key }}"
+        validate_certs: false
+        # 200 OK on success; 409 if already attached; some EE versions return
+        # 400 with "license already exists" — treat all as non-fatal.
+        status_code: [200, 201, 204, 400, 409]
+      register: portainer_license_attach
+      when: >-
+        portainer_licenses.status != 200
+        or (portainer_licenses.json | default([]) | length == 0)
+      changed_when: portainer_license_attach.status in [200, 201, 204]
+      no_log: true
+
+    - name: Display Portainer license status
+      ansible.builtin.debug:
+        msg: >-
+          Portainer Business Edition license
+          {{ 'attached' if (portainer_license_attach is defined and portainer_license_attach.changed)
+             else 'already present' }}.
+
+- name: Get Portainer endpoints
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+    validate_certs: false
+    status_code: 200
+  register: portainer_endpoints
+  changed_when: false
+
+# - name: debug print portainer_endpoints
+#   ansible.builtin.debug:
+#     var: portainer_endpoints
+
+- name: Set portainer_local_endpoint to first local endpoint if exists
+  ansible.builtin.set_fact:
+    portainer_local_endpoint: "{{ portainer_endpoints.json | selectattr('Type', 'eq', 1) | first }}"
+    portainer_local_endpoint_id: "{{ (portainer_endpoints.json | selectattr('Type', 'eq', 1) | first)['Id'] }}"
+  when: portainer_endpoints.json | length > 0
+
+- name: Create local Docker endpoint if none exist
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+      Content-Type: "multipart/form-data"
+    body_format: form-multipart
+    body:
+      Name: "local"
+      EndpointCreationType: "1"
+    validate_certs: false
+    status_code: [200, 201]
+  register: _portainer_create_endpoint
+  when: portainer_local_endpoint_id is not defined
+
+- name: Set endpoint ID from newly created endpoint
+  ansible.builtin.set_fact:
+    portainer_local_endpoint_id: "{{ _portainer_create_endpoint.json['Id'] }}"
+  when: portainer_local_endpoint_id is not defined
+
+- name: Display InfraVM access info
+  ansible.builtin.debug:
+    msg: |
+      ═══════════════════════════════════════════════════════════════════
+      InfraVM Deployed Successfully
+      ═══════════════════════════════════════════════════════════════════
+
+      Portainer:
+        URL: {{ infravm_portainer_url }}
+        Username: admin
+        Password: {{ portainer_admin_password }}
+
+      VM ID: {{ infravm_vmid | default('N/A') }}
+
+      ═══════════════════════════════════════════════════════════════════

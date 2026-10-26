@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+[ "$(id -u)" -eq 0 ] || { echo "Use doas sophon-controller" >&2; exit 1; }
+test -f /var/lib/sophon/controller-ready
+mountpoint -q /export
+if [ "$#" -eq 0 ]; then
+    set -- --phase services --serve --port 41327
+fi
+# Service-name resolution is configured inside the runner when Phase 2 starts.
+exec python3 -I - "$@" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+allowed = Path("/usr/local/share/sophon-controller/service-env").read_text().split()
+environment = {"PATH": os.environ["PATH"], "HOME": "/root"}
+environment.update({name: os.environ[name] for name in allowed if name in os.environ})
+command = [
+    "podman", "run", "--rm", "--name", "sophon-controller-runner",
+    "--network", "host", "--pull", "never", "--env", "SOPHON_DEPLOYMENT_PHASE=services",
+    "--volume", "/export/sophon:/workspace", "--workdir", "/workspace",
+]
+# Pass only supplied allowlisted names. Values remain out of Podman's argv.
+for name in allowed:
+    if name in environment:
+        command.extend(("--env", name))
+command.extend(("sophon-nix-runner:latest", "python3", "deployment.py", *sys.argv[1:]))
+os.execvpe("podman", command, environment)
+PY

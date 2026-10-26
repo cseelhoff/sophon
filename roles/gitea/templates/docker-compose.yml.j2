@@ -86,9 +86,7 @@ services:
       start_period: 10s
 
   # One-shot bootstrap: creates the admin user and Keycloak OIDC auth source.
-  # Idempotent — exits cleanly if both already exist. Re-runs harmlessly on
-  # stack updates because the gitea CLI returns nonzero on duplicate creation,
-  # which we swallow.
+  # Checks existing records before creation; real CLI failures must stop deploy.
   gitea-init:
     image: {{ gitea_image }}
     pull_policy: never
@@ -124,8 +122,7 @@ services:
             --username '{{ gitea_admin_user }}' \
             --password '{{ gitea_admin_password }}' \
             --email '{{ gitea_admin_email }}' \
-            --admin --must-change-password=false || \
-          echo "gitea-init: admin user create returned nonzero (possibly already exists)."
+            --admin --must-change-password=false
         fi
 
 {% if gitea_oauth_enabled %}
@@ -143,8 +140,7 @@ services:
             --key '{{ gitea_oauth_client_id }}' \
             --secret '{{ gitea_oauth_client_secret }}' \
             --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
-            --scopes '{{ gitea_oauth_scopes }}' || \
-          echo "gitea-init: update-oauth returned nonzero."
+            --scopes '{{ gitea_oauth_scopes }}'
         else
           echo "gitea-init: creating new OIDC auth source."
           gitea admin auth add-oauth \
@@ -153,8 +149,7 @@ services:
             --key '{{ gitea_oauth_client_id }}' \
             --secret '{{ gitea_oauth_client_secret }}' \
             --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
-            --scopes '{{ gitea_oauth_scopes }}' || \
-          echo "gitea-init: add-oauth returned nonzero."
+            --scopes '{{ gitea_oauth_scopes }}'
         fi
 {% endif %}
 

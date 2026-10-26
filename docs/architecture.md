@@ -4,57 +4,67 @@ How Sophon's pieces fit together, and what breaks what.
 
 See [CONTEXT.md](../CONTEXT.md) for the vocabulary used here.
 
-## The three machines
+## Bootstrap and the site-local runner
 
 ```
-Controller                Proxmox host              vnet
-(your workstation)  ───▶  (hypervisor)      ┌──▶ sophon-nfs    (Alpine)
-                                            └──▶ sophon-infravm (Fedora CoreOS)
+Bootstrap laptop -- management HTTPS --> Proxmox
+                                         `-- sophon-infravm (blank disk, two ISOs)
+
+Live console --> offline CoreOS install --> installed InfraVM
+                                            |-- rootless Portainer
+                                            `-- rootless controller --> Portainer HTTP
 ```
 
-**Controller** is wherever you run `ansible-playbook`. Every play in this repo
-targets `localhost` with `ansible_connection: local`; nothing is done over SSH
-to a managed node. All remote work happens through APIs, which means the
-Controller needs *network* reach to three things: the Proxmox API, the NFS
-export, and the Portainer API on InfraVM.
+Every play targets `localhost`. The bootstrap laptop prepares artifacts, then
+uses only Proxmox management to create a blank InfraVM disk, attach the unchanged
+full CoreOS live ISO plus the Sophon deployment ISO, and start the VM.
+It never mounts NFS, runs a hypervisor shell, injects QEMU Ignition, or contacts
+Portainer. Conflicting existing guests are preserved and rejected; a compatible
+two-ISO VM is only started, not reinstalled.
 
-**sophon-nfs** is a small Alpine VM built locally by
-[nfs_vm_build/build-alpine-image](../nfs_vm_build/build-alpine-image). It exports
-`/export` and does four jobs at once:
+The operator runs the installer from the live console, confirms a blank target,
+and supplies static networking and the independent `core` console password.
+The installer verifies the media, installs CoreOS offline and copies artifacts
+into persistent storage. After reboot the host service starts rootless Portainer.
+The operator runs `sophon-controller`, a local Python/Ansible Podman runner with the
+writable project mounted at `/workspace`. Its task graph and environment exclude
+Proxmox credentials and lifecycle operations. See
+[ADR-0013](adr/0013-two-iso-infravm-installation.md).
 
 | Path | Consumer |
 |---|---|
-| `/export/template/iso` | Proxmox, as storage `sophon-nfs` — VM disk images |
-| `/export/containers` | InfraVM, at boot — container image tars |
-| `/export/<service>` | Services, as bind-mounted data |
-| `/export/kopia/repo` | Kopia, over SFTP as user `kopia` |
+| `/var/lib/sophon/project` | Writable project, image archives and collections on installed InfraVM |
+| `/var/lib/sophon/runner.tar` | Offline runner archive on installed InfraVM |
+| `/workspace` | The project's mount inside the rootless runner |
 
-The export is squashed to `anonuid=1000,anongid=100`, matching the `core` user
-on InfraVM, so rootless containers can write to it.
+Other service images are sent through Portainer. Application data resides in
+InfraVM-local named volumes, not generic NFS service directories.
 
-**sophon-infravm** is Fedora CoreOS. It has no package manager step and no
-configuration management agent — its entire configuration is baked into an
-Ignition file, produced from [infravm.bu.j2](../roles/infravm/templates/infravm.bu.j2)
-by Butane and handed to QEMU through `-fw_cfg`. After first boot it runs
+There is no required NFS VM or export. Backup infrastructure and Kopia are
+deferred to a later opt-in workflow. Both ISOs can be detached after installation.
+
+**sophon-infravm** is Fedora CoreOS. The live installer creates local first-boot
+Ignition from console inputs and supplies it to `coreos-installer`, not the
+hypervisor. The installed host service performs minimal host setup and image
+loads; the controller has no privileged mode, Podman socket or host-root mount.
+Portainer alone receives the rootless socket. After first boot InfraVM runs
 rootless Podman as `core` (uid 1000) with lingering enabled, so containers
 survive logout, and with `net.ipv4.ip_unprivileged_port_start=0` so an
 unprivileged user can bind `:53`, `:80` and `:443`.
 
-## Three transports, no SSH
+## Two APIs and a local console, no SSH
 
-Sophon reaches remote systems three different ways, and knowing which one is in
+Sophon provisions and configures systems through these surfaces; knowing which is in
 play explains most failure modes.
 
-**1. The Proxmox REST API.** Used by the `proxmox`, `nfs` and `infravm` roles
-for VM lifecycle, storage registration and image upload. Authentication is a
+**1. The Proxmox REST API.** Used only during bootstrap for authentication,
+VM lifecycle and ISO upload. Authentication is a
 ticket plus a CSRF token, held for the run.
 
-**2. Shell on the Proxmox node, via [library/proxmox_shell.py](../library/proxmox_shell.py).**
-A custom module that runs commands *on the hypervisor itself* over the
-termproxy WebSocket, or inside a VM through the QEMU Guest Agent. This is how
-the NFS VM gets its root password, network config and directory layout before
-it has any network identity of its own. It is powerful and unsandboxed —
-anything it runs, runs as root on the hypervisor.
+**2. Local console installation.** A script on the Sophon ISO installs CoreOS
+from full upstream media onto a confirmed blank disk and writes first-boot
+configuration and persistent deployment files. No guest networking is needed
+to enter the console and no remote shell is used by the normal flow.
 
 **3. The Portainer API.** Once InfraVM is up, Portainer is the *only* channel
 Ansible uses to affect it. Stacks are created and updated through
@@ -66,34 +76,38 @@ detail — see [ADR-0010](adr/0010-portainer-is-the-deployment-substrate.md). If
 Portainer is down, Ansible cannot fix it; you fix Portainer by hand and then
 re-run.
 
-## Prestage and Deploy
+## Artifact transport
 
 ```
  ── Prestage (needs internet) ──────────────────────────────────────
    podman pull   ──▶ artifacts/containers/*.tar
    podman build  ──▶ artifacts/containers/coredns-dockerdiscovery.tar
-   libguestfs    ──▶ artifacts/nfs-vm-build/sophon-nfs-alpine.qcow2
+   download      ──▶ artifacts/coreos/fedora-coreos-live.iso
+   nix / galaxy  ──▶ offline runner, static helper and collections
+   allowlist     ──▶ artifacts/bootstrap/sophon-deployment.iso
 
- ── Deploy (needs nothing external) ────────────────────────────────
-   artifacts/  ──fuse-nfs──▶  /export/containers  ──podman load──▶ Portainer
-   artifacts/  ──────────── Portainer /docker/images/load ───────▶ everything else
+ ── Bootstrap (management only) ───────────────────────────────────
+   two ISOs ── Proxmox virtual CDs ──▶ blank InfraVM
+   live installer ──▶ persistent CoreOS, project, archives ── reboot
+   host bootstrap ──▶ rootless Portainer and offline runner image
+
+ ── Services (local InfraVM runner) ───────────────────────────────
+   local artifacts/ ── Portainer /docker/images/load ──▶ remaining services
 ```
 
-Prestage is `roles/prestage`, included by `site.yml` before anything is
+Prestage is `roles/prestage`, included by `bootstrap.yml` before anything is
 provisioned and wrapped by `prestage.yml` for standalone use. It stats every
-artifact it owns and does nothing at all when they are all present — including
-the one `git` clone that needs egress. That is what lets Deploy invoke it
-unconditionally without breaking a disconnected site: carry `artifacts/` in and
-the role is a no-op. See
+artifact it owns, verifies the cached CoreOS ISO and rebuilds the local bundle.
+With a complete valid cache it does not access the network or rebuild the
+runner/helper. Carry the matching project and complete `artifacts/` cache to a
+disconnected laptop. See
 [ADR-0001](adr/0001-air-gapped-a-supported-deployment-mode.md).
 
 Prestage writes everything into `artifacts/`. Deploy uses two transports,
 split by bootstrap order:
 
-- **Portainer's own image tar** goes onto the NFS export. The Controller mounts
-  `/export` with `fuse-nfs`, vendored from source in [flake.nix](../flake.nix)
-  precisely so this works without root. InfraVM's `sophon-init.service`
-  `podman load`s it at first boot. Portainer cannot deliver itself.
+- **Portainer's own image tar** is copied from the Sophon ISO to persistent
+  InfraVM storage, then loaded by the host bootstrap. Portainer cannot deliver itself.
 - **Every other image** is POSTed to Portainer's Docker-API proxy at
   `/api/endpoints/<id>/docker/images/load` immediately before the stack that
   needs it. This runs on every play, so bumping a tag or rebuilding an image
@@ -103,17 +117,19 @@ The second transport lives in `roles/portainer_stack`: each role passes a
 `*_image_tars` list, the role `stat`s every path and fails naming the missing
 file before it touches the stack. Compose files set `pull_policy: never`, so a
 gap in the artifact set cannot be papered over by a silent registry pull. See
-[ADR-0005](adr/0005-artifacts-reach-the-site-over-a-fuse-mounted-nfs-export.md).
+[ADR-0013](adr/0013-two-iso-infravm-installation.md).
 
 ## Deployment order and why it is that order
 
-`site.yml` runs these roles in sequence:
+`bootstrap.yml` and `site.yml` have separate task graphs:
 
 ```
-proxmox → nfs → infravm → coredns → traefik → openldap → keycloak → gitea → kopia
+Bootstrap: prestage → proxmox → ownership guard → blank InfraVM + two ISOs
+Console:   offline installation → reboot → host bootstrap → controller wizard
+Services:  Portainer → coredns → traefik → openldap → keycloak → gitea
 ```
 
-The first three build the substrate. The last six are a dependency chain where
+Bootstrap builds the substrate. The service roles are a dependency chain where
 each link is load-bearing for everything after it:
 
 ```
@@ -142,12 +158,14 @@ jobs:
 
 CoreDNS deliberately binds only those two addresses so it does not collide with
 aardvark-dns on the bridge address. Fedora CoreOS's systemd-resolved stub
-listener is disabled in the Ignition config for the same reason.
+listener is disabled by installed host configuration for the same reason.
 
 Containers talking to each other do *not* go through CoreDNS — aardvark-dns
 handles that, and it forwards anything it does not own to CoreDNS. So CoreDNS
-is not "just a nice-to-have zone server"; it is the host resolver, aardvark's
-upstream, and the thing that makes every FQDN in the chain above resolvable.
+is not "just a nice-to-have zone server"; it is aardvark's upstream and makes
+every service FQDN resolvable inside the shared network. Host bootstrap
+creates or updates that network's DNS setting to InfraVM's address; the host
+itself retains the installation's upstream resolver.
 
 CoreDNS also runs a custom build — `coredns-dockerdiscovery`, built during
 Prestage — which watches container labels and does two things with them:
@@ -155,8 +173,20 @@ publishes zone records, and synchronises Cloudflare tunnel ingress rules.
 
 The Controller has to resolve `<domain>` too, and it must resolve it to
 `infravm_ip` rather than to a tunnel hostname, or the Keycloak configuration
-step will be talking to the wrong endpoint. See
+step will be talking to the wrong endpoint. After the operator supplies the
+domain in Phase 2, the service playbook refreshes the domain apex and known
+service names in a marked block inside the runner's `/etc/hosts`, so its first run
+does not depend on CoreDNS already being available. The host resolver and
+other clients remain unchanged. See
 [ADR-0007](adr/0007-controller-resolves-service-names-through-coredns.md).
+
+The bootstrap ISO and InfraVM boot configuration do not carry the domain.
+Traefik's Phase 2 labels declare Portainer's hostname router, preserving DNS
+discovery, while its file provider supplies the backend `http://portainer:9000`
+on the shared proxy network. The separate Portainer API on InfraVM port 9443
+remains available before Traefik is deployed.
+Traefik retains Podman's resolver for its container-name backends. Only its
+ACME DNS-01 checks use the explicitly configured public resolvers.
 
 ## Certificates
 
@@ -199,22 +229,18 @@ protected ([ADR-0009](adr/0009-service-state-is-reconstructible-or-irreplaceable
 
 | Kind | Examples | Protection |
 |---|---|---|
-| **Generated** | SSH keys and other generated deployment artifacts | `artifacts/`, on the Controller |
+| **Generated** | Deployment artifacts and runtime state | Persistent InfraVM project |
 | **Reconstructible** | Keycloak realm config, Traefik routers | Re-run the playbook |
-| **Irreplaceable** | Gitea repositories, LDAP entries, `acme.json` | Kopia snapshot |
+| **Irreplaceable** | Gitea repositories, LDAP entries, `acme.json` | Operator-managed backup; Kopia is deferred |
 
 Passwords are operator inputs, supplied through the environment or Ansible
 overrides and retained in the operator's password manager. They are not generated
 or persisted as controller password files; see
 [credentials](preconditions.md#credentials).
 
-Kopia backs up `/source` — the `kopia_backups` volume — to an encrypted
-repository reachable over SFTP on the NFS VM at `/export/kopia/repo`. Services
-holding irreplaceable state are expected to write dumps into
-`/var/mnt/nfs/backups/<service>/` for Kopia to pick up.
-
-Note that the backup target lives on the NFS VM, on the same hypervisor. That
-protects against service-level loss, not against losing the Proxmox host.
+The retained legacy Kopia/NFS roles are not part of the normal task graph and
+do not constitute configured backup protection. A later opt-in backup workflow
+must address dumps, repository credentials and failure-domain separation.
 
 ## Egress
 

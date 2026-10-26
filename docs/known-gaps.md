@@ -34,27 +34,26 @@ independently. A reference shaped differently from the others — a bare
 `postgres:16-alpine`, say, or a digest pin — produces two different filenames
 and the mismatch shows up as a missing file. — ADR-0005
 
-**The fuse mount is never unmounted.** [roles/nfs/tasks/main.yml](../roles/nfs/tasks/main.yml)
+**Legacy NFS-only role: the fuse mount is never unmounted.** [roles/nfs/tasks/main.yml](../roles/nfs/tasks/main.yml)
 creates a tempdir, mounts into it, copies, and leaves it mounted for the life
-of the run.
+of the run. The current installation copies artifacts from the Sophon ISO to
+InfraVM's local disk and does not invoke this role.
 
 ## Address discovery
 
-**`arp-scan` is installed on the Proxmox node at runtime.**
+**Legacy vnet discovery installs `arp-scan` on the Proxmox node at runtime.**
 [roles/vnet/tasks/main.yml](../roles/vnet/tasks/main.yml) runs
 `apt-get update -qq && apt-get install -qq -y arp-scan` on the hypervisor. This
 requires internet access on the Proxmox host, mutates the hypervisor as a side
 effect of an unrelated play, and swallows its own failure with `;` and
 `2>/dev/null` — so on a disconnected host `arp-scan` is silently absent and
-discovery silently returns nothing. — ADR-0001, ADR-0011
-
-**Addresses are discovered rather than supplied.**
-`nfs_ip` and `infravm_ip` should be operator inputs, prompted, validated and
-persisted. A powered-off VM's address looks free to ARP scanning. — ADR-0011
+discovery silently returns nothing. The current installer prompts for explicit
+network settings at the live console and does not invoke this role.
+— ADR-0001, ADR-0013
 
 **`proxmox_airgapped` is declared but never branched on.**
 [roles/proxmox/defaults/main.yml](../roles/proxmox/defaults/main.yml) defines
-it, `site.yml` documents it, and no task reads it. Remove it. — ADR-0001
+it, and no task reads it. Remove it. — ADR-0001
 
 ## Generated state
 
@@ -64,16 +63,18 @@ or written; existing deployments must
 [migrate their existing values](preconditions.md#existing-deployments).
 
 **`artifacts/` is not a Kopia source.**
-It holds SSH keys and other private deployment state (and may still contain
-legacy password files), and nothing backs it up. — ADR-0008, ADR-0009
+It may hold legacy SSH keys and other private deployment state, and nothing
+backs it up. Backups are deferred in the current two-ISO workflow.
+— ADR-0008, ADR-0009, ADR-0013
 
 ## Service state
 
-**Kopia snapshots an empty tree.**
+**Legacy Kopia configuration snapshots an empty tree.**
 The `/var/mnt/nfs/backups/<service>/` dump contract is documented in
 [roles/kopia/README.md](../roles/kopia/README.md) and implemented by no service.
-Gitea, OpenLDAP and Postgres each need a dump sidecar. As it stands the backup
-system runs, reports success, and protects nothing. — ADR-0009
+Gitea, OpenLDAP and Postgres each need a dump sidecar. If invoked, the legacy
+backup system can report success while protecting nothing. The normal workflow
+does not deploy Kopia; backup design is deferred. — ADR-0009, ADR-0013
 
 ## Naming
 
@@ -86,8 +87,8 @@ system runs, reports success, and protects nothing. — ADR-0009
 **CoreDNS forwards to `9.9.9.9` and `1.1.1.1`.**
 [roles/coredns/templates/docker-compose.yml.j2](../roles/coredns/templates/docker-compose.yml.j2)
 hardcodes public resolvers. With no egress every non-local lookup stalls until
-timeout. `vnet_dns` is already discovered from the Proxmox network
-configuration and is the correct forwarder. — ADR-0006
+timeout. `vnet_dns` is now an explicit bootstrap input and is the correct
+forwarder. — ADR-0006
 
 **No NTP source on InfraVM.**
 Fedora CoreOS with no egress cannot reach the default NTP pool and will drift.
@@ -106,13 +107,6 @@ privileges and no error. Make the licence key a hard requirement. — ADR-0010
 
 ## Dead code
 
-- `infravm_cloudflared_tunnel_token` and `infravm_cloudflared_image` are
-  declared in [roles/infravm/defaults/main.yml](../roles/infravm/defaults/main.yml)
-  and never used. The working tunnel integration lives in the `coredns` role.
-- [site.yml](../site.yml) has a commented-out `infravm_ansible_host`
-  tunnel-or-IP switch.
 - [roles/openldap/tasks/main.yml](../roles/openldap/tasks/main.yml) has a
   commented-out task.
 - CoreDNS and Traefik compose templates have commented-out health checks.
-- [site.yml](../site.yml) header comments still describe the three-phase
-  `nfs-upload.yml` workflow, which does not exist.

@@ -1,6 +1,15 @@
 # Tailscale for the Deployment Controller
 
-The deployment web server and Ansible need both routed access to the site and
+> **Optional legacy connectivity reference, not an installer requirement.**
+> With the [two-ISO handoff](docs/adr/0013-two-iso-infravm-installation.md),
+> the bootstrap laptop needs only Proxmox management access. Service deployment
+> runs inside a local container on InfraVM, primarily from its console.
+> Operators choose any additional access; Sophon does not configure Tailscale, subnet advertisements,
+> VPNs, tunnels, or access routes. The examples below describe one possible
+> existing setup, not steps that new deployments must follow.
+
+The following examples describe the older remote-controller arrangement, not
+the new console installer. A remote service client needs routed site access and
 DNS resolution through the site's CoreDNS. Tailscale does not have to run in
 the same environment as Ansible: Windows can provide connectivity and DNS to
 WSL. Starting Tailscale only inside a devcontainer, however, does not install

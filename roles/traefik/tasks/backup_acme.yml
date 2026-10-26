@@ -40,6 +40,9 @@
     dest: "{{ _traefik_acme_dl_tar.path }}"
   register: _traefik_acme_dl
   changed_when: false
+  until: _traefik_acme_dl.status in [200, 404]
+  retries: 10
+  delay: 2
 
 - name: Skip acme.json backup (not yet present in container)
   ansible.builtin.debug:

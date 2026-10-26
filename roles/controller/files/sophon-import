@@ -1,0 +1,190 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+mkdir -p /var/lib/sophon
+exec 9>/var/lib/sophon/import.lock
+flock -n 9 || exit 0
+touch /var/log/sophon-import.log
+chown root:operator /var/log/sophon-import.log
+chmod 640 /var/log/sophon-import.log
+exec >> /var/log/sophon-import.log 2>&1
+echo "Starting Sophon import: $(date -u)"
+marker=sophon-controller-v1
+state=/var/lib/sophon
+media=/media/sophon-deploy
+finish() {
+    result=$?
+    if [ "$result" -ne 0 ]; then
+        rm -f "$state/controller-ready"
+        printf 'Import failed (exit %s); see /var/log/sophon-import.log\n' "$result" > "$state/controller-failed"
+        echo "Import failed with exit $result"
+    fi
+    if mountpoint -q "$media"; then umount "$media" || true; fi
+    exit "$result"
+}
+trap finish EXIT
+trap 'exit 1' HUP INT TERM
+rm -f "$state/controller-failed" "$state/controller-ready"
+test "$(cat /etc/sophon-controller-marker)" = "$marker"
+test -f /etc/sophon/controller-ip
+test -f /etc/sophon/controller-network
+portainer_tar=$(cat /etc/sophon/portainer-tar)
+case "$portainer_tar" in
+    ''|*[!A-Za-z0-9_.-]*|.*) echo "Invalid Portainer artifact filename"; exit 1 ;;
+esac
+test -b /dev/vdb
+mkdir -p /export
+
+blank_checked=no
+if [ ! -s "$state/data-uuid" ]; then
+    test "$(cat "$state/allow-data-format")" = "$marker"
+    # No signature AND every byte zero: never mistake an unrecognized data disk for blank.
+    test -z "$(wipefs --no-act --noheadings --output TYPE /dev/vdb)"
+    cmp -n "$(blockdev --getsize64 /dev/vdb)" /dev/vdb /dev/zero
+    blank_checked=yes
+    cat /proc/sys/kernel/random/uuid > "$state/data-uuid"
+fi
+uuid=$(cat "$state/data-uuid")
+if [ -z "$(blkid -s UUID -o value /dev/vdb || true)" ]; then
+    test "$(cat "$state/allow-data-format")" = "$marker"
+    test -z "$(wipefs --no-act --noheadings --output TYPE /dev/vdb)"
+    # Repeat only on resume, not twice for the same 100 GiB blank disk.
+    if [ "$blank_checked" != yes ]; then
+        cmp -n "$(blockdev --getsize64 /dev/vdb)" /dev/vdb /dev/zero
+    fi
+    mkfs.ext4 -U "$uuid" -L sophon-data /dev/vdb
+fi
+test "$(blkid -s UUID -o value /dev/vdb)" = "$uuid"
+test "$(blkid -s TYPE -o value /dev/vdb)" = ext4
+fstab_line="UUID=$uuid /export ext4 defaults,noatime 0 2"
+if awk '$2 == "/export" {found=1} END {exit !found}' /etc/fstab; then
+    grep -Fqx "$fstab_line" /etc/fstab
+else
+    printf '%s\n' "$fstab_line" >> /etc/fstab
+fi
+if ! mountpoint -q /export; then mount /export; fi
+test "$(findmnt --mountpoint /export --noheadings --output UUID)" = "$uuid"
+if [ ! -f /export/.sophon-controller-data ]; then
+    test "$(cat "$state/allow-data-format")" = "$marker"
+    printf '%s\n' "$marker" > /export/.sophon-controller-data
+fi
+test "$(cat /export/.sophon-controller-data)" = "$marker"
+rm -f "$state/allow-data-format"
+chmod 755 /export
+mkdir -p /export/containers-storage
+chmod 700 /export/containers-storage
+rc-service sophon-podman start
+
+if [ ! -f /export/sophon/.sophon-import-complete ]; then
+    iso=$(blkid -L SOPHON_DEPLOY)
+    test "$(blkid -s TYPE -o value "$iso")" = iso9660
+    mount -o ro,nosuid,nodev,noexec "$iso" "$media"
+    # Validate coverage as well as hashes. No traversal, symlinks, missing files,
+    # generated private keys, or unchecked payloads may enter the persistent tree.
+    python3 - "$media" <<'PY'
+import hashlib
+from pathlib import Path, PurePosixPath
+import re
+import sys
+
+root = Path(sys.argv[1])
+for name in ("project", "runner.tar", "SHA256SUMS"):
+    if (root / name).is_symlink():
+        raise ValueError("Unsupported bundle entry")
+if not (root / "project").is_dir() or not (root / "runner.tar").is_file():
+    raise ValueError("Missing bundle payload")
+expected = {"runner.tar"}
+for path in (root / "project").rglob("*"):
+    if path.is_symlink() or not (path.is_dir() or path.is_file()):
+        raise ValueError("Unsupported bundle entry")
+    if path.is_file():
+        expected.add(path.relative_to(root).as_posix())
+if "project/artifacts/kopia/id_ed25519" in expected:
+    raise ValueError("Generated Kopia keys must never be distributed on an ISO")
+entries = {}
+for line in (root / "SHA256SUMS").read_text().splitlines():
+    match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *](.+)", line)
+    if not match:
+        raise ValueError("Invalid checksum manifest")
+    digest, name = match.groups()
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("Unsafe checksum path")
+    name = path.as_posix()
+    if name in entries:
+        raise ValueError("Duplicate checksum path")
+    entries[name] = digest.lower()
+if set(entries) != expected:
+    raise ValueError("Checksum manifest does not cover the entire bundle")
+for name, digest in entries.items():
+    with (root / name).open("rb") as source:
+        actual = hashlib.file_digest(source, "sha256").hexdigest()
+    if actual != digest:
+        raise ValueError("Checksum mismatch: " + name)
+PY
+    test -f "$media/project/deployment.py"
+    test -f "$media/project/site.yml"
+    test -f "$media/project/site.json"
+    test -s "$media/project/artifacts/containers/$portainer_tar"
+    # Never overwrite a persistent deployment or its generated state on resume.
+    test ! -e /export/sophon
+    rm -rf /export/.sophon-import-project
+    mkdir /export/.sophon-import-project
+    cp -a "$media/project/." /export/.sophon-import-project/
+    podman load --input "$media/runner.tar"
+    podman image exists sophon-nix-runner:latest
+    printf '%s\n' "$marker" > /export/.sophon-import-project/.sophon-import-complete
+    sync
+    mv /export/.sophon-import-project /export/sophon
+fi
+test "$(cat /export/sophon/.sophon-import-complete)" = "$marker"
+chmod 700 /export/sophon
+test -f /export/sophon/site.json
+podman image exists sophon-nix-runner:latest
+mkdir -p /export/containers
+chmod 755 /export/containers
+source_tar="/export/sophon/artifacts/containers/$portainer_tar"
+test -s "$source_tar"
+if [ -e "/export/containers/$portainer_tar" ]; then
+    cmp -s "$source_tar" "/export/containers/$portainer_tar"
+else
+    ln "$source_tar" "/export/containers/$portainer_tar"
+fi
+chmod 644 "/export/containers/$portainer_tar"
+
+# The Kopia contract is artifacts/kopia/{id_ed25519,known_hosts} in the project.
+keys=/export/sophon/artifacts/kopia
+mkdir -p "$keys"
+chmod 700 "$keys"
+if [ ! -s "$keys/id_ed25519" ]; then
+    ssh-keygen -q -t ed25519 -N '' -C kopia@sophon -f "$keys/id_ed25519"
+fi
+chmod 600 "$keys/id_ed25519"
+ssh-keygen -y -f "$keys/id_ed25519" > "$keys/id_ed25519.pub"
+if ! id kopia >/dev/null 2>&1; then
+    addgroup -S kopia
+    adduser -D -S -G kopia -s /bin/sh -h /home/kopia kopia
+fi
+sed -i 's|^kopia:[^:]*:|kopia:*:|' /etc/shadow
+mkdir -p /home/kopia/.ssh /export/kopia/repo
+chmod 700 /home/kopia/.ssh /export/kopia /export/kopia/repo
+printf 'restrict %s\n' "$(cat "$keys/id_ed25519.pub")" > /home/kopia/.ssh/authorized_keys
+chmod 600 /home/kopia/.ssh/authorized_keys
+chown -R kopia:kopia /home/kopia/.ssh /export/kopia
+ssh-keygen -A
+awk -v host="$(cat /etc/sophon/controller-ip)" '{print host " " $1 " " $2}' \
+    /etc/ssh/ssh_host_*_key.pub > "$keys/known_hosts"
+chmod 600 "$keys/known_hosts"
+rc-service sshd restart
+network=$(python3 -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))' \
+    "$(cat /etc/sophon/controller-network)")
+printf '/export %s(rw,sync,no_subtree_check,no_root_squash,insecure)\n' "$network" > /etc/exports
+rc-service rpcbind start
+rc-service nfs restart
+exportfs -ra
+sync
+printf '%s\n' "$marker" > "$state/controller-ready.new"
+mv "$state/controller-ready.new" "$state/controller-ready"
+echo "Sophon Controller ready: $(date -u)"

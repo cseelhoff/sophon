@@ -23,17 +23,19 @@ proxmox_port: "{{ lookup('env', 'SOPHON_PROXMOX_PORT') | default(8006, true) | i
 proxmox_node: "{{ lookup('env', 'SOPHON_PROXMOX_NODE') | default('proxmox', true) }}"
 proxmox_password: "{{ lookup('env', 'SOPHON_PROXMOX_PASSWORD') | default('', true) }}"
 proxmox_iso_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_ISO_STORAGE') | default('local', true) }}"
+proxmox_disk_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_DISK_STORAGE') | default('local-lvm', true) }}"
 
 domain_name: "{{ lookup('env', 'SOPHON_DOMAIN') | default('', true) }}"
 traefik_acme_email: "{{ lookup('env', 'SOPHON_ACME_EMAIL') | default('admin@example.com', true) }}"
 coredns_cf_token: "{{ lookup('env', 'SOPHON_CF_TOKEN') | default('', true) }}"
 
-# Empty means "discover it": the vnet role fills these in from the Proxmox SDN
-# definition and the free addresses in the subnet.
+# Phase 1 needs only bridge/VLAN. The live-console installer collects guest
+# networking; the installed runner receives the resulting IP and upstream DNS.
 vnet_interface: "{{ lookup('env', 'SOPHON_VNET_INTERFACE') | default('vmbr0', true) }}"
 vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
 vnet_gateway: "{{ lookup('env', 'SOPHON_VNET_GATEWAY') | default('', true) }}"
 vnet_cidr: "{{ lookup('env', 'SOPHON_VNET_CIDR') | default('', true) }}"
+vnet_dns: "{{ lookup('env', 'SOPHON_VNET_DNS') | default('', true) }}"
 nfs_ip: "{{ lookup('env', 'SOPHON_NFS_IP') | default('', true) }}"
 infravm_ip: "{{ lookup('env', 'SOPHON_INFRAVM_IP') | default('', true) }}"
 
@@ -72,7 +74,7 @@ gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(porta
 kopia_admin_password: "{{ lookup('env', 'SOPHON_KOPIA_ADMIN_PASSWORD') | default(portainer_admin_password, true) }}"
 kopia_repository_password: "{{ lookup('env', 'SOPHON_KOPIA_REPOSITORY_PASSWORD') | default(portainer_admin_password, true) }}"
 
-# Tarball filename for prestage / NFS upload / infravm boot loader.
+# Tarball filename for prestage and InfraVM's offline host bootstrap.
 # Mirrors the naming convention in prestage.yml:
 #   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.41.0.tar
 portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
@@ -85,7 +87,7 @@ sophon_containers_dir: "{{ playbook_dir }}/artifacts/containers"
 # -----------------------------------------------------------------------------
 # Portainer URL (used by infravm, coredns, portainer_stack, keycloak roles)
 # -----------------------------------------------------------------------------
-# Addressed by IP: the Controller has direct vnet access (ADR-0002), and at this
+# Addressed by IP: the Controller runs locally on InfraVM (ADR-0013), and at this
 # point in the run no DNS, Traefik or sync sidecar exists to resolve a name.
 # End users still reach portainer.<domain> via Traefik once it is up.
 infravm_portainer_port: 9443
@@ -118,7 +120,7 @@ infravm_portainer_url: "https://{{ infravm_ip | default('') }}:{{ infravm_portai
 #   - set nfs_provision_kopia_user: false  (skips the bundled provisioning)
 #   - populate kopia_ssh_keyfile + kopia_known_hosts_file out-of-band
 #   - override kopia_sftp_host / kopia_sftp_path / kopia_sftp_username
-kopia_enabled: true
+kopia_enabled: false
 kopia_sftp_host: "{{ nfs_ip }}"
 kopia_sftp_port: 22
 kopia_sftp_username: "kopia"

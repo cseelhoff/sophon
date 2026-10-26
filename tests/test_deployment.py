@@ -19,7 +19,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from deployment import STAGES, FIELDS, CELLS, DashboardServer, application, load_diagram, new_control, shell_command, trace_environment
+from deployment import STAGES, FIELDS, CELLS, PHASE_STAGES, DashboardServer, application, load_diagram, new_control, phase_fields, shell_command, trace_environment
 
 
 def test_diagram():
@@ -36,11 +36,11 @@ def test_diagram():
   assert len(mapped) == len(set(mapped))
   assert all(cell in labels for cell in mapped)
   assert {labels[cell] for cell in CELLS['prestage']} == {
-    'alpine-nfs.qcow2', 'portainer.tar', 'coredns.tar', 'openldap.tar',
+    'portainer.tar', 'coredns.tar', 'openldap.tar',
     'traefik.tar', 'keycloak.tar', 'gitea.tar', 'postgres.tar',
   }
   assert [labels[cell] for cell in CELLS['proxmox']] == ['2. Proxmox Prod Cluster']
-  assert [labels[cell] for cell in CELLS['infravm']] == ['4. InfraVM', '5. Portainer', 'coreos.qcow2']
+  assert [labels[cell] for cell in CELLS['infravm']] == ['4. InfraVM', '5. Portainer']
   assert [labels[cell] for cell in CELLS['kopia']] == ['11. Kopia']
   untracked = {label for cell, label in labels.items() if cell not in mapped}
   assert {'gitea.sql', 'coredns.yml', 'cloudflared.tar', 'LDAP Backup'} <= untracked
@@ -278,7 +278,7 @@ def test_startup_failure():
   with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     result = subprocess.run(
-      [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', temporary, '--', 'site.yml'],
+      [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', temporary, '--', 'bootstrap.yml'],
       env=dict(os.environ, PATH=temporary, SOPHON_PROXMOX_PASSWORD='PRIVATE_STARTUP_PASSWORD'),
       cwd=ROOT, capture_output=True, text=True, timeout=10)
     assert result.returncode == 127
@@ -294,7 +294,8 @@ def test_startup_failure():
 def test_vm_network_config():
   tasks = []
   for role in ('nfs', 'infravm'):
-    remaining = list(yaml.safe_load((ROOT / f'roles/{role}/tasks/main.yml').read_text()))
+    filename = 'bootstrap.yml' if role == 'infravm' else 'main.yml'
+    remaining = list(yaml.safe_load((ROOT / f'roles/{role}/tasks/{filename}').read_text()))
     networks = []
     while remaining:
       task = remaining.pop()
@@ -328,7 +329,8 @@ def test_gui_settings():
       with urlopen(url + 'config.json', timeout=5) as response:
         config = json.load(response)
       token = config['token']
-      assert config['cells'] == CELLS
+      assert config['phase'] == 'bootstrap'
+      assert config['cells'] == {key: CELLS[key] for key in PHASE_STAGES['bootstrap']}
       assert config['labels'] == load_diagram()[1]
       with urlopen(url + 'diagram.svg', timeout=5) as response:
         assert response.headers['Content-Type'] == 'image/svg+xml'
@@ -344,7 +346,8 @@ def test_gui_settings():
         assert response.headers['Cache-Control'] == 'no-store'
         settings = json.load(response)
       fields = {field['name']: field for field in settings['fields']}
-      for name, definition in FIELDS.items():
+      assert fields.keys() == phase_fields('bootstrap').keys()
+      for name, definition in phase_fields('bootstrap').items():
         assert fields[name]['required'] == definition[4]
         if definition[2] == 'password' and name != 'SOPHON_PROXMOX_PASSWORD':
           assert fields[name]['value'] == ''
@@ -384,7 +387,9 @@ def test_gui_deploy():
     environment.update(PATH=str(directory) + os.pathsep + os.environ['PATH'],
       SOPHON_PROXMOX_HOST='192.0.2.10', SOPHON_PROXMOX_PASSWORD='INHERITED_PRIVATE_PASSWORD',
       SOPHON_DOMAIN='example.test', SOPHON_VNET_GATEWAY='192.0.2.1', SOPHON_VNET_CIDR='24',
-      SOPHON_NFS_IP='192.0.2.2', SOPHON_INFRAVM_IP='192.0.2.3')
+      SOPHON_NFS_IP='192.0.2.2', SOPHON_INFRAVM_IP='192.0.2.3', SOPHON_VNET_DNS='192.0.2.1',
+      SOPHON_CONTROLLER_PASSWORD='PRIVATE_CONTROLLER_PASSWORD',
+      SOPHON_CONTROLLER_SSH_PUBLIC_KEY='ssh-ed25519 AAAATEST public@example')
     control = new_control(environment)
 
     def request(path, values=None, **overrides):
@@ -410,17 +415,14 @@ def test_gui_deploy():
         assert request(endpoint, {'SOPHON_NFS_IP': '192.0.2.3'})[0] == 400
         assert request(endpoint, {'SOPHON_PROXMOX_PASSWORD': ''})[0] == 400
         assert request(endpoint, CONTENT_LENGTH='999999')[0] == 413
-        for name, field in FIELDS.items():
+        for name, field in phase_fields('bootstrap').items():
           if field[2] == 'password' and field[4]:
             for value in ('', '   '):
               status, body = request(endpoint, {name: value})
               assert status == 400 and name.encode() in body, body
-        status, body = request(endpoint, {'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 11})
-        assert status == 400 and b'at least 12' in body
-        for name in ('SOPHON_GITEA_DB_PASSWORD', 'SOPHON_KOPIA_ADMIN_PASSWORD', 'SOPHON_KOPIA_REPOSITORY_PASSWORD'):
-          assert request(endpoint, {name: '   '})[0] == 400
+        assert request(endpoint, {'SOPHON_PORTAINER_ADMIN_PASSWORD': 'not-for-bootstrap'})[0] == 400
       assert not control['processes'] and not (directory / 'deploy.log').exists()
-      assert request('/command', {'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 12})[0] == 200
+      assert request('/command')[0] == 200
       status, body = request('/command')
       assert status == 200 and b'INHERITED_PRIVATE_PASSWORD' in body
       assert not control['processes'] and not (directory / 'status.json').exists()
@@ -434,7 +436,7 @@ def test_gui_deploy():
                      if 'PASSWORD' in name or 'SECRET' in name}
       credentials['SOPHON_PROXMOX_PASSWORD'] = 'FORM_PRIVATE_PASSWORD'
       assert received == {'host': '192.0.2.20', 'password_matches': True,
-                          'credentials': credentials, 'args': ['site.yml']}, received
+                          'credentials': credentials, 'args': ['bootstrap.yml']}, received
       status, body = request('/status.json')
       assert status == 200
       assert b'PRIVATE_PASSWORD' not in body and b'PRIVATE_ANSIBLE_OUTPUT' not in body
@@ -452,23 +454,25 @@ def test_gui_deploy():
 
 
 def test_site_markers():
-  tasks = yaml.safe_load((ROOT / 'site.yml').read_text())[0]['tasks']
-  markers = [tag.removeprefix('sophon_stage_') for task in tasks
-             for tag in task.get('tags', []) if tag.startswith('sophon_stage_')]
-  assert markers == [*STAGES, 'end'], markers
+  for phase, filename in (('services', 'site.yml'), ('bootstrap', 'bootstrap.yml')):
+    tasks = yaml.safe_load((ROOT / filename).read_text())[0]['tasks']
+    markers = [tag.removeprefix('sophon_stage_') for task in tasks
+               for tag in task.get('tags', []) if tag.startswith('sophon_stage_')]
+    assert markers == [*PHASE_STAGES[phase], 'end'], markers
 
 
 def test_credential_inputs():
   required = [
-    'proxmox_password', 'portainer_admin_password', 'keycloak_admin_password',
+    'portainer_admin_password', 'keycloak_admin_password',
     'keycloak_db_password', 'keycloak_portainer_client_secret', 'gitea_admin_password',
     'openldap_admin_password', 'openldap_example_user_password', 'openldap_example_admin_password',
   ]
-  shared = ['gitea_db_password', 'kopia_admin_password', 'kopia_repository_password']
+  shared = ['gitea_db_password']
   inputs = required + shared
   preflight = yaml.safe_load((ROOT / 'site.yml').read_text())[0]['pre_tasks']
-  assert preflight[0]['loop'] == inputs
-  assert {name for name, field in FIELDS.items() if field[2] == 'password' and field[4]} == {
+  assert preflight[1]['loop'] == inputs
+  preflight = preflight[:3]
+  assert {name for name, field in phase_fields('services').items() if field[2] == 'password' and field[4]} == {
     'SOPHON_' + name.upper() for name in required}
   sources = [ROOT / 'site.yml', ROOT / 'group_vars/all.yml', ROOT / 'tests/test.yml',
              *sorted((ROOT / 'roles').rglob('*.yml'))]
@@ -485,7 +489,8 @@ def test_credential_inputs():
     config.write_text('[defaults]\nstdout_callback=default\n')
     playbook = directory / 'credentials.yml'
     playbook.write_text(json.dumps([{
-      'hosts': 'localhost', 'gather_facts': False, 'pre_tasks': preflight,
+      'hosts': 'localhost', 'gather_facts': False, 'pre_tasks': [
+        dict(task, tags=['always']) for task in preflight],
       'tasks': [
         {'name': 'Check seed usernames remain available outside role scope',
          'ansible.builtin.assert': {'that': [
@@ -501,7 +506,7 @@ def test_credential_inputs():
     }]))
     environment = {name: value for name, value in os.environ.items()
                    if not name.startswith(('SOPHON_', 'ANSIBLE_'))}
-    environment['ANSIBLE_CONFIG'] = str(config)
+    environment.update(ANSIBLE_CONFIG=str(config), SOPHON_DEPLOYMENT_PHASE='services')
     supplied = {name: 'PRIVATE_TEST_' + name for name in required}
     expected = supplied | {name: supplied['portainer_admin_password'] for name in shared}
     exported = {'SOPHON_' + name.upper(): value for name, value in supplied.items()}
@@ -559,10 +564,10 @@ def test_shell_command():
     directory = Path(temporary)
     state = directory / 'trace'
     marker = directory / 'must-not-exist'
-    values = new_control({})['values']
+    values = new_control({}, 'bootstrap')['values']
     values['SOPHON_PROXMOX_PASSWORD'] = f"apostrophe' spaces $HOME $(touch {marker}) `id` ; & \\"
-    values['SOPHON_CF_TOKEN'] = ''
-    environment = dict(os.environ, ANSIBLE_RUN_TAGS='wrong', ANSIBLE_SKIP_TAGS='all', SOPHON_CF_TOKEN='stale')
+    environment = dict(os.environ, ANSIBLE_RUN_TAGS='wrong', ANSIBLE_SKIP_TAGS='all',
+                       SOPHON_CONTROLLER_SSH_PUBLIC_KEY='stale')
     binary = directory / 'ansible-playbook'
     binary.write_text('\n'.join([
       f'#!{sys.executable}', 'import json, os, sys',
@@ -571,15 +576,16 @@ def test_shell_command():
     ]))
     binary.chmod(0o700)
     environment['PATH'] = str(directory) + os.pathsep + os.environ['PATH']
-    command = shell_command(state, values, environment)
-    assert 'ansible-playbook site.yml' in command
+    command = shell_command(state, values, environment, 'bootstrap')
+    assert 'ansible-playbook bootstrap.yml' in command
     assert not state.exists(), 'Generating a command must not create files or launch a process'
     for shell in ('sh', 'bash', 'zsh'):
       result = subprocess.run([shell], input=command, env=environment, capture_output=True, text=True, timeout=10)
       assert result.returncode == 0, result.stderr
       received = json.loads((directory / 'received.json').read_text())
-      assert received['args'] == ['site.yml']
-      assert {name: received['environment'][name] for name in FIELDS} == values
+      assert received['args'] == ['bootstrap.yml']
+      assert received['environment']['SOPHON_DEPLOYMENT_PHASE'] == 'bootstrap'
+      assert {name: received['environment'][name] for name in values} == values
       traced = trace_environment(state, environment)
       for name in ('ANSIBLE_CALLBACK_PLUGINS', 'ANSIBLE_CALLBACKS_ENABLED', 'SOPHON_PROGRESS_FILE', 'ANSIBLE_LOG_PATH'):
         assert received['environment'][name] == traced[name]
@@ -589,6 +595,34 @@ def test_shell_command():
       assert (state / 'ansible.log').stat().st_mode & 0o777 == 0o600
 
 
+def test_service_shell_command():
+  with tempfile.TemporaryDirectory(prefix="sophon service shell ' ") as temporary:
+    directory = Path(temporary)
+    marker = directory / 'must-not-exist'
+    state = directory / 'container-only-state'
+    values = new_control({}, 'services')['values']
+    values['SOPHON_PORTAINER_ADMIN_PASSWORD'] = f"quote' $(touch {marker}) $HOME `id` ; & \\"
+    binary = directory / 'sophon-controller'
+    binary.write_text('\n'.join([
+      f'#!{sys.executable}', 'import json, os, sys',
+      f'with open({str(directory / "received.json")!r}, "w") as output:',
+      '    json.dump({"environment": dict(os.environ), "args": sys.argv[1:]}, output)',
+    ]))
+    binary.chmod(0o700)
+    environment = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH'],
+                       SOPHON_PROXMOX_PASSWORD='DO_NOT_FORWARD')
+    command = shell_command(state, values, environment, 'services')
+    assert 'cd ' not in command and 'ansible-playbook' not in command
+    for shell in ('sh', 'bash', 'zsh'):
+      result = subprocess.run([shell], input=command, env=environment, capture_output=True, text=True, timeout=10)
+      assert result.returncode == 0, result.stderr
+      received = json.loads((directory / 'received.json').read_text())
+      assert received['args'] == ['--run', '--state-dir', str(state)]
+      assert {name: received['environment'][name] for name in values} == values
+      assert 'SOPHON_PROXMOX_PASSWORD' not in received['environment']
+      assert not state.exists() and not marker.exists()
+
+
 def test_shell_trace():
   with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
@@ -596,7 +630,7 @@ def test_shell_trace():
     role = directory / 'roles' / 'fixture' / 'tasks'
     role.mkdir(parents=True)
     (role / 'main.yml').write_text('- ansible.builtin.debug:\n    msg: Local fixture only\n')
-    (directory / 'site.yml').write_text(json.dumps([{
+    (directory / 'bootstrap.yml').write_text(json.dumps([{
       'hosts': 'localhost', 'gather_facts': False,
       'tasks': [{'ansible.builtin.include_role': {'name': 'fixture'}, 'tags': ['sophon_stage_gitea']}],
     }]))
@@ -706,6 +740,7 @@ if __name__ == '__main__':
   test_diagram()
   test_credential_inputs()
   test_shell_command()
+  test_service_shell_command()
   test_shell_trace()
   test_idle_browser_connection()
   test_nfs_recovery()
