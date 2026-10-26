@@ -95,7 +95,7 @@ def check_cloudflare_help(page):
 def check_run_confirmation(page, phase):
     page.get_by_role('button', name='Configure', exact=True).click()
     page.locator('#deploy-button:not([disabled])').wait_for()
-    for field in page.locator('#settings-fields input[required]').all():
+    for field in page.locator('#settings-fields input[required]:enabled').all():
         if not field.input_value():
             field.fill('24' if field.get_attribute('type') == 'number' else 'TEST_NOT_A_REAL_SECRET')
     messages = []
@@ -107,8 +107,50 @@ def check_run_confirmation(page, phase):
     page.once('dialog', cancel)
     page.get_by_role('button', name='Run', exact=True).click()
     assert len(messages) == 1 and 'undefined' not in messages[0], messages
-    assert ('No Proxmox access is used.' in messages[0]) == (phase == 'services')
+    assert ('No hypervisor access is used.' in messages[0]) == (phase == 'services')
     page.get_by_role('button', name='Close', exact=True).click()
+
+
+def check_vcenter_settings(page, report_path):
+    page.get_by_role('button', name='Configure', exact=True).click()
+    provider = page.locator('select[name="SOPHON_HYPERVISOR"]')
+    provider.select_option('vcenter')
+    proxmox = page.locator('input[name="SOPHON_PROXMOX_PASSWORD"]')
+    assert proxmox.is_hidden() and proxmox.is_disabled()
+    assert page.locator('input[name="SOPHON_VNET_INTERFACE"]').is_hidden()
+    values = {
+        'SOPHON_VCENTER_URL': 'https://vcenter.fixture.example',
+        'SOPHON_VCENTER_PASSWORD': 'FIXTURE_MANAGEMENT_SECRET',
+        'SOPHON_VCENTER_DATACENTER': 'DC',
+        'SOPHON_VCENTER_CLUSTER': 'Cluster',
+        'SOPHON_VCENTER_DATASTORE': 'Shared',
+        'SOPHON_VCENTER_NETWORK': 'VLAN51',
+    }
+    for name, value in values.items():
+        field = page.locator(f'input[name="{name}"]')
+        assert field.is_visible() and field.is_enabled()
+        field.fill(value)
+    page.get_by_role('button', name='Generate shell deployment command', exact=True).click()
+    command = page.locator('#shell-command')
+    command.wait_for(state='visible')
+    assert 'SOPHON_HYPERVISOR=vcenter' in command.input_value()
+    assert 'https://vcenter.fixture.example' in command.input_value()
+    page.get_by_role('button', name='Close', exact=True).click()
+    report = json.loads(report_path.read_text())
+    report['hypervisor'] = 'vcenter'
+    report['updated_at'] += 1
+    report['stages']['vcenter'].update(state='completed', ok=1)
+    report_path.write_text(json.dumps(report))
+    page.get_by_role('button', name='vCenter authentication', exact=False).wait_for()
+    assert page.get_by_role('button', name='Proxmox authentication', exact=False).count() == 0
+    page.get_by_role('button', name='Configure', exact=True).click()
+    provider.select_option('proxmox')
+    assert page.locator('input[name="SOPHON_PROXMOX_PASSWORD"]').is_enabled()
+    page.get_by_role('button', name='Close', exact=True).click()
+    report['hypervisor'] = 'proxmox'
+    report['updated_at'] += 1
+    report_path.write_text(json.dumps(report))
+    page.get_by_role('button', name='Proxmox authentication', exact=False).wait_for()
 
 
 def check_startup_error(page, report_path, phase):
@@ -171,7 +213,7 @@ def test_dashboard(phase):
                     if phase == 'bootstrap':
                         assert 'sudo bash /mnt/sophon/install.sh' in page.locator('#phase-note').inner_text()
                     else:
-                        assert 'No Proxmox credentials' in page.locator('#phase-note').inner_text()
+                        assert 'No hypervisor credentials' in page.locator('#phase-note').inner_text()
                     check_hide_tasks(page, report_path, phase)
                     if phase == 'services':
                         check_cloudflare_help(page)
@@ -184,6 +226,8 @@ def test_dashboard(phase):
                         assert page.locator('input[name="SOPHON_DOMAIN"]').count() == 0
                         page.get_by_role('button', name='Close', exact=True).click()
                     check_run_confirmation(page, phase)
+                    if phase == 'bootstrap':
+                        check_vcenter_settings(page, report_path)
                     check_startup_error(page, report_path, phase)
                     assert not errors, errors
                     page.close()

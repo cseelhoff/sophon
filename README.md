@@ -1,12 +1,13 @@
 # Sophon
 
-Sophon provisions a self-contained Fedora CoreOS InfraVM onto Proxmox, then
+Sophon provisions a self-contained Fedora CoreOS InfraVM onto Proxmox or VMware vCenter, then
 deploys DNS, reverse proxy, directory, SSO, and Git services as rootless Podman
 containers managed through Portainer. The Ansible/controller runner is a
 container on InfraVM itself; no early NFS or separate Controller VM is needed.
 
 It is built for internet-connected homelabs but stages every artifact ahead of
-time, so the same playbooks work against a Proxmox host with no egress at all.
+time, so service deployment also works at a site with no egress. Disconnected
+sites must carry pre-issued certificates separately before deploying services.
 
 > **These documents describe the intended design.** The codebase does not yet
 > match it in several places. See [docs/known-gaps.md](docs/known-gaps.md) for
@@ -34,7 +35,7 @@ Connected **Prestage** prepares two complete deployment media:
   offline runner, collections, static installer helper, and container archives.
 
 1. **Bootstrap laptop:** creates InfraVM with a blank disk and both ISOs,
-   using only Proxmox management access; there is no disk-image conversion,
+   using only the selected hypervisor's management access; there is no disk-image conversion,
    QEMU Ignition injection, guest-agent setup, or NFS connection.
 2. **InfraVM console:** the operator installs CoreOS offline, enters guest
    networking and the `core` console password, and reboots; the host bootstrap
@@ -59,8 +60,11 @@ nix develop
 python3 deployment.py --phase bootstrap --serve --port 41327
 ```
 
-Choose **Configure** and supply Proxmox access, ISO/disk storage, bridge/VLAN,
-and VM CPU, memory, and disk size. The displayed minimum disk size is only a
+Choose **Configure**, select **Proxmox** or **VMware vCenter**, and supply the
+selected provider's placement and access settings, plus VM name, CPU, memory,
+and disk size. Proxmox uses ISO/disk storage and bridge/VLAN; vCenter uses a
+datacenter, cluster, shared datastore, and an existing port group whose VLAN is
+already configured. The displayed minimum disk size is only a
 floor; the installer checks actual media size and available space.
 
 Open the new InfraVM's hypervisor console in the live CoreOS environment:
@@ -87,6 +91,12 @@ project is `/var/lib/sophon/project` on the host, `/workspace` in the runner.
 Both ISOs can be detached after installation. Retain credentials in your
 password manager; later reruns require the same existing values.
 
+**No guest internet:** before starting the service wizard, import the separate
+private certificate ISO using the [sneakernet runbook](docs/runbooks/sneakernet-refresh.md).
+Leave the Cloudflare token empty on the disconnected VM. The token remains on
+the connected machine; neither reusable installation ISO contains certificates
+or private keys.
+
 If host setup fails, inspect `journalctl -u sophon-host-bootstrap` and retry
 with `sudo systemctl restart sophon-host-bootstrap`; do not reinstall.
 Portainer also closes uninitialized setup after an idle timeout. If this happens
@@ -108,6 +118,46 @@ If you use custom Ansible overrides such as container image versions during
 Prestage/bootstrap, change the corresponding non-secret project defaults before
 bundling so service deployment uses the same versions.
 Arbitrary `-e` values are deliberately not serialized into the ISO.
+
+### vCenter Phase 1
+
+The dashboard exposes only the selected provider's fields. For a terminal run:
+
+```bash
+export SOPHON_HYPERVISOR=vcenter
+export SOPHON_VCENTER_URL=https://vcenter.example.com
+export SOPHON_VCENTER_USERNAME=administrator@vsphere.local
+read -rsp 'vCenter password: ' SOPHON_VCENTER_PASSWORD; echo
+export SOPHON_VCENTER_PASSWORD
+export SOPHON_VCENTER_DATACENTER=Datacenter
+export SOPHON_VCENTER_CLUSTER=Cluster
+export SOPHON_VCENTER_DATASTORE=SharedDatastore
+export SOPHON_VCENTER_NETWORK=VLAN51-PortGroup
+# Optional: an existing absolute inventory folder; empty uses /Datacenter/vm.
+export SOPHON_VCENTER_FOLDER=/Datacenter/vm
+# Optional: verified CA PEM on this laptop when vCenter uses an internal CA.
+export SOPHON_VCENTER_CA_FILE=/path/to/verified-vcenter-ca.pem
+python3 deployment.py --phase bootstrap -- bootstrap.yml
+```
+
+`govc`, supplied by `nix develop`, uses VMware's APIs for immutable ISO uploads,
+a fresh thin-provisioned disk, VMXNET3 networking, a PVSCSI controller, and two
+CD drives. Boot order is disk then CD, so installation starts from the stock ISO
+on a blank disk and subsequent boots use the installed OS. Confirm the actual
+disk name at the console (normally `/dev/sda` on VMware).
+
+HTTPS verification is always enabled. Validate the internal CA independently
+before using it; do not fetch and blindly trust every certificate in a bundle.
+Credentials are passed to `govc` in its environment, not command-line arguments,
+and persistent `govc` sessions are disabled. vCenter credentials and placement
+settings never enter the service runner or reusable bundle.
+
+An existing VM must have the completed Sophon two-ISO ownership marker and must
+not be a template. It is only started; disks, media, and installed state are not
+rewritten. Ambiguous names and partially configured VMs are rejected for manual
+inspection rather than automatically deleted or adopted. The current diagram
+has no vCenter icon: vCenter authentication is tracked in the stage list without
+highlighting the Proxmox icon.
 
 Phase 2 refreshes service-name entries inside the runner before each deployment,
 so changing the domain in Configure takes effect without restarting the runner.
@@ -398,6 +448,8 @@ python3 tests/test_console.py
 python3 tests/test_installer.py
 python3 tests/test_bundle.py
 python3 tests/test_controller.py
+python3 tests/test_vcenter.py
+python3 tests/test_certificates.py
 # With Playwright and Chromium installed:
 python3 tests/test_dashboard.py
 

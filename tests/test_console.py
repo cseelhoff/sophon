@@ -59,6 +59,19 @@ class ConsoleTests(unittest.TestCase):
             self.assertEqual(console.main(['--dashboard', '--port', '0']), 0)
             run.assert_called_once_with(['--phase', 'services', '--serve', '--port', '0'])
 
+    def test_certificate_refresh_is_explicit_and_console_only(self):
+        with patch.dict(os.environ, service_values(), clear=True), \
+                patch('console.deployment.load_site_settings', return_value={}), \
+                patch('console.deployment.main', return_value=0) as run:
+            self.assertEqual(console.main(['--run', '--refresh-certificates']), 0)
+            run.assert_called_once_with(['--phase', 'services', '--', 'site.yml',
+                                        '--extra-vars', 'traefik_acme_replace_existing=true'])
+            run.reset_mock()
+            with self.assertRaises(SystemExit) as error, contextlib.redirect_stderr(io.StringIO()):
+                console.main(['--dashboard', '--refresh-certificates'])
+            self.assertEqual(error.exception.code, 2)
+            run.assert_not_called()
+
     def test_decline_does_not_deploy(self):
         with patch.dict(os.environ, service_values(), clear=True), \
                 patch('console.deployment.load_site_settings', return_value={}), \

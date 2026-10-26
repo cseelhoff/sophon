@@ -8,6 +8,7 @@
         that:
           - lookup('env', 'SOPHON_DEPLOYMENT_PHASE') == 'services'
           - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
+          - lookup('env', 'SOPHON_VCENTER_PASSWORD') == ''
         fail_msg: "Run sophon-controller on installed InfraVM. Bootstrap is a separate laptop operation."
       tags: [always]
     - name: Validate deployment credentials

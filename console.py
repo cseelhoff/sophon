@@ -16,11 +16,15 @@ def main(argv=None):
     mode.add_argument('--dashboard', action='store_true', help='Open the optional loopback-only dashboard')
     parser.add_argument('--port', type=int, default=41327)
     parser.add_argument('--state-dir', type=Path)
+    parser.add_argument('--refresh-certificates', action='store_true',
+                        help='Replace an existing Traefik certificate store with the validated local handoff')
     options = parser.parse_args(argv)
     if os.environ.get('SOPHON_DEPLOYMENT_PHASE') != 'services':
         parser.error('Start this program using sophon-controller on installed InfraVM.')
     if not 0 <= options.port <= 65535:
         parser.error('--port must be between 0 and 65535')
+    if options.dashboard and options.refresh_certificates:
+        parser.error('--refresh-certificates requires the console wizard or --run, not --dashboard.')
     try:
         for name, value in deployment.load_site_settings().items():
             os.environ.setdefault(name, value)
@@ -62,7 +66,8 @@ def main(argv=None):
             print(f'Configuration rejected: {error}', file=sys.stderr)
             return 2
     os.environ.update(values)
-    return deployment.main(arguments + ['--', 'site.yml'])
+    extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
+    return deployment.main(arguments + ['--', 'site.yml', *extra])
 
 
 if __name__ == '__main__':

@@ -21,10 +21,10 @@ ROOT = Path(__file__).resolve().parent
 SNAPSHOT = (
     'scripts', 'roles', 'group_vars', 'callback_plugins', 'dashboard', 'inventory',
     'ansible.cfg', 'requirements.yml', 'flake.nix', 'flake.lock', 'site.yml',
-    'services.yml', 'bootstrap.yml', 'deployment.py', 'console.py', 'bundle.py', 'sophon.svg',
+    'services.yml', 'bootstrap.yml', 'deployment.py', 'console.py', 'bundle.py', 'certificates.py', 'sophon.svg',
 )
 REQUIRED_FILES = ('ansible.cfg', 'requirements.yml', 'flake.nix', 'site.yml',
-                  'bootstrap.yml', 'deployment.py', 'console.py', 'bundle.py', 'sophon.svg',
+                  'bootstrap.yml', 'deployment.py', 'console.py', 'bundle.py', 'certificates.py', 'sophon.svg',
                   'scripts/install.sh', 'scripts/host-bootstrap.sh', 'scripts/sophon-controller')
 ESSENTIAL_COLLECTIONS = (
     'community.proxmox', 'community.general', 'community.docker', 'ansible.posix',

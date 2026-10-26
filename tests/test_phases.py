@@ -17,6 +17,8 @@ from test_deployment import run_fixture
 def test_phase_settings():
     secrets = {
         'SOPHON_PROXMOX_PASSWORD': 'MANAGEMENT_SECRET',
+        'SOPHON_VCENTER_PASSWORD': 'VCENTER_SECRET',
+        'SOPHON_VCENTER_URL': 'https://management.example',
         'SOPHON_CONTROLLER_PASSWORD': 'LOGIN_SECRET',
         'SOPHON_CF_TOKEN': 'SERVICE_SECRET',
         'SOPHON_DOMAIN': 'phase2.example',
@@ -25,6 +27,8 @@ def test_phase_settings():
     services = new_control(secrets, 'services')
     assert 'SERVICE_SECRET' not in json.dumps(settings_payload(bootstrap))
     assert 'MANAGEMENT_SECRET' not in json.dumps(services)
+    assert 'VCENTER_SECRET' not in json.dumps(services)
+    assert 'management.example' not in json.dumps(services)
     assert 'LOGIN_SECRET' not in json.dumps(services)
     assert 'SOPHON_PROXMOX_HOST' not in phase_fields('services')
     assert 'SOPHON_PORTAINER_ADMIN_PASSWORD' not in phase_fields('bootstrap')
@@ -109,8 +113,8 @@ def test_site_configuration_and_secret_boundary():
 
 def test_bootstrap_preservation():
     bootstrap = yaml.safe_load((ROOT / 'bootstrap.yml').read_text())[0]['tasks']
-    assert bootstrap[2]['ansible.builtin.include_role'] == {'name': 'infravm', 'tasks_from': 'bootstrap'}
-    guard = yaml.safe_load((ROOT / 'roles/infravm/tasks/bootstrap.yml').read_text())
+    assert bootstrap[3]['ansible.builtin.include_role'] == {'name': 'infravm', 'tasks_from': 'bootstrap'}
+    guard = yaml.safe_load((ROOT / 'roles/infravm/tasks/proxmox_bootstrap.yml').read_text())
     infravm = {'name': 'sophon-infravm', 'vmid': 101, 'type': 'qemu', 'node': 'pve'}
     marker = 'sophon-infravm-two-iso-v1'
     cases = [
@@ -145,7 +149,7 @@ def test_domain_deferred_until_services():
     assert not any(name in required for name in (
         'SOPHON_DOMAIN', 'SOPHON_NFS_IP', 'SOPHON_INFRAVM_IP',
         'SOPHON_CONTROLLER_PASSWORD', 'SOPHON_CONTROLLER_SSH_PUBLIC_KEY'))
-    tasks = yaml.safe_load((ROOT / 'roles/infravm/tasks/bootstrap.yml').read_text())
+    tasks = yaml.safe_load((ROOT / 'roles/infravm/tasks/proxmox_bootstrap.yml').read_text())
     config = tasks[3]['block'][-1]['community.proxmox.proxmox_kvm']
     assert not any(name in config for name in ('args', 'ipconfig', 'sshkeys', 'cicustom', 'sata', 'scsi'))
     with tempfile.TemporaryDirectory() as temporary:
@@ -170,7 +174,7 @@ def test_domain_deferred_until_services():
 
 
 def test_existing_immutable_media_are_reused_and_size_checked():
-    tasks = yaml.safe_load((ROOT / 'roles/infravm/tasks/bootstrap.yml').read_text())[3]['block']
+    tasks = yaml.safe_load((ROOT / 'roles/infravm/tasks/proxmox_bootstrap.yml').read_text())[3]['block']
     validation = next(task for task in tasks if task['name'] == 'Validate already uploaded immutable media sizes')
     upload = next(task for task in tasks if task['name'] == 'Upload the unchanged CoreOS live ISO and Sophon artifact ISO')
     coreos = {'volid': 'local:iso/coreos.iso', 'size': 4}

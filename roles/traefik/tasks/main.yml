@@ -5,6 +5,18 @@
 - name: Deploy Traefik
   when: traefik_enabled | default(true)
   block:
+    - name: Validate pre-issued certificates before offline deployment or explicit refresh
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/certificates.py"
+          - --source
+          - "{{ traefik_acme_backup_path }}"
+          - --domain
+          - "{{ domain_name }}"
+      when: coredns_cf_token | default('', true) == '' or traefik_acme_replace_existing | bool
+      changed_when: false
+
     # Pre-deploy: seed traefik_data volume from controller-side acme.json
     # backup if one exists. Avoids re-issuing Let's Encrypt certs on every
     # redeploy and protects against the duplicate-cert rate limit.

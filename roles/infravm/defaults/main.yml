@@ -1,5 +1,5 @@
 ---
-infravm_vm_name: "sophon-infravm"
+infravm_vm_name: "{{ lookup('env', 'SOPHON_INFRAVM_NAME') | default('sophon-infravm', true) }}"
 infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
 infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(8192, true) | int }}"
 infravm_cpu_type: "x86-64-v2-AES"

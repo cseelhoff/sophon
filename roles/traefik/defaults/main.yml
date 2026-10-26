@@ -55,6 +55,7 @@ traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
 # When true and a local backup exists, seed traefik_data BEFORE the stack
 # starts so traefik reuses the existing account + certs instead of issuing new.
 traefik_acme_restore_on_deploy: true
+traefik_acme_replace_existing: false
 
 # When true, snapshot acme.json from the running traefik container after
 # every deploy. Safe no-op (404) until the first cert has been issued.

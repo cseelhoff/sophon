@@ -14,6 +14,7 @@
 
         ansibleEnv = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
           ansible-core
+          cryptography
           proxmoxer
           requests
           websocket-client
@@ -67,6 +68,7 @@
           cloudflared
           gnumake
           go
+          govc
           git
           cacert
           buildah

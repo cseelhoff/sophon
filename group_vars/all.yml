@@ -18,6 +18,17 @@
 # Cloudflare needs only the token: the zone and account ids are read back from
 # the API by the coredns role, which keeps them from going stale when a zone is
 # recreated.
+hypervisor_provider: "{{ lookup('env', 'SOPHON_HYPERVISOR') | default('proxmox', true) }}"
+vcenter_url: "{{ lookup('env', 'SOPHON_VCENTER_URL') }}"
+vcenter_username: "{{ lookup('env', 'SOPHON_VCENTER_USERNAME') | default('administrator@vsphere.local', true) }}"
+vcenter_password: "{{ lookup('env', 'SOPHON_VCENTER_PASSWORD') }}"
+vcenter_ca_file: "{{ lookup('env', 'SOPHON_VCENTER_CA_FILE') | default('', true) }}"
+vcenter_datacenter: "{{ lookup('env', 'SOPHON_VCENTER_DATACENTER') }}"
+vcenter_cluster: "{{ lookup('env', 'SOPHON_VCENTER_CLUSTER') }}"
+vcenter_datastore: "{{ lookup('env', 'SOPHON_VCENTER_DATASTORE') }}"
+vcenter_network: "{{ lookup('env', 'SOPHON_VCENTER_NETWORK') }}"
+vcenter_folder: "{{ lookup('env', 'SOPHON_VCENTER_FOLDER') | default('', true) }}"
+
 proxmox_host: "{{ lookup('env', 'SOPHON_PROXMOX_HOST') | default('', true) }}"
 proxmox_port: "{{ lookup('env', 'SOPHON_PROXMOX_PORT') | default(8006, true) | int }}"
 proxmox_node: "{{ lookup('env', 'SOPHON_PROXMOX_NODE') | default('proxmox', true) }}"

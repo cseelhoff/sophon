@@ -16,12 +16,14 @@ import time
 import uuid
 from wsgiref.simple_server import WSGIServer, make_server
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parent
 STAGES = {
     'prestage': 'Prestage',
     'proxmox': 'Proxmox authentication',
+    'vcenter': 'vCenter authentication',
     'nfs': 'NFS VM (optional)',
     'infravm': 'InfraVM',
     'coredns': 'CoreDNS',
@@ -39,6 +41,7 @@ CELLS = {
         '_SmIZJivoSQWszKZv9Yz-57', '_SmIZJivoSQWszKZv9Yz-62',
     ],
     'proxmox': ['_SmIZJivoSQWszKZv9Yz-3'],
+    'vcenter': [],
     'nfs': ['_SmIZJivoSQWszKZv9Yz-65'],
     'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5'],
     'coredns': ['497KWN3HuOLj0ZWtI1qn-3'],
@@ -49,15 +52,26 @@ CELLS = {
     'kopia': ['Ht_PiSHEylvQ-5aMCYDO-4'],
 }
 FIELDS = {
+    'SOPHON_HYPERVISOR': ('Hypervisor', 'Hypervisor', 'choice', 'proxmox', True),
     'SOPHON_PROXMOX_HOST': ('Host', 'Proxmox', 'host', '', True),
     'SOPHON_PROXMOX_PORT': ('API port', 'Proxmox', 'number', '8006', True),
     'SOPHON_PROXMOX_NODE': ('Node', 'Proxmox', 'text', 'proxmox', True),
     'SOPHON_PROXMOX_ISO_STORAGE': ('ISO storage', 'Proxmox', 'text', 'local', True),
     'SOPHON_PROXMOX_DISK_STORAGE': ('VM disk storage', 'Proxmox', 'text', 'local-lvm', True),
     'SOPHON_PROXMOX_PASSWORD': ('Password', 'Proxmox', 'password', '', True),
+    'SOPHON_VCENTER_URL': ('HTTPS URL', 'vCenter', 'url', '', True),
+    'SOPHON_VCENTER_USERNAME': ('Username', 'vCenter', 'text', 'administrator@vsphere.local', True),
+    'SOPHON_VCENTER_PASSWORD': ('Password', 'vCenter', 'password', '', True),
+    'SOPHON_VCENTER_CA_FILE': ('CA PEM file (on bootstrap laptop)', 'vCenter', 'text', '', False),
+    'SOPHON_VCENTER_DATACENTER': ('Datacenter', 'vCenter', 'text', '', True),
+    'SOPHON_VCENTER_CLUSTER': ('Cluster', 'vCenter', 'text', '', True),
+    'SOPHON_VCENTER_DATASTORE': ('Shared datastore', 'vCenter', 'text', '', True),
+    'SOPHON_VCENTER_NETWORK': ('Port group (already configured for its VLAN)', 'vCenter', 'text', '', True),
+    'SOPHON_VCENTER_FOLDER': ('VM folder (empty uses datacenter VM root)', 'vCenter', 'text', '', False),
     'SOPHON_VNET_INTERFACE': ('Bridge', 'Network', 'text', 'vmbr0', True),
     'SOPHON_VNET_VLAN': ('VLAN', 'Network', 'number', '', False),
     'SOPHON_INFRAVM_CORES': ('CPU cores', 'VM', 'number', '8', True),
+    'SOPHON_INFRAVM_NAME': ('VM name', 'VM', 'text', 'sophon-infravm', True),
     'SOPHON_INFRAVM_MEMORY': ('Memory (MiB)', 'VM', 'number', '8192', True),
     'SOPHON_INFRAVM_DISK_GB': ('Disk size (GiB)', 'VM', 'number', '100', True),
     'SOPHON_VNET_DNS': ('Upstream DNS', 'Site', 'ipv4', '', False),
@@ -86,18 +100,25 @@ PHASE_STAGES = {
     'bootstrap': ('prestage', 'proxmox', 'infravm'),
     'services': ('infravm', 'coredns', 'traefik', 'openldap', 'keycloak', 'gitea'),
 }
+CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter')}
+BOOTSTRAP_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
-                    if field[2] != 'password' and name not in
-                    ('SOPHON_DOMAIN', 'SOPHON_INFRAVM_CORES', 'SOPHON_INFRAVM_MEMORY', 'SOPHON_INFRAVM_DISK_GB',
-                     'SOPHON_VNET_INTERFACE', 'SOPHON_VNET_VLAN')
-                    and not name.startswith(('SOPHON_PROXMOX_', 'SOPHON_CONTROLLER_')))
+                    if field[2] != 'password' and field[1] not in BOOTSTRAP_GROUPS and name != 'SOPHON_DOMAIN')
+
+
+def field_provider(group):
+    return 'proxmox' if group in ('Proxmox', 'Network') else 'vcenter' if group == 'vCenter' else None
+
+
+def phase_stages(phase, provider='proxmox'):
+    return ('prestage', provider, 'infravm') if phase == 'bootstrap' else PHASE_STAGES[phase]
 
 
 def phase_fields(phase='bootstrap'):
     if phase == 'bootstrap':
-        return {name: field for name, field in FIELDS.items() if field[1] in ('Proxmox', 'Network', 'VM')}
+        return {name: field for name, field in FIELDS.items() if field[1] in BOOTSTRAP_GROUPS}
     return {name: field for name, field in FIELDS.items()
-            if field[1] not in ('Proxmox', 'Network', 'VM')}
+            if field[1] not in BOOTSTRAP_GROUPS}
 
 
 def new_control(environment, phase='bootstrap'):
@@ -116,6 +137,7 @@ def settings_payload(control):
         fields.append({'name': name, 'label': label, 'group': group, 'kind': kind,
                        'required': required, 'configured': bool(value),
                        'value': value,
+                       'provider': field_provider(group), 'choices': CHOICES.get(name),
                        'limits': LIMITS.get(name)})
     return {'fields': fields}
 
@@ -128,7 +150,12 @@ def validate_settings(current, changes, phase='bootstrap'):
            for value in changes.values()):
         return None, 'Settings must be single-line strings of at most 4096 characters.'
     values = current | changes
+    provider = values.get('SOPHON_HYPERVISOR', 'proxmox').strip()
+    if provider not in CHOICES['SOPHON_HYPERVISOR']:
+        return None, 'Hypervisor must be proxmox or vcenter.'
     for name, (label, group, kind, default, required) in definitions.items():
+        if field_provider(group) not in (None, provider):
+            continue
         value = values[name] if kind == 'password' else values[name].strip()
         values[name] = value
         if required and not value.strip():
@@ -152,6 +179,13 @@ def validate_settings(current, changes, phase='bootstrap'):
                     return None, f'{label} must be a hostname or IPv4 address, without a URL scheme or port.'
             elif kind == 'email' and ('@' not in value or any(character.isspace() for character in value)):
                 return None, f'{label} must be an email address.'
+            elif kind == 'url':
+                url = urlsplit(value)
+                if (url.scheme != 'https' or not url.hostname or url.username or url.password
+                        or url.path not in ('', '/', '/sdk') or url.query or url.fragment):
+                    return None, f'{label} must be HTTPS without embedded credentials, query or fragment.'
+            elif name == 'SOPHON_INFRAVM_NAME' and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}', value):
+                return None, 'VM name must contain 1-80 letters, digits, dots, underscores or hyphens.'
         except ValueError:
             return None, f'{label} is not a valid {kind} value.'
     return values, None
@@ -239,6 +273,7 @@ def action_request(directory, control, environment):
 def new_report():
     return {
         'run_id': str(uuid.uuid4()), 'state': 'running', 'pid': os.getpid(),
+        'hypervisor': os.environ.get('SOPHON_HYPERVISOR') or 'proxmox',
         'started_at': time.time(), 'updated_at': time.time(), 'current': None,
         'stages': {stage: {'state': 'pending', 'ok': 0, 'skipped': 0,
                            'ignored': 0, 'rescued': 0, 'tasks': []} for stage in STAGES},
@@ -313,8 +348,10 @@ def application(directory, assets, control, environment, start_response):
         body, content_type = json.dumps(settings_payload(control)).encode(), 'application/json'
     elif path == '/config.json':
         stages = {key: ('Portainer' if key == 'infravm' and control['phase'] == 'services' else STAGES[key])
-                  for key in PHASE_STAGES.get(control['phase'], STAGES)}
+                  for key in phase_stages(control['phase'], control['values'].get('SOPHON_HYPERVISOR', 'proxmox'))}
         body = json.dumps({'stages': stages, 'cells': {key: CELLS[key] for key in stages},
+                           'providers': {key: {'label': STAGES[key], 'cells': CELLS[key]}
+                                         for key in CHOICES['SOPHON_HYPERVISOR']},
                            'phase': control['phase'], 'labels': control['diagram_labels'],
                            'token': control['token'], 'log_path': str(directory / 'deploy.log')}).encode()
         content_type = 'application/json'
@@ -469,6 +506,8 @@ def main(argv=None):
     if options.phase == 'services':
         if os.environ.get('SOPHON_DEPLOYMENT_PHASE') != 'services':
             parser.error('Start Phase 2 using sophon-controller on installed InfraVM.')
+    elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
+        parser.error('SOPHON_HYPERVISOR must be proxmox or vcenter.')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in phase_fields(options.phase):
             os.environ.pop(name, None)

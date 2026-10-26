@@ -1,6 +1,6 @@
 # Runbook: sneakernet certificate refresh
 
-**When:** monthly, at a site with no internet egress.
+**When:** before the first service deployment, then monthly, at a site with no internet egress.
 
 **Why:** Traefik cannot reach Let's Encrypt or Cloudflare, so certificates
 cannot renew themselves. They are minted on a connected machine and carried in.
@@ -39,9 +39,9 @@ dns.<domain>
 ldap.<domain>
 auth.<domain>
 git.<domain>
-kopia.<domain>
 ```
 
+Include `kopia.<domain>` only when the optional backup service is deployed.
 Add any service you have deployed beyond the defaults. A name missing here is a
 name that will be serving an expired certificate next month.
 
@@ -61,30 +61,73 @@ Mode `0600`. This file contains the ACME account private key and every issued
 certificate's private key. Treat it as a secret in transit — encrypt the
 removable media.
 
+Validate the six default service names, their private-key matches, expiry,
+hostname coverage, and trusted certificate chains, then create separate media:
+
+```bash
+nix develop
+python3 certificates.py --source artifacts/traefik/acme.json \
+  --domain example.com --output /private/sophon-certificates.iso
+```
+
+The output is mode `0600`, labeled `SOPHON_CERTS`, and contains only `acme.json`
+and its import script. **It contains private keys.** Protect its directory and
+datastore permissions. Do not add it to the reusable `SOPHON_DEPLOY` bundle.
+It contains no Cloudflare token.
+
 ## Step 2 — Carry it in
 
-Copy `artifacts/traefik/acme.json` onto the Controller at the disconnected
-site, into the same path in its checkout.
+After installing InfraVM, attach and connect this private ISO using the hypervisor
+console. If reusing an installation CD drive on VMware, first eject its unmounted
+old media inside the guest with `sudo eject /dev/sr0` (confirm the actual device
+with `lsblk`). This avoids VMware's locked-CD confirmation pausing the VM.
+In the installed `core` console:
+
+```bash
+sudo mkdir -p /mnt/sophon-certificates
+sudo mount -o ro /dev/disk/by-label/SOPHON_CERTS /mnt/sophon-certificates
+sudo bash /mnt/sophon-certificates/import.sh
+sudo umount /mnt/sophon-certificates
+# Use the certificate CD's actual device.
+sudo eject /dev/sr0
+```
+
+Eject the certificate ISO and remove its temporary hypervisor datastore copy
+after import. Keep the connected machine's protected ACME store for renewal.
+The importer atomically places mode-`0600`, `core`-owned identity state at
+`/var/lib/sophon/project/artifacts/traefik/acme.json`.
 
 ## Step 3 — Seed it into Traefik
 
+On the first deployment, run `sophon-controller` normally and leave the
+Cloudflare token empty. Certificates must be imported **before** this run:
+OpenLDAP and Keycloak require working LDAPS during deployment.
+
+For a later refresh, supply the existing service credentials and run:
+
 ```bash
-ansible-playbook site.yml --tags traefik \
-  -e domain_name=<domain> \
-  -e infravm_ip=<infravm_ip> \
-  -e portainer_admin_password=<password>
+sophon-controller --refresh-certificates
+# Or, with the same service settings exported:
+sophon-controller --run --refresh-certificates
 ```
 
+Do not use tag-filtered `site.yml` runs; the installed runner requires the full
+service playbook. Certificate refresh uses the console wizard or `--run`, not
+`--dashboard`. The local handoff is validated before certificate replacement.
 The `traefik` role's [restore_acme.yml](../../roles/traefik/tasks/restore_acme.yml)
-writes the file into the `traefik_traefik_data` volume through Portainer's
-Docker-API proxy and restarts Traefik.
+loads its helper image from the prestaged archive, never from a registry, and
+seeds a fresh `traefik_traefik_data` volume through Portainer's Docker-API proxy.
+Normal reruns preserve an existing live certificate store instead of restoring
+a possibly stale snapshot. An explicit refresh stops Traefik before replacing
+that store; the normal stack deployment starts it again.
 
 ## Step 4 — Verify
 
-Check one certificate's expiry from the Controller:
+Check the chain, hostname, and expiry from a client that trusts public CAs:
 
 ```bash
-echo | openssl s_client -connect <infravm_ip>:443 -servername auth.<domain> 2>/dev/null \
+echo | openssl s_client -connect <infravm_ip>:443 -servername auth.<domain> \
+  -verify_hostname auth.<domain> -verify_return_error \
   | openssl x509 -noout -subject -dates
 ```
 

@@ -19,7 +19,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from deployment import STAGES, FIELDS, CELLS, PHASE_STAGES, DashboardServer, application, load_diagram, new_control, phase_fields, shell_command, trace_environment
+from deployment import STAGES, FIELDS, CELLS, PHASE_STAGES, DashboardServer, application, field_provider, load_diagram, new_control, phase_fields, phase_stages, shell_command, trace_environment
 
 
 def test_diagram():
@@ -294,7 +294,7 @@ def test_startup_failure():
 def test_vm_network_config():
   tasks = []
   for role in ('nfs', 'infravm'):
-    filename = 'bootstrap.yml' if role == 'infravm' else 'main.yml'
+    filename = 'proxmox_bootstrap.yml' if role == 'infravm' else 'main.yml'
     remaining = list(yaml.safe_load((ROOT / f'roles/{role}/tasks/{filename}').read_text()))
     networks = []
     while remaining:
@@ -416,7 +416,7 @@ def test_gui_deploy():
         assert request(endpoint, {'SOPHON_PROXMOX_PASSWORD': ''})[0] == 400
         assert request(endpoint, CONTENT_LENGTH='999999')[0] == 413
         for name, field in phase_fields('bootstrap').items():
-          if field[2] == 'password' and field[4]:
+          if field[2] == 'password' and field[4] and field_provider(field[1]) in (None, 'proxmox'):
             for value in ('', '   '):
               status, body = request(endpoint, {name: value})
               assert status == 400 and name.encode() in body, body
@@ -458,7 +458,9 @@ def test_site_markers():
     tasks = yaml.safe_load((ROOT / filename).read_text())[0]['tasks']
     markers = [tag.removeprefix('sophon_stage_') for task in tasks
                for tag in task.get('tags', []) if tag.startswith('sophon_stage_')]
-    assert markers == [*PHASE_STAGES[phase], 'end'], markers
+    for provider in ('proxmox', 'vcenter'):
+      selected = [marker for marker in markers if marker not in ('proxmox', 'vcenter') or marker == provider]
+      assert selected == [*phase_stages(phase, provider), 'end'], markers
 
 
 def test_credential_inputs():

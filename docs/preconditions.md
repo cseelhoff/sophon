@@ -8,9 +8,12 @@ have different access and credential requirements.
 Enter `nix develop`, then start `python3 deployment.py --phase bootstrap --serve`.
 Connected preparation requires internet, sufficient space for both ISOs,
 container archives, the runner image and the ISO, and working image-building
-tools. Provisioning afterward uses only Proxmox management HTTPS.
+tools. Provisioning afterward uses only the selected hypervisor's management HTTPS.
 
 Supply Proxmox management access, node, ISO/disk storage, bridge/VLAN and VM size.
+Alternatively, select vCenter and supply its HTTPS URL, account, datacenter,
+cluster, shared datastore, and an existing port group. Its VLAN is configured
+on the port group, not through Proxmox's bridge/VLAN inputs.
 No guest IP, console password, SSH key or domain is needed on the laptop.
 Fresh deployments are supported. Conflicting unmarked InfraVMs are preserved
 and rejected; compatible marked VMs are started without rewriting their disks.
@@ -21,12 +24,13 @@ Use the hypervisor console to run the installer from the Sophon ISO in stock
 CoreOS live media. Choose a fresh blank disk and supply static networking and a
 local console password for `core`. Neither SSH nor network access from the
 laptop to the guest is required. After reboot log in as `core` and run
-`sophon-controller`; the local runner needs no Proxmox access.
+`sophon-controller`; the local runner needs no hypervisor access.
 
 | Requirement | Why |
 |---|---|
 | Offline installation completed | CoreOS and the project, collections, archives and runner are on persistent disk; both ISOs may be detached |
-| Portainer reachable on `<infravm_ip>:9443` | Phase 2 uses Portainer, not the Proxmox API |
+| Portainer reachable on `<infravm_ip>:9443` | Phase 2 uses Portainer, not a hypervisor API |
+| Pre-issued certificates imported when there is no egress | Carry the private certificate ISO before service deployment; leave the Cloudflare token on the connected machine |
 | Service names resolve to `infravm_ip` in the runner | Container-only host entries supply this before CoreDNS starts; Keycloak and Traefik checks use service FQDNs — see [ADR-0007](adr/0007-controller-resolves-service-names-through-coredns.md) |
 
 Phase 2 asks for the domain; bootstrap and dashboard startup do not require it.
@@ -61,6 +65,26 @@ graphical console before serial-based test automation can log in.
 
 `proxmox_validate_certs` defaults to `false`. If your Proxmox has a trusted
 certificate, set it to `true`.
+
+## VMware vCenter
+
+Select `SOPHON_HYPERVISOR=vcenter`; Proxmox remains the default.
+`nix develop` supplies VMware's `govc` CLI.
+
+| Requirement | Notes |
+|---|---|
+| vCenter reachable by HTTPS | `SOPHON_VCENTER_URL`; direct standalone ESXi endpoints are rejected |
+| Account with VM, network and datastore permissions | `SOPHON_VCENTER_USERNAME`, `SOPHON_VCENTER_PASSWORD`; Phase 1 only |
+| Trusted vCenter certificate chain | System trust or a separately verified `SOPHON_VCENTER_CA_FILE` PEM; verification is never disabled |
+| Existing datacenter and cluster | `SOPHON_VCENTER_DATACENTER`, `SOPHON_VCENTER_CLUSTER` |
+| Datastore accessible to cluster hosts | `SOPHON_VCENTER_DATASTORE`; holds content-addressed ISOs and a fresh thin disk |
+| Existing standard or distributed port group | `SOPHON_VCENTER_NETWORK`; select a port group already configured for the guest VLAN |
+| Optional existing VM inventory folder | `SOPHON_VCENTER_FOLDER`; empty uses the datacenter's VM root |
+
+The bootstrap laptop must also reach the datastore upload endpoints selected
+by vCenter. No VMware guest tools or guest networking are required for the
+normal live-console installer. It supports whole VMware disks such as
+`/dev/sda`, not only Proxmox's `/dev/vda`.
 
 ## Addresses
 
@@ -126,9 +150,11 @@ expensive: without write access every DNS-01 challenge fails with
 `Authentication error (10000)`, and five failures for one hostname earns an
 hour-long Let's Encrypt lockout for that name.
 
-Accurate time on both the Proxmox host and InfraVM also matters: ACME rejects
-requests with significant clock skew, and Fedora CoreOS with no egress has no
-NTP source.
+Accurate UTC on InfraVM matters: certificate, LDAPS, OIDC, and ACME checks
+reject excessive clock skew. A disconnected guest needs a trustworthy local
+time source or an accurately set hardware clock. Check again after a cold
+boot: hypervisor/guest-tool synchronization can reintroduce an incorrect host
+time. Do not bypass certificate verification to work around a clock error.
 
 ## Portainer licence
 
@@ -165,7 +191,8 @@ the Portainer admin password must contain at least 12 characters.
 
 | Required environment variable | Ansible variable |
 |---|---|
-| `SOPHON_PROXMOX_PASSWORD` (Phase 1 only) | `proxmox_password` |
+| `SOPHON_PROXMOX_PASSWORD` (Proxmox Phase 1 only) | `proxmox_password` |
+| `SOPHON_VCENTER_PASSWORD` (vCenter Phase 1 only) | `vcenter_password` |
 | `SOPHON_PORTAINER_ADMIN_PASSWORD` | `portainer_admin_password` |
 | `SOPHON_KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` |
 | `SOPHON_KEYCLOAK_DB_PASSWORD` | `keycloak_db_password` |

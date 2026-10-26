@@ -1,6 +1,6 @@
 # Sophon
 
-Sophon provisions a self-contained homelab onto a Proxmox host. Everything the
+Sophon provisions a self-contained homelab onto Proxmox or VMware vCenter. Everything the
 deployment needs is staged ahead of time, then applied in Bootstrap and Service
 deployment. The site is normally
 internet-connected; a site with no egress is a supported degraded mode.

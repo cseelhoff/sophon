@@ -7,7 +7,7 @@ See [CONTEXT.md](../CONTEXT.md) for the vocabulary used here.
 ## Bootstrap and the site-local runner
 
 ```
-Bootstrap laptop -- management HTTPS --> Proxmox
+Bootstrap laptop -- management HTTPS --> Proxmox or VMware vCenter
                                          `-- sophon-infravm (blank disk, two ISOs)
 
 Live console --> offline CoreOS install --> installed InfraVM
@@ -16,7 +16,7 @@ Live console --> offline CoreOS install --> installed InfraVM
 ```
 
 Every play targets `localhost`. The bootstrap laptop prepares artifacts, then
-uses only Proxmox management to create a blank InfraVM disk, attach the unchanged
+uses only the selected hypervisor's management API to create a blank InfraVM disk, attach the unchanged
 full CoreOS live ISO plus the Sophon deployment ISO, and start the VM.
 It never mounts NFS, runs a hypervisor shell, injects QEMU Ignition, or contacts
 Portainer. Conflicting existing guests are preserved and rejected; a compatible
@@ -28,7 +28,7 @@ The installer verifies the media, installs CoreOS offline and copies artifacts
 into persistent storage. After reboot the host service starts rootless Portainer.
 The operator runs `sophon-controller`, a local Python/Ansible Podman runner with the
 writable project mounted at `/workspace`. Its task graph and environment exclude
-Proxmox credentials and lifecycle operations. See
+hypervisor credentials and lifecycle operations. See
 [ADR-0013](adr/0013-two-iso-infravm-installation.md).
 
 | Path | Consumer |
@@ -57,9 +57,11 @@ unprivileged user can bind `:53`, `:80` and `:443`.
 Sophon provisions and configures systems through these surfaces; knowing which is in
 play explains most failure modes.
 
-**1. The Proxmox REST API.** Used only during bootstrap for authentication,
-VM lifecycle and ISO upload. Authentication is a
-ticket plus a CSRF token, held for the run.
+**1. The selected hypervisor's API.** Used only during bootstrap for
+authentication, VM lifecycle and ISO upload. Proxmox uses a REST ticket plus a
+CSRF token held for the run. VMware vCenter uses `govc` with verified HTTPS,
+environment-only credentials and no persistent session cache. vCenter placement
+uses an existing datacenter, cluster, shared datastore and port group.
 
 **2. Local console installation.** A script on the Sophon ISO installs CoreOS
 from full upstream media onto a confirmed blank disk and writes first-boot
@@ -87,9 +89,10 @@ re-run.
    allowlist     ──▶ artifacts/bootstrap/sophon-deployment.iso
 
  ── Bootstrap (management only) ───────────────────────────────────
-   two ISOs ── Proxmox virtual CDs ──▶ blank InfraVM
+   two ISOs ── hypervisor virtual CDs ──▶ blank InfraVM
    live installer ──▶ persistent CoreOS, project, archives ── reboot
    host bootstrap ──▶ rootless Portainer and offline runner image
+   private certificate ISO ── installed console ──▶ carried ACME identity state
 
  ── Services (local InfraVM runner) ───────────────────────────────
    local artifacts/ ── Portainer /docker/images/load ──▶ remaining services
@@ -124,7 +127,7 @@ gap in the artifact set cannot be papered over by a silent registry pull. See
 `bootstrap.yml` and `site.yml` have separate task graphs:
 
 ```
-Bootstrap: prestage → proxmox → ownership guard → blank InfraVM + two ISOs
+Bootstrap: prestage → hypervisor authentication → ownership check → blank InfraVM + two ISOs
 Console:   offline installation → reboot → host bootstrap → controller wizard
 Services:  Portainer → coredns → traefik → openldap → keycloak → gitea
 ```
