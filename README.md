@@ -147,22 +147,43 @@ After the reboot, log in as `core`, then step 4:
 sophon-controller
 ```
 
-Both ISOs can then be detached.
+Both ISOs can then be detached. **No internet at the site?** Read [Step 4 at a site with no internet](#step-4-at-a-site-with-no-internet-air-gapped) first.
 
-### Certificates without internet
+### Step 4 at a site with no internet (air-gapped)
 
-Run once a month (certificates last 90 days); the first run is part of step 4.
+Steps 1 to 3 are the same; only step 4 and a recurring renewal differ. Read this before you start:
 
-1. **On a connected machine**, any time before step 4 and again for each renewal:
+| Step | Air-gapped difference |
+|---|---|
+| Setup and 1 | Do these on a **connected** laptop. Step 1 caches every image the services need, and the deployment never pulls anything later. |
+| Before 4 | On a connected machine, make the certificate payload (below). Carry the file to the site. |
+| 2 | None, if the laptop can reach the hypervisor's management network. The laptop itself may be offline once steps 1 and the tools image exist. |
+| 3 | None. It was always offline. |
+| 4 | Paste the payload at the *Pre-issued certificates* prompt (or `@/workspace/path/payload.txt`) and leave the **Cloudflare token empty**. With no token the payload is **required**; step 4 stops if it is missing or does not cover all six names. |
+
+Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
+point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
+
+**Renewals (recurring, every 30 days or so).** Certificates last 90 days and nothing on an air-gapped InfraVM can
+renew them, so carry in a fresh payload on a schedule. Run the generator on the connected machine about once a month:
+it reuses certificates that still have more than 30 days left and issues new ones only after that, so an early run
+just returns the same payload. Import it before the day-90 expiry; a monthly cadence always lands in the window
+between day 60 and day 90.
+
+1. **On the connected machine**, for the first time and every renewal:
    ```bash
    docker run --rm --init -it -v "$(pwd):/workspace" -v sophon-state:/state sophon-tools certificates issue --domain example.com --output payload.txt
    ```
    It prompts for an ACME email and a Cloudflare token (or reads `-e CF_DNS_API_TOKEN`) and writes one
    base64 line, the whole `acme.json`, never the token. `--output` avoids PowerShell's `>` re-encoding the text.
-   Carry the file to the site; it holds private keys.
-2. **On the InfraVM console**, paste the payload at step 4's *Pre-issued certificates* prompt (or give
-   `@/workspace/path/payload.txt`), leave the Cloudflare token empty. For a renewal run
-   `sophon-controller --refresh-certificates` and re-enter the existing service credentials.
+   Carry the file to the site; it holds private keys. Run it on the same machine each time (it keeps the ACME account
+   in the `sophon-state` volume).
+2. **On the InfraVM console**, the first time paste it during step 4 as above. For a renewal run:
+   ```bash
+   sophon-controller --refresh-certificates
+   ```
+   Paste the new payload, leave the Cloudflare token empty, and re-enter the existing service credentials (a refresh
+   currently reruns the full service deployment). If the certificates have already expired, the same steps recover the site.
 
 See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.
 
