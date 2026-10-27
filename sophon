@@ -29,7 +29,7 @@ fi
 hash=$(sha256sum Containerfile | cut -c1-16)
 if [[ $("$engine" image inspect --format '{{index .Config.Labels "sophon.containerfile"}}' "$image" 2>/dev/null || true) != "$hash" ]]; then
     echo "Building the Sophon tools image (needs internet once)..." >&2
-    "$engine" build --target tools --label "sophon.containerfile=$hash" -t "$image" -f Containerfile . >&2
+    "$engine" build --target tools --label "sophon.containerfile=$hash" -t "$image" - < Containerfile >&2
 fi
 
 state=${XDG_STATE_HOME:-$HOME/.local/state}/sophon

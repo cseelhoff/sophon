@@ -88,7 +88,8 @@
 # ---- Offline runner image (built from the Containerfile) -----------------------
 - name: Build the runner image
   ansible.builtin.command:
-    argv: [docker, build, --target, runner, -t, "{{ prepare_runner_image }}", -f, "{{ playbook_dir }}/Containerfile", "{{ playbook_dir }}"]
+    argv: [docker, build, --target, runner, -t, "{{ prepare_runner_image }}", "-"]
+    stdin: "{{ lookup('file', playbook_dir ~ '/Containerfile') }}"
   changed_when: false
 
 - name: Read the runner image ID

@@ -39,9 +39,31 @@ sudo bash /mnt/sophon/install.sh
 
 After the reboot, log in as `core` and run `sophon-controller` (step 4). Both ISOs can then be detached.
 
-**No internet at the site?** Step 4 also accepts one optional pasted certificate payload that you
-make on a connected machine with `./sophon certificates issue`.
-See [docs/certificates.md](docs/certificates.md).
+### Another hypervisor (Hyper-V, VMware Workstation, ...)
+
+Only Proxmox and vCenter are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
+
+1. Run `./sophon prepare` and copy `artifacts/coreos/fedora-coreos-live.iso` and
+   `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
+2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
+   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged).
+3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
+4. Power on and continue with steps 3 and 4 above. If it boots the live ISO again after install,
+   move the disk above the CDs or eject the ISOs.
+
+### Certificates without internet
+
+Run once a month (certificates last 90 days); the first run is part of step 4.
+
+1. **On a connected machine**, any time before step 4 and again for each renewal:
+   `umask 077; ./sophon certificates issue --domain example.com > payload.txt`.
+   It prompts for an ACME email and a Cloudflare token (or reads `CF_DNS_API_TOKEN`) and prints one
+   base64 line, the whole `acme.json`, never the token. Carry the file to the site; it holds private keys.
+2. **On the InfraVM console**, paste the payload at step 4's *Pre-issued certificates* prompt (or give
+   `@/workspace/path/payload.txt`), leave the Cloudflare token empty. For a renewal run
+   `sophon-controller --refresh-certificates` and re-enter the existing service credentials.
+
+See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.
 
 ## Layout
 

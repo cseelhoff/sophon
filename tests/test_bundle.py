@@ -227,6 +227,7 @@ class PrepareTests(unittest.TestCase):
                 'location': 'https://builds.coreos.fedoraproject.org/cached.iso',
                 'sha256': hashlib.sha256(live_iso.read_bytes()).hexdigest(),
             }}}}}}}}))
+        self.write('Containerfile', 'FROM scratch\n')
         self.write('artifacts/bootstrap/runner.tar', 'cached-runner')
         self.write('artifacts/bootstrap/runner.tar.id', 'sha256:cached')
         self.write('artifacts/bootstrap/busybox', 'cached-helper')
