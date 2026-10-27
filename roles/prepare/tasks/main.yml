@@ -33,11 +33,9 @@
         path: "{{ prepare_coredns_src }}"
         state: absent
     - name: Clone CoreDNS Docker Discovery source
-      ansible.builtin.git:
-        repo: "{{ prepare_coredns_repo }}"
-        dest: "{{ prepare_coredns_src }}"
-        version: master
-        depth: 1
+      ansible.builtin.command:
+        argv: [git, clone, --depth, "1", --branch, master, "{{ prepare_coredns_repo }}", "{{ prepare_coredns_src }}"]
+      changed_when: true
     - name: Build the CoreDNS image
       ansible.builtin.command:
         argv: [docker, build, -t, "{{ prepare_coredns_image }}", "{{ prepare_coredns_src }}"]
