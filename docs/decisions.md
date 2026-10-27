@@ -26,7 +26,7 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    discovered; every service name resolves to it.
 10. **Existing VMs are never adopted or rewritten.** A VM with the InfraVM name is only started, and only if
     this workflow marked it.
-11. **One container image is the laptop toolchain.** `docker run … sophon-tools <command>` runs Ansible, xorriso,
+11. **One container image is the laptop toolchain.** `docker run <flags> sophon-tools <command>` runs Ansible, xorriso,
     govc and Traefik from an image built from the `Containerfile`; the InfraVM runner is that file's smaller
     `runner` stage. Docker or Podman is the only laptop requirement (no Nix, bash, Python or Ansible install),
     and the commands are plain `docker run` lines that behave the same in bash and PowerShell. The tools image

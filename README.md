@@ -8,59 +8,103 @@ containers managed through Portainer; the Ansible runner is a container on Infra
 
 The only thing the laptop needs is **Docker or Podman**, on Linux, Windows or macOS, with no bash
 or other tools. One container image (`sophon-tools`) holds Ansible, xorriso, govc and Traefik.
-Build it once from this repository, then every laptop step is a plain `docker run`:
+
+### Setup: build the tools image (once per laptop)
+
+On the connected laptop, in the project folder (the one containing `Containerfile`):
 
 ```bash
 docker build -t sophon-tools -f Containerfile .
 ```
 
-| Step | Where | Command | What happens |
-|---|---|---|---|
-| 1. Prepare | connected laptop | `docker run … sophon-tools prepare` | Download and cache the stock CoreOS live ISO and container images; build the runner image and `artifacts/bootstrap/sophon-deployment.iso`. |
-| 2. Provision | laptop with hypervisor access | `docker run … sophon-tools provision` | Runs step 1 if needed, then creates a blank InfraVM with both ISOs attached and starts it. |
-| 3. Install | InfraVM console | `sudo bash /mnt/sophon/install.sh` | Installs CoreOS to the blank disk offline with a static IP and a `core` console password, then reboots. |
-| 4. Configure | InfraVM console | `sophon-controller` | Asks for the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. |
+- **When:** once, before step 1. It downloads base images and tools (the result is about 560 MB), so it needs internet.
+- **How often:** never again, unless you update this repository and `Containerfile` changed (tool versions are
+  pinned there); then run it again. Changes to playbooks and `src/` need no rebuild, because the project folder is
+  mounted into the container on every run.
+- **Podman:** use `podman build -t sophon-tools -f Containerfile .`.
+- **Offline later:** the image stays in your local engine, so steps 1 to 4 afterwards need no rebuild.
+  Check it exists with `docker image ls sophon-tools`.
 
-Run these from the project directory. The same lines work in bash, PowerShell and cmd
-(`"$(pwd)"` is `"%cd%"` in cmd):
+After that, every laptop step below is a plain `docker run` using that image.
+
+| Step | Where | What happens |
+|---|---|---|
+| 1. Prepare | connected laptop | Download and cache the stock CoreOS live ISO and container images; build the runner image and `artifacts/bootstrap/sophon-deployment.iso`. |
+| 2. Provision | laptop with hypervisor access | Runs step 1 if needed, then creates a blank InfraVM with both ISOs attached and starts it. |
+| 3. Install | InfraVM console | Installs CoreOS to the blank disk offline with a static IP and a `core` console password, then reboots. |
+| 4. Configure | InfraVM console | Asks for the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. |
+
+Run the laptop commands from the project directory. They are single lines that work in bash and
+PowerShell (in cmd write `%cd%` for `$(pwd)`). Every setting is listed in [docs/inputs.md](docs/inputs.md).
+
+### Step 1: prepare (internet needed)
 
 ```bash
-# Step 1 (connected)
 docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
-
-# Step 2 (Proxmox). The password is passed by name from your environment, never typed on the command line.
-#   bash:        read -rsp 'Proxmox password: ' SOPHON_PROXMOX_PASSWORD; export SOPHON_PROXMOX_PASSWORD
-#   PowerShell:  $env:SOPHON_PROXMOX_PASSWORD = Read-Host 'Proxmox password' -MaskInput
-docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_PROXMOX_HOST=pve.example -e SOPHON_PROXMOX_NODE=pve -e SOPHON_PROXMOX_PASSWORD sophon-tools provision
 ```
 
-For vCenter add `-e SOPHON_HYPERVISOR=vcenter` and the `SOPHON_VCENTER_*` settings instead; every
-input is listed in [docs/inputs.md](docs/inputs.md). Prefer a form? Run the dashboard, then open
-http://127.0.0.1:41327/ and fill in the settings there:
+### Step 2: provision
+
+Passwords are passed by name (`-e NAME`, no value) from your environment, so they never appear on the command line.
+Set the password first:
+
+```bash
+# bash
+read -rsp 'Password: ' SOPHON_PROXMOX_PASSWORD; export SOPHON_PROXMOX_PASSWORD     # vCenter: SOPHON_VCENTER_PASSWORD
+```
+```powershell
+# PowerShell
+$env:SOPHON_PROXMOX_PASSWORD = Read-Host 'Password' -MaskInput                     # vCenter: SOPHON_VCENTER_PASSWORD
+```
+
+**Proxmox:**
+
+```bash
+docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_PROXMOX_HOST=pve.example.com -e SOPHON_PROXMOX_NODE=pve -e SOPHON_PROXMOX_PASSWORD sophon-tools provision
+```
+
+**vCenter:**
+
+```bash
+docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_HYPERVISOR=vcenter -e SOPHON_VCENTER_URL=https://vcenter.example.com -e SOPHON_VCENTER_USERNAME=administrator@vsphere.local -e SOPHON_VCENTER_DATACENTER=DC1 -e SOPHON_VCENTER_CLUSTER=Cluster1 -e SOPHON_VCENTER_DATASTORE=datastore1 -e SOPHON_VCENTER_NETWORK="VM Network" -e SOPHON_VCENTER_PASSWORD sophon-tools provision
+```
+
+**Dashboard** (a form for the same settings and a live progress diagram; open http://127.0.0.1:41327/):
 
 ```bash
 docker run --rm --init -it -p 127.0.0.1:41327:41327 -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state sophon-tools dashboard
 ```
 
+**Podman** instead of Docker: enable its socket once with `systemctl --user enable --now podman.socket`, then use
+`podman` and the socket path `-v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock`, for example step 1:
+
+```bash
+podman run --rm -it -v "$(pwd):/workspace" -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
+```
+
 Notes:
-- **Podman:** use `podman` instead of `docker`, enable its socket once (`systemctl --user enable --now podman.socket`) and mount it:
-  `-v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock`.
-- **Linux with rootful Docker** creates `artifacts/` as root; add `--user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)"`.
-- The container reaches the hypervisor through the engine's normal NAT (no host networking), so it needs no special
-  setup on Docker Desktop. If the hypervisor is only reachable through a VPN or special route, check that route works from containers.
+- **Rootful Docker on Linux** creates `artifacts/` as root; add `--user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)"` after `docker run`.
+- The container reaches the hypervisor through the engine's normal NAT (no host networking). If the hypervisor is only
+  reachable through a VPN or special route, check that route works from containers.
 - Only the Linux (Podman and Docker) path has been verified. Windows and macOS are untested; the commands avoid bash
   features on purpose, and `sophon-state` is a named volume so private file modes also hold on Windows.
 
-In the VM's console (the stock live ISO), step 3:
+### Step 3: install, on the VM console (the stock live ISO)
 
 ```bash
 sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
 sudo bash /mnt/sophon/install.sh
 ```
 
-After the reboot, log in as `core` and run `sophon-controller` (step 4). Both ISOs can then be detached.
+After the reboot, log in as `core`, then step 4:
 
-### Another hypervisor (Hyper-V, VMware Workstation, ...)
+```bash
+sophon-controller
+```
+
+Both ISOs can then be detached.
+
+### Another hypervisor (for example Hyper-V or VMware Workstation)
 
 Only Proxmox and vCenter are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
 
