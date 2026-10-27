@@ -37,10 +37,31 @@ After that, every laptop step below is a plain `docker run` using that image.
 Run the laptop commands from the project directory. They are single lines that work in bash and
 PowerShell (in cmd write `%cd%` for `$(pwd)`). Every setting is listed in [docs/inputs.md](docs/inputs.md).
 
+### Which engine do I have? (decides the `-v …:/var/run/docker.sock` part)
+
+The container drives your engine through its socket, so the left side of that `-v` must be a socket that exists:
+
+| Your engine | Socket to mount |
+|---|---|
+| Docker Engine or Docker Desktop (Linux, Windows, macOS) | `/var/run/docker.sock` |
+| Podman, **including a `docker` command that is really Podman** (`podman-docker`, typical on WSL and Fedora) | `/run/user/$(id -u)/podman/podman.sock` |
+
+If you see `statfs /var/run/docker.sock: no such file or directory`, you are on Podman. Enable its socket once with
+`systemctl --user enable --now podman.socket` and use the Podman path. In every command below, replace
+`/var/run/docker.sock` before the colon with the path for your engine (the part after the colon never changes).
+
 ### Step 1: prepare (internet needed)
+
+Docker:
 
 ```bash
 docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
+```
+
+Podman (this works with `docker` in place of `podman` too):
+
+```bash
+podman run --rm -it -v "$(pwd):/workspace" -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
 ```
 
 ### Step 2: provision
@@ -73,13 +94,6 @@ docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/dock
 
 ```bash
 docker run --rm --init -it -p 127.0.0.1:41327:41327 -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state sophon-tools dashboard
-```
-
-**Podman** instead of Docker: enable its socket once with `systemctl --user enable --now podman.socket`, then use
-`podman` and the socket path `-v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock`, for example step 1:
-
-```bash
-podman run --rm -it -v "$(pwd):/workspace" -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
 ```
 
 Notes:
