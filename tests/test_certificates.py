@@ -168,44 +168,25 @@ class CertificateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             certificates.import_payload(encoded, 'wrong.example', destination)
 
-    def test_service_payload_is_staged_but_never_forwarded_in_environment_or_command(self):
+    def test_service_payload_is_staged_but_never_forwarded_in_environment(self):
         import deployment
         from test_console import service_values
         encoded = base64.b64encode(self.source.read_bytes()).decode()
         settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example', 'SOPHON_ACME_PAYLOAD': encoded}
         current = deployment.new_control(settings, 'configure')
-        self.assertNotIn('SOPHON_ACME_PAYLOAD', current['environment'])
         self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.SITE_FIELDS)
         self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.step_fields('provision'))
         values, error = deployment.validate_settings(current['values'], {}, 'configure')
         self.assertIsNone(error)
         with patch('deployment.ROOT', self.directory):
             staged = deployment.stage_certificates(values)
-            command = deployment.shell_command(self.directory, staged, current['environment'], 'configure')
-        self.assertNotIn(encoded, command)
         self.assertNotIn('SOPHON_ACME_PAYLOAD', staged)
         self.assertEqual(json.loads((self.directory / 'artifacts/traefik/acme.json').read_bytes()), self.payload)
-
-    def test_dashboard_accepts_large_certificate_import_without_putting_it_in_the_command(self):
-        import deployment
-        from test_console import service_values
-        encoded = base64.b64encode(self.source.read_bytes() + b' ' * 32768).decode()
-        changes = {'SOPHON_ACME_PAYLOAD': encoded, 'SOPHON_DOMAIN': 'fixture.example'}
-        data = json.dumps(changes).encode()
-        self.assertGreater(len(data), 32768)
-        control = deployment.new_control(service_values(), 'configure')
-        environment = {
-            'SERVER_PORT': '12345', 'HTTP_ORIGIN': 'http://127.0.0.1:12345',
-            'HTTP_X_SOPHON_TOKEN': control['token'], 'CONTENT_TYPE': 'application/json',
-            'CONTENT_LENGTH': str(len(data)), 'PATH_INFO': '/command', 'wsgi.input': io.BytesIO(data),
-        }
-        with patch('deployment.ROOT', self.directory):
-            status, response = deployment.action_request(self.directory, control, environment)
-        self.assertEqual(status, '200 OK', response)
-        self.assertNotIn(encoded, response['command'])
-        imported = self.directory / 'artifacts/traefik/acme.json'
-        self.assertEqual(json.loads(imported.read_bytes()), self.payload)
-        self.assertEqual(stat.S_IMODE(imported.stat().st_mode), 0o600)
+        with patch.dict(os.environ, {'SOPHON_ACME_PAYLOAD': encoded}), \
+                patch('deployment.subprocess.run') as run:
+            run.return_value.returncode = 0
+            self.assertEqual(deployment.launch(['4-configure.yml']), 0)
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', run.call_args.kwargs['env'])
 
     def test_console_wizard_imports_only_after_confirmation_and_never_exports_the_payload(self):
         import console
@@ -342,7 +323,7 @@ class AcmeRestoreTests(unittest.TestCase):
             thread.start()
             try:
                 with patch.dict(os.environ, ANSIBLE_ROLES_PATH=str(ROOT / 'roles')):
-                    result, _ = run_fixture(directory, [
+                    result = run_fixture(directory, [
                         {'ansible.builtin.set_fact': {
                             'infravm_portainer_url': f'http://127.0.0.1:{server.server_port}',
                             'portainer_admin_password': 'fixture-password',

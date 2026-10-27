@@ -82,7 +82,6 @@ lsblk() {
 findmnt() { printf '%s' "${MOUNT_SOURCE:-}"; }
 wipefs() { printf '%s' "${SIGNATURES:-}"; }
 blockdev() { echo 107374182400; }
-cmp() { return "${NONZERO:-0}"; }
 readlink() { printf '%s\n' "${@: -1}"; }
 '''
 
@@ -224,11 +223,59 @@ class InstallerTests(unittest.TestCase):
             with self.subTest(network=network):
                 self.assertNotEqual(shell('validate_network "$@"', *network).returncode, 0)
 
+    def test_prompts_default_to_the_current_system_values(self):
+        stubs = r'''
+ip() {
+    case "$*" in
+        "-4 route show default") echo "default via 10.0.60.1 dev eth0 proto dhcp metric 100";;
+        "-4 -o addr show dev eth0 scope global") echo "2: eth0    inet 10.0.60.23/24 brd 10.0.60.255 scope global dynamic eth0";;
+        *) return 1;;
+    esac
+}
+resolvectl() { echo "Link 2 (eth0): 10.0.60.53 10.0.60.54"; }
+lsblk() {
+    case "$*" in
+        "-dnrpo NAME,TYPE,RO") printf '/dev/sda disk 0\n/dev/sdb disk 0\n/dev/sr0 rom 1\n/dev/sr1 rom 1\n';;
+        *) return 99;;
+    esac
+}
+validate_disk() { [[ $1 == /dev/sda ]]; }
+'''
+        result = shell(stubs + r'''
+detect_network
+printf '%s|%s|%s|%s|%s\n' "$detected_ip" "$detected_prefix" "$detected_gateway" "$detected_dns" "$(detect_disk)"
+''')
+        self.assert_success(result)
+        self.assertEqual(result.stdout.strip(), '10.0.60.23|24|10.0.60.1|10.0.60.53|/dev/sda')
+
+        # Enter alone takes the default; typing a value overrides it; no default and no answer stays empty.
+        result = shell(r'''
+ask one 'One' 1.1.1.1 <<< ""
+ask two 'Two' 1.1.1.1 <<< "9.9.9.9"
+ask three 'Three' "" <<< ""
+printf '%s|%s|%s\n' "$one" "$two" "$three"
+''')
+        self.assert_success(result)
+        self.assertEqual(result.stdout.splitlines()[-1], '1.1.1.1|9.9.9.9|')
+
+    def test_nothing_detectable_gives_no_defaults(self):
+        result = shell(r'''
+ip() { return 1; }
+resolvectl() { return 1; }
+lsblk() { return 1; }
+detect_network
+printf '[%s|%s|%s|%s|%s]\n' "$detected_ip" "$detected_prefix" "$detected_gateway" "$detected_dns" "$(detect_disk)"
+''')
+        self.assert_success(result)
+        output = result.stdout.strip()
+        # The DNS field may come from this machine's own resolv.conf; everything else must be empty.
+        self.assertTrue(output.startswith('[|||') and output.endswith('|]'), output)
+
     def test_fresh_disk_only(self):
         self.assert_success(shell(DISK_STUBS + '\nvalidate_disk /dev/fixture'))
         cases = {
             "SIGNATURES": "ext4", "MOUNTS": "/", "CHILDREN": "1",
-            "NONZERO": "1", "DISK_TYPE": "rom", "DISK_RO": "1",
+            "DISK_TYPE": "rom", "DISK_RO": "1",
             "MOUNT_SOURCE": "/dev/fixture1",
         }
         for name, value in cases.items():
@@ -510,12 +557,24 @@ udevadm() { [[ $1 == settle ]]; }
             self.assertIn("do not use sudo", result.stderr)
             self.assertFalse(calls(directory, "podman"))
 
-    def test_destructive_install_is_offline_explicit_and_not_a_boot_action(self):
+    def test_ambiguous_disks_are_not_guessed(self):
+        result = shell(r'''
+lsblk() { printf '/dev/sda disk 0\n/dev/sdb disk 0\n'; }
+validate_disk() { return 0; }
+printf '[%s]\n' "$(detect_disk)"
+''')
+        self.assert_success(result)
+        self.assertEqual(result.stdout.strip(), '[]')
+
+    def test_destructive_install_is_offline_automatic_and_not_a_boot_action(self):
         source = INSTALL.read_text()
         self.assertEqual(source.count("coreos-installer install --offline"), 1)
-        self.assertIn('[[ $confirmation == "INSTALL $disk" ]]', source)
-        self.assertLess(source.index('[[ $confirmation == "INSTALL $disk" ]]'),
-                        source.index("coreos-installer install --offline"))
+        install = source.index("coreos-installer install --offline")
+        # No typed confirmation any more: the blank-disk guard is rechecked right before, after an abortable pause.
+        self.assertNotIn('"INSTALL $disk"', source)
+        self.assertLess(source.index("press Ctrl-C to abort"), install)
+        self.assertLess(source.rindex('validate_disk "$disk"', 0, install), install)
+        self.assertLess(source.index("sleep 10"), source.rindex('validate_disk "$disk"', 0, install))
         self.assertIn("only runs in a CoreOS live environment", source)
         self.assertIn("--console tty0 --console ttyS0,115200n8", source)
         self.assertIn("DO NOT reinstall", source)

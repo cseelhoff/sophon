@@ -6,162 +6,67 @@ containers managed through Portainer; the Ansible runner is a container on Infra
 
 ## The four steps
 
-The only thing the laptop needs is **Docker or Podman**, on Linux, Windows or macOS, with no bash
-or other tools. One container image (`sophon-tools`) holds Ansible, xorriso, govc and Traefik.
-
-### Setup: build the tools image (once per laptop)
-
-On the connected laptop, in the project folder (the one containing `Containerfile`):
-
-```bash
-docker build -t sophon-tools -f Containerfile .
-```
-
-- **When:** once, before step 1. It downloads base images and tools (the result is about 560 MB), so it needs internet.
-- **How often:** never again, unless you update this repository and `Containerfile` changed (tool versions are
-  pinned there); then run it again. Changes to playbooks and `src/` need no rebuild, because the project folder is
-  mounted into the container on every run.
-- **Podman:** use `podman build -t sophon-tools -f Containerfile .`.
-- **Offline later:** the image stays in your local engine, so steps 1 to 4 afterwards need no rebuild.
-  Check it exists with `docker image ls sophon-tools`.
-
-After that, every laptop step below is a plain `docker run` using that image.
+The only thing the laptop needs is **Docker or Podman** (on Windows, either one, or WSL with one of them). Everything
+else (Ansible, xorriso, govc, Traefik) lives in one container image that the scripts build for you.
 
 | Step | Where | What happens |
 |---|---|---|
 | 1. Prepare | connected laptop | Download and cache the stock CoreOS live ISO and container images; build the runner image and `artifacts/bootstrap/sophon-deployment.iso`. |
 | 2. Provision | laptop with hypervisor access | Runs step 1 if needed, then creates a blank InfraVM with both ISOs attached and starts it. |
-| 3. Install | InfraVM console | Installs CoreOS to the blank disk offline with a static IP and a `core` console password, then reboots. |
+| 3. Install | InfraVM console | Installs CoreOS offline to the only blank disk, keeping the current network settings as a static IP; the only prompt is a new `core` console password. Then reboots. |
 | 4. Configure | InfraVM console | Asks for the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. |
 
-Run the laptop commands from the project directory. In PowerShell write `${PWD}` for `$(pwd)` (cmd: `%cd%`); Step 1
-shows the Windows lines in full, and Step 2 and the dashboard follow the same pattern. Every setting is listed in [docs/inputs.md](docs/inputs.md).
+### Steps 1 and 2: one command
 
-### Which engine do I have? (decides the socket path in the commands)
+From the project folder:
 
-The container drives your engine through its socket, so the left side of that `-v` must be a socket that exists:
+```bash
+bash sophon-provision.sh          # Linux, macOS, WSL
+```
+```powershell
+.\sophon-provision.ps1            # Windows
+```
 
-| Your engine | Socket to mount |
+The script finds Docker or Podman and the right socket, builds the tools image the first time (internet, about 560 MB),
+then asks **where InfraVM should run** (Proxmox, vCenter, Hyper-V, or *only download and build the installation media
+and exit*) and for any setting you haven't already given it. It runs step 1 (internet) and then creates and starts the
+VM. Passwords are prompted for and never put on a command line.
+
+**Settings:** to avoid the questions, copy [.env.example](.env.example) to `.env` and fill in what you know. It lists
+every option for steps 1 and 2 with a comment on each; the scripts read `.env` automatically (it is git-ignored).
+Anything left blank is asked for, and a variable already set in your shell overrides the file. The step 4 settings are
+entered on the InfraVM console instead (see [docs/inputs.md](docs/inputs.md)).
+
+```powershell
+Copy-Item .env.example .env     # bash: cp .env.example .env
+# edit .env, for example SOPHON_HYPERVISOR=hyperv to deploy to Hyper-V on this PC without the menu
+```
+
+What each hypervisor needs:
+
+| Hypervisor | Required settings |
 |---|---|
-| Docker Engine or Docker Desktop (Linux, Windows, macOS) | `/var/run/docker.sock` |
-| Podman, **including a `docker` command that is really Podman** (`podman-docker`, typical on WSL and Fedora) | `/run/user/$(id -u)/podman/podman.sock` |
-| Podman on Windows or macOS (`podman machine`) | `/run/user/1000/podman/podman.sock` (inside the machine; see Step 1) |
+| Proxmox | `SOPHON_PROXMOX_HOST`, `SOPHON_PROXMOX_NODE`, password |
+| vCenter | `SOPHON_VCENTER_URL`, `_USERNAME`, `_DATACENTER`, `_CLUSTER`, `_DATASTORE`, `_NETWORK`, password |
+| Hyper-V on **this** Windows PC (PowerShell script only) | nothing up front: runs as you, one UAC prompt, asks which virtual switch; no password, WinRM or firewall changes |
+| Hyper-V on another host | `SOPHON_HYPERV_HOST`, `_USERNAME`, `_SWITCH`, password; WinRM must be enabled on the host (see [docs/manual-commands.md](docs/manual-commands.md)) |
 
-If you see `statfs /var/run/docker.sock: no such file or directory`, you are on Podman. Enable its socket once with
-`systemctl --user enable --now podman.socket` and use the Podman path. In every command below, replace
-`/var/run/docker.sock` before the colon with the path for your engine (the part after the colon never changes).
-
-### Step 1: prepare (internet needed)
-
-Docker:
-
-```bash
-docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
-```
-
-Podman (this works with `docker` in place of `podman` too):
-
-```bash
-podman run --rm -it -v "$(pwd):/workspace" -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
-```
-
-**Windows PowerShell, Docker Desktop** (same as the bash line; `${PWD}` is PowerShell's current folder). The socket path
-is inside Docker Desktop's Linux VM, so it stays `/var/run/docker.sock`:
-
-```powershell
-docker run --rm -it -v "${PWD}:/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
-```
-
-**Windows PowerShell, Podman** (`podman machine`; PowerShell has no `$(id -u)`, and the socket lives inside the machine VM,
-usually `/run/user/1000/podman/podman.sock`):
-
-```powershell
-podman run --rm -it -v "${PWD}:/workspace" -v /run/user/1000/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
-```
-
-Check the socket path with `podman machine ssh "ls /run/user/*/podman/podman.sock /run/podman/podman.sock"`; if only
-`/run/podman/podman.sock` exists (a rootful machine) use that instead. Keep the project under `C:\Users\...`, the folder
-`podman machine` shares by default. The Windows commands are **untested**.
-
-### Step 2: provision
-
-Passwords are passed by name (`-e NAME`, no value) from your environment, so they never appear on the command line.
-Set the password first:
-
-```bash
-# bash
-read -rsp 'Password: ' SOPHON_PROXMOX_PASSWORD; export SOPHON_PROXMOX_PASSWORD     # vCenter: SOPHON_VCENTER_PASSWORD, Hyper-V: SOPHON_HYPERV_PASSWORD
-```
-```powershell
-# PowerShell
-$env:SOPHON_PROXMOX_PASSWORD = Read-Host 'Password' -MaskInput                     # vCenter: SOPHON_VCENTER_PASSWORD, Hyper-V: SOPHON_HYPERV_PASSWORD
-```
-
-**Proxmox:**
-
-```bash
-docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_PROXMOX_HOST=pve.example.com -e SOPHON_PROXMOX_NODE=pve -e SOPHON_PROXMOX_PASSWORD sophon-tools provision
-```
-
-**vCenter:**
-
-```bash
-docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_HYPERVISOR=vcenter -e SOPHON_VCENTER_URL=https://vcenter.example.com -e SOPHON_VCENTER_USERNAME=administrator@vsphere.local -e SOPHON_VCENTER_DATACENTER=DC1 -e SOPHON_VCENTER_CLUSTER=Cluster1 -e SOPHON_VCENTER_DATASTORE=datastore1 -e SOPHON_VCENTER_NETWORK="VM Network" -e SOPHON_VCENTER_PASSWORD sophon-tools provision
-```
-
-**Hyper-V** (drives the host over WinRM/PowerShell from the container; nothing is installed on the host).
-Once per Hyper-V host, in an **elevated** PowerShell on that host:
-
-```powershell
-Enable-PSRemoting -Force
-```
-
-Only if needed (each is a security trade-off; keep the scope narrow):
-- The laptop reaches the host over a **Public** network profile, from another subnet, or through WSL/Docker NAT, and the
-  connection times out: `Set-NetFirewallRule -Name 'WINRM-HTTP-In-TCP' -RemoteAddress <laptop address or subnet>`.
-- You use a **local** account that is not the built-in `Administrator`: set the registry value
-  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\LocalAccountTokenFilterPolicy` to `1`.
-
-The account must be in the host's **Administrators** group. Create the virtual switch first (Hyper-V Manager >
-Virtual Switch Manager); InfraVM connects to it and needs a static IP on that network. Then run, with the password set
-as above but as `SOPHON_HYPERV_PASSWORD`:
-
-```bash
-docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_HYPERVISOR=hyperv -e SOPHON_HYPERV_HOST=hv.example.com -e SOPHON_HYPERV_USERNAME=Administrator -e SOPHON_HYPERV_SWITCH="External" -e SOPHON_HYPERV_PASSWORD sophon-tools provision
-```
-
-It creates a Generation 2 VM (Secure Boot off, static memory, no checkpoints) with one blank dynamic disk and both ISOs
-as DVD drives, disk first in the boot order, uploads each ISO once (hash-named, verified, skipped on reruns; allow a
-while on the first run, since they travel over WinRM), and starts it. Open the console with Hyper-V Manager >
-Connect, then continue at step 3 (the installer's disk is `/dev/sda`). Optional settings: `SOPHON_HYPERV_PORT`
-(5985 HTTP with NTLM message encryption, or 5986 HTTPS with a verified certificate, plus `SOPHON_HYPERV_CA_FILE`) and
-`SOPHON_HYPERV_PATH` (a folder on the host such as `D:\Hyper-V`, default is the host's VM path). The Hyper-V provider
-has been checked against the Hyper-V cmdlet definitions and with stubbed PowerShell, but **not yet against a real host**.
-
-**Dashboard** (a form for the same settings and a live progress diagram; open http://127.0.0.1:41327/):
-
-```bash
-docker run --rm --init -it -p 127.0.0.1:41327:41327 -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state sophon-tools dashboard
-```
+Other commands take the same form: `prepare` (step 1 only), `certificates ...`, `test`. Then open the VM's console (Hyper-V Manager > Connect, or your
+hypervisor's console) and continue at step 3. Create the Hyper-V virtual switch beforehand if you have none; InfraVM
+connects to it and needs a static-capable network. The raw `docker run` equivalents, the socket paths for each engine
+and the Hyper-V details are in [docs/manual-commands.md](docs/manual-commands.md).
 
 ### Another hypervisor (for example VMware Workstation)
 
 Proxmox, vCenter and Hyper-V are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
 
-1. Run the step 1 command and copy `artifacts/coreos/fedora-coreos-live.iso` and
+1. Run `prepare` and copy `artifacts/coreos/fedora-coreos-live.iso` and
    `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
 2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
    one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged).
 3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
-4. Power on and continue with steps 3 and 4 above. If it boots the live ISO again after install,
+4. Power on and continue with steps 3 and 4. If it boots the live ISO again after install,
    move the disk above the CDs or eject the ISOs.
-
-Notes:
-- **Rootful Docker on Linux** creates `artifacts/` as root; add `--user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)"` after `docker run`.
-- The container reaches the hypervisor through the engine's normal NAT (no host networking). If the hypervisor is only
-  reachable through a VPN or special route, check that route works from containers.
-- Only the Linux (Podman and Docker) path has been verified. Windows and macOS are untested; the commands avoid bash
-  features on purpose, and `sophon-state` is a named volume so private file modes also hold on Windows.
 
 ### Step 3: install, on the VM console (the stock live ISO)
 
@@ -201,12 +106,12 @@ between day 60 and day 90.
 
 1. **On the connected machine**, for the first time and every renewal:
    ```bash
-   docker run --rm --init -it -v "$(pwd):/workspace" -v sophon-state:/state sophon-tools certificates issue --domain example.com --output payload.txt
+   bash sophon-provision.sh certificates issue --domain example.com --output payload.txt
    ```
-   It prompts for an ACME email and a Cloudflare token (or reads `-e CF_DNS_API_TOKEN`) and writes one
-   base64 line, the whole `acme.json`, never the token. `--output` avoids PowerShell's `>` re-encoding the text.
-   Carry the file to the site; it holds private keys. Run it on the same machine each time (it keeps the ACME account
-   in the `sophon-state` volume).
+   (PowerShell: `.\sophon-provision.ps1 certificates issue ...`.) It prompts for an ACME email and a Cloudflare token
+   (or reads `CF_DNS_API_TOKEN` from your environment) and writes one base64 line, the whole `acme.json`, never the
+   token. `--output` avoids PowerShell's `>` re-encoding the text. Carry the file to the site; it holds private keys.
+   Run it on the same machine each time (it keeps the ACME account in the `sophon-state` volume).
 2. **On the InfraVM console**, the first time paste it during step 4 as above. For a renewal run:
    ```bash
    sophon-controller --refresh-certificates
@@ -219,6 +124,9 @@ See [docs/certificates.md](docs/certificates.md) for validation, backups and rat
 ## Layout
 
 ```text
+sophon-provision.sh  sophon-provision.ps1          steps 1-2 in one command (detect engine, run the tools container)
+.env.example                                       every step 1-2 setting with comments; copy to .env
+2-provision-hyperv-local.ps1                       step 2 for Hyper-V on this PC, as the signed-in user
 Containerfile                                      the tools image (default) and the InfraVM runner image
 1-prepare.yml  2-provision.yml  4-configure.yml   the playbooks, numbered by step
 ansible.cfg  inventory.yml                         Ansible setup
@@ -239,23 +147,19 @@ guest/              files that run inside InfraVM
   sophon-controller   step 4 entry point (runs src/console.py in the runner)
 
 src/                Python helpers
-  cli.py              the container's entry point: prepare, provision, dashboard, certificates, test
+  cli.py              the container's entry point: prepare, provision, certificates, test
   bundle.py           builds the deployment ISO
   certificates.py     issue / validate / import the ACME certificate store
   console.py          step 4 terminal wizard
-  deployment.py       progress viewer and optional dashboard (dashboard/)
-callback_plugins/   Ansible progress reporting for the dashboard
-docs/               inputs, architecture, certificates, decisions
+  deployment.py       setting validation and the playbook launcher
+docs/               inputs, manual commands, architecture, certificates, decisions
 tests/              unit and fixture tests
 ```
 
 ## Tests
 
 ```bash
-docker run --rm -v "$(pwd):/workspace" sophon-tools test   # unit, fixture, progress-viewer and step-boundary tests
+bash sophon-provision.sh test   # unit, fixture and step-boundary tests
 ```
 
-`tests/test_dashboard.py` drives a real Chromium through Playwright and is skipped unless
-Playwright is installed (run it with `python3 tests/test_dashboard.py` on a machine that has it).
-The 4-step flow has been verified end to end on both hypervisors; the layout above is the
-re-architecture of that working project.
+The 4-step flow has been verified end to end on Proxmox and vCenter; Hyper-V is newer and not yet verified on a real host.

@@ -138,24 +138,12 @@ class VCenterTests(unittest.TestCase):
             self.assertIsNotNone(validate_settings(values, invalid)[1], field)
         services = new_control(changes, 'configure')
         self.assertNotIn(self.params['password'], json.dumps(services))
-        self.assertFalse(any(key.startswith('SOPHON_VCENTER_') for key in services['environment']))
+        self.assertFalse(any(key.startswith('SOPHON_VCENTER_') for key in services['values']))
         self.assertIsNotNone(validate_settings(values, changes | {'SOPHON_VCENTER_URL': 'http://untrusted'})[1])
 
-    def test_selected_provider_stage_is_reported(self):
-        from test_deployment import run_fixture
-        import yaml
-        bootstrap = yaml.safe_load((ROOT / '2-provision.yml').read_text())[-1]['tasks']
-        tasks = [{'ansible.builtin.set_fact': {'hypervisor_provider': 'vcenter'}},
-                 *bootstrap[0:2],
-                 {'ansible.builtin.debug': {'msg': 'Done'}, 'tags': ['sophon_stage_end']}]
-        result, report = run_fixture(Path(self.temporary.name), tasks, {
-            'vcenter': '- ansible.builtin.debug:\n    msg: Authenticated\n'})
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(report['stages']['vcenter']['state'], 'completed', report)
-        self.assertEqual(report['stages']['proxmox']['state'], 'skipped', report)
-
-    def test_invalid_provider_is_rejected_before_starting_the_dashboard(self):
-        result = subprocess.run([sys.executable, str(ROOT / 'src/deployment.py'), '--step', 'provision', '--serve'],
+    def test_invalid_provider_is_rejected_before_starting_ansible(self):
+        result = subprocess.run([sys.executable, str(ROOT / 'src/deployment.py'), '--step', 'provision',
+                                 '--', '2-provision.yml'],
                                 env=dict(os.environ, SOPHON_HYPERVISOR='unsupported'),
                                 capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 2)

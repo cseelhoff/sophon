@@ -10,4 +10,3 @@
     - name: Build or reuse the cached media
       ansible.builtin.include_role:
         name: prepare
-      tags: [sophon_stage_prepare]

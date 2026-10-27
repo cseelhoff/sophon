@@ -29,30 +29,19 @@ def read_certificate(prompt):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Configure Sophon services on installed InfraVM')
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--run', action='store_true', help='Validate exported settings and run without prompting')
-    mode.add_argument('--dashboard', action='store_true', help='Open the optional loopback-only dashboard')
-    parser.add_argument('--port', type=int, default=41327)
-    parser.add_argument('--state-dir', type=Path)
+    parser.add_argument('--run', action='store_true', help='Validate exported settings and run without prompting')
     parser.add_argument('--refresh-certificates', action='store_true',
                         help='Replace an existing Traefik certificate store with the validated local handoff')
     options = parser.parse_args(argv)
     if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
         parser.error('Start this program using sophon-controller on installed InfraVM.')
-    if not 0 <= options.port <= 65535:
-        parser.error('--port must be between 0 and 65535')
-    if options.dashboard and options.refresh_certificates:
-        parser.error('--refresh-certificates requires the console wizard or --run, not --dashboard.')
     try:
-        for name, value in deployment.load_site_settings().items():
+        site = deployment.load_site_settings()
+        for name, value in site.items():
             os.environ.setdefault(name, value)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     arguments = ['--step', 'configure']
-    if options.state_dir:
-        arguments += ['--state-dir', str(options.state_dir)]
-    if options.dashboard:
-        return deployment.main(arguments + ['--serve', '--port', str(options.port)])
     values = deployment.new_control(os.environ, 'configure')['values']
     if not options.run:
         if not sys.stdin.isatty():
@@ -62,6 +51,10 @@ def main(argv=None):
         try:
             for name, (label, group, kind, default, required) in deployment.step_fields('configure').items():
                 value = values[name]
+                if value and site.get(name):
+                    # Already chosen during installation (step 3); do not ask twice.
+                    print(f'{label} ({name}): {value} (from installation)')
+                    continue
                 if kind == 'certificate':
                     answer = read_certificate(f'{label} (or @/workspace/path/to/payload.txt): ')
                     if answer.startswith('@'):

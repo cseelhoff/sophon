@@ -10,8 +10,12 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from deployment import new_control, step_fields, settings_payload, validate_settings
-from test_deployment import run_fixture
+from deployment import new_control, step_fields, validate_settings
+from test_deployment import run_fixture as _run_fixture
+
+
+def run_fixture(directory, tasks):
+    return _run_fixture(directory, tasks), None
 
 
 def test_step_settings():
@@ -26,7 +30,7 @@ def test_step_settings():
     }
     provision = new_control(secrets, 'provision')
     configure = new_control(secrets, 'configure')
-    assert 'SERVICE_SECRET' not in json.dumps(settings_payload(provision))
+    assert 'SERVICE_SECRET' not in json.dumps(provision)
     assert 'MANAGEMENT_SECRET' not in json.dumps(configure)
     assert 'VCENTER_SECRET' not in json.dumps(configure)
     assert 'HYPERV_SECRET' not in json.dumps(configure)
@@ -97,7 +101,7 @@ def test_site_configuration_and_secret_boundary():
             SOPHON_PROXMOX_PASSWORD='DO_NOT_FORWARD', SOPHON_CONTROLLER_PASSWORD='DO_NOT_FORWARD',
             SOPHON_DOMAIN='override.example')
         command = [sys.executable, str(directory / 'src/deployment.py'), '--step', 'configure',
-                   '--state-dir', str(directory / 'state'), '--', '4-configure.yml']
+                   '--', '4-configure.yml']
         result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
         received = json.loads((directory / 'received.json').read_text())

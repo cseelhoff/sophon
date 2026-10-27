@@ -96,7 +96,7 @@ class BundleTests(unittest.TestCase):
             'artifacts/containers/not-declared.tar', 'roles/gitea/.env', 'roles/gitea/credentials.json',
             'roles/gitea/secrets.yml', 'roles/gitea/id_ed25519', 'roles/gitea/config.pem',
             'roles/gitea/artifacts/deployment/key', 'roles/gitea/logs/run.json',
-            'src/dashboard/.git/config', 'group_vars/vault.key',
+            'roles/gitea/.git/config', 'group_vars/vault.key',
         ):
             self.write(name, 'PRIVATE_MARKER')
         with patch('bundle.subprocess.run', side_effect=self.encode_iso):
@@ -120,7 +120,7 @@ class BundleTests(unittest.TestCase):
 
     def test_symlink_files_directories_and_archives_rejected(self):
         target = self.write('unlisted-secret', 'PRIVATE')
-        for name in ('roles/gitea/tasks/main.yml', 'src/dashboard', 'group_vars'):
+        for name in ('roles/gitea/tasks/main.yml', 'roles/portainer', 'group_vars'):
             link = self.root / name
             if link.is_dir():
                 shutil.rmtree(link)
@@ -156,6 +156,54 @@ class BundleTests(unittest.TestCase):
                 self.create()
         self.assertEqual(self.output.read_bytes(), b'old-valid-iso')
         self.assertFalse(list(self.output.parent.glob('.sophon-bundle-*')))
+
+    def cli_arguments(self):
+        self.write('artifacts/containers/manifest.json', json.dumps([str(path) for path in self.containers]))
+        return ['--root', str(self.root), '--output', str(self.output), '--runner', str(self.runner)]
+
+    def test_unchanged_inputs_skip_the_rebuild_and_changes_or_force_rebuild(self):
+        arguments = self.cli_arguments()
+        with patch('bundle.subprocess.run', side_effect=self.encode_iso) as run:
+            self.assertEqual(bundle.main(arguments), 0)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(bundle.main(arguments), 0)
+            self.assertEqual(run.call_count, 1, 'unchanged inputs must not rebuild')
+            self.write('guest/install.sh', '#!/bin/sh\n# changed\n')
+            self.assertEqual(bundle.main(arguments), 0)
+            self.assertEqual(run.call_count, 2, 'a changed small file must rebuild')
+            self.containers[0].write_bytes(b'different archive content')
+            self.assertEqual(bundle.main(arguments), 0)
+            self.assertEqual(run.call_count, 3, 'a changed archive must rebuild')
+            self.assertEqual(bundle.main(arguments + ['--force']), 0)
+            self.assertEqual(run.call_count, 4, '--force must rebuild')
+            self.output.unlink()
+            self.assertEqual(bundle.main(arguments), 0)
+            self.assertEqual(run.call_count, 5, 'a missing ISO must rebuild')
+
+    def test_failed_build_never_leaves_a_matching_stamp(self):
+        arguments = self.cli_arguments()
+        with patch('bundle.subprocess.run', side_effect=subprocess.CalledProcessError(1, 'xorriso')):
+            self.assertEqual(bundle.main(arguments), 1)
+        self.assertFalse(list(self.output.parent.glob('*.stamp')))
+
+    def test_archives_are_hardlinked_or_hashed_while_copying(self):
+        for linked in (True, False):
+            with self.subTest(linked=linked):
+                real_link = os.link
+                broken = OSError('no hardlinks here')
+
+                def link(source, destination, real_link=real_link, linked=linked):
+                    if not linked:
+                        raise broken
+                    return real_link(source, destination)
+
+                with patch('bundle.os.link', side_effect=link), \
+                        patch('bundle.subprocess.run', side_effect=self.encode_iso):
+                    self.create()
+                for line in self.captured['SHA256SUMS'].decode().splitlines():
+                    digest, name = line.split('  ', 1)
+                    self.assertEqual(digest, hashlib.sha256(self.captured[name]).hexdigest(), name)
+                self.assertEqual(self.runner.read_bytes(), b'runner-image')
 
     def test_cli_manifest_defaults_and_explicit_containers(self):
         self.write('artifacts/containers/manifest.json', json.dumps([str(path) for path in self.containers]))

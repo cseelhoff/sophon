@@ -20,10 +20,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 # Only what step 4 runs; hypervisor roles and credentials never reach the VM.
 PROJECT = (
-    '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars', 'callback_plugins',
+    '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
     *(f'roles/{role}' for role in ('portainer', 'portainer_stack', 'coredns', 'traefik',
                                    'openldap', 'keycloak', 'gitea')),
-    'src/console.py', 'src/deployment.py', 'src/certificates.py', 'src/dashboard',
+    'src/console.py', 'src/deployment.py', 'src/certificates.py',
 )
 GUEST = ('host-bootstrap.sh', 'sophon-controller')
 EXCLUDED = frozenset((
@@ -66,18 +66,75 @@ def copy_tree(source, destination):
             raise ValueError(f'Only regular files are permitted: {child}')
 
 
-def write_checksums(stage):
+CHUNK = 4 * 1024 * 1024
+
+
+def copy_hashed(source, destination):
+    """Copy a file and return its SHA-256 from the same single read."""
+    digest = hashlib.sha256()
+    with source.open('rb') as reader, destination.open('wb') as writer:
+        for chunk in iter(lambda: reader.read(CHUNK), b''):
+            digest.update(chunk)
+            writer.write(chunk)
+    shutil.copymode(source, destination)
+    return digest.hexdigest()
+
+
+def write_checksums(stage, known=None):
+    """`known` maps relative paths to digests already computed while copying."""
+    known = known or {}
     with (stage / 'SHA256SUMS').open('w', encoding='utf-8') as output:
         for path in sorted(stage.rglob('*')):
             if path.is_file() and path != stage / 'SHA256SUMS':
                 relative = path.relative_to(stage).as_posix()
                 if any(ord(char) < 32 or ord(char) == 127 for char in relative) or '\\' in relative:
                     raise ValueError(f'Unsafe checksum filename: {relative!r}')
+                if relative in known:
+                    output.write(f'{known[relative]}  {relative}\n')
+                    continue
                 digest = hashlib.sha256()
                 with path.open('rb') as source:
-                    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                    for chunk in iter(lambda: source.read(CHUNK), b''):
                         digest.update(chunk)
                 output.write(f'{digest.hexdigest()}  {relative}\n')
+
+
+def project_files(source):
+    """Files copy_tree would copy; raises on symlinks so a stale stamp can never hide them."""
+    if source.is_file() and not source.is_symlink():
+        yield source
+        return
+    for directory, directories, files in os.walk(source):
+        directories[:] = sorted(name for name in directories if not excluded(name))
+        for name in (*directories, *files):
+            if (Path(directory) / name).is_symlink():
+                raise ValueError(f'Symlinks are not permitted in bundle inputs: {Path(directory) / name}')
+        for name in sorted(files):
+            if not excluded(name):
+                yield Path(directory) / name
+
+
+def fingerprint(root, output, runner, containers, tools, portainer_image, portainer_archive):
+    """Digest of every bundle input, or None if it cannot be computed (then the bundle is simply rebuilt).
+
+    Small files are hashed by content; the large archives by name, size and mtime so no gigabytes are read.
+    """
+    try:
+        summary = hashlib.sha256(json.dumps([portainer_image, portainer_archive, str(output)]).encode())
+        small = [Path(__file__).resolve(), root / 'guest/install.sh',
+                 *(root / 'guest' / name for name in GUEST)]
+        for name in PROJECT:
+            small.extend(project_files(root / name))
+        for path in small:
+            summary.update(f'{path.relative_to(root) if path.is_relative_to(root) else path.name}\0'.encode())
+            with path.open('rb') as stream:
+                summary.update(hashlib.file_digest(stream, 'sha256').digest())
+        for path in sorted((runner, tools, *containers)):
+            info = regular_path(path).stat()
+            summary.update(f'{path.name}\0{info.st_size}\0{info.st_mtime_ns}\0'.encode())
+        return summary.hexdigest()
+    except (ValueError, OSError):
+        return None
 
 
 def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
@@ -122,9 +179,18 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
         (metadata / 'portainer-archive').write_text(portainer_archive + '\n')
         container_dir = project / 'artifacts' / 'containers'
         container_dir.mkdir(parents=True)
+        known = {}
+
+        def place(source, destination):
+            # Hardlink the large archives (no copy); if the filesystem refuses, copy and hash in one read.
+            try:
+                os.link(source, destination)
+            except OSError:
+                known[destination.relative_to(stage).as_posix()] = copy_hashed(source, destination)
+
         for archive in containers:
-            shutil.copyfile(archive, container_dir / archive.name)
-        shutil.copyfile(runner, stage / 'runner.tar')
+            place(archive, container_dir / archive.name)
+        place(runner, stage / 'runner.tar')
         (stage / 'tools').mkdir()
         shutil.copyfile(tools, stage / 'tools/busybox')
         (stage / 'tools/busybox').chmod(0o755)
@@ -134,7 +200,7 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
             (stage / 'guest' / name).chmod(0o755)
         shutil.copyfile(root / 'guest/install.sh', stage / 'install.sh')
         (stage / 'install.sh').chmod(0o755)
-        write_checksums(stage)
+        write_checksums(stage, known)
         image = work / 'deployment.iso'
         subprocess.run([
             'xorriso', '-as', 'mkisofs', '-R', '-J', '-iso-level', '3',
@@ -158,6 +224,7 @@ def main(argv=None):
                         help='Expected container archive; repeat for every required image')
     parser.add_argument('--manifest', type=Path,
                         help='JSON list of expected archives (relative paths are repo-relative)')
+    parser.add_argument('--force', action='store_true', help='Rebuild even when no input changed')
     args = parser.parse_args(argv)
     root = args.root.resolve()
     try:
@@ -168,12 +235,22 @@ def main(argv=None):
             if not isinstance(containers, list) or not all(isinstance(path, str) for path in containers):
                 raise ValueError('Container manifest must be a JSON list of paths')
             containers = [root / path for path in containers]
+        output = Path(os.path.abspath(args.output or root / 'artifacts/bootstrap/sophon-deployment.iso'))
+        runner = args.runner or root / 'artifacts/bootstrap/runner.tar'
+        tools = args.bootstrap_tools or root / 'artifacts/bootstrap/busybox'
+        stamp = output.with_name(output.name + '.stamp')
+        current = fingerprint(root, output, runner, containers, tools, args.portainer_image, args.portainer_archive)
+        if (current and not args.force and output.is_file() and stamp.is_file()
+                and stamp.read_text().strip() == current):
+            print(f'Deployment ISO is up to date (inputs unchanged): {output}')
+            return 0
         output = create_bundle(
-            root, args.output or root / 'artifacts/bootstrap/sophon-deployment.iso',
-            args.runner or root / 'artifacts/bootstrap/runner.tar', containers,
+            root, output, runner, containers,
             bootstrap_tools=args.bootstrap_tools, portainer_image=args.portainer_image,
             portainer_archive=args.portainer_archive,
         )
+        if current:
+            stamp.write_text(current + '\n')
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f'Bundle creation failed: {error}', file=sys.stderr)
         return 1

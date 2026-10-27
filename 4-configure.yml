@@ -61,28 +61,21 @@
     - name: Initialize Portainer
       ansible.builtin.include_role:
         name: portainer
-      tags: [sophon_stage_infravm]
     - name: Deploy CoreDNS
       ansible.builtin.include_role:
         name: coredns
-      tags: [sophon_stage_coredns]
     - name: Deploy Traefik
       ansible.builtin.include_role:
         name: traefik
-      tags: [sophon_stage_traefik]
     - name: Deploy OpenLDAP
       ansible.builtin.include_role:
         name: openldap
-      tags: [sophon_stage_openldap]
     - name: Deploy Keycloak
       ansible.builtin.include_role:
         name: keycloak
-      tags: [sophon_stage_keycloak]
     - name: Deploy Gitea
       ansible.builtin.include_role:
         name: gitea
-      tags: [sophon_stage_gitea]
     - name: Finish service deployment
       ansible.builtin.debug:
         msg: "Deployment complete. Portainer: {{ infravm_portainer_url }}. Retain credentials in your password manager."
-      tags: [sophon_stage_end]

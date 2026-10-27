@@ -9,8 +9,6 @@ import sys
 COMMANDS = {
     'prepare': lambda args: ['ansible-playbook', '1-prepare.yml', *args],
     'provision': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision.yml'],
-    'dashboard': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', '--serve',
-                               '--bind', '0.0.0.0', '--port', '41327', *args],
     'certificates': lambda args: ['python3', 'src/certificates.py', *args],
     'test': lambda args: ['sh', '-c', 'python3 -m unittest discover -s tests "$@" && python3 tests/test_deployment.py '
                           '>/dev/null && python3 tests/test_steps.py', 'sh', *args],
@@ -22,7 +20,6 @@ HELP = """usage: docker run --rm -it -v <project>:/workspace -v <engine socket>:
 
   prepare                 step 1: cache downloads, build runner image and deployment ISO
   provision               steps 1-2: create the blank InfraVM (settings via -e SOPHON_*)
-  dashboard               step 2 progress UI (also publish -p 127.0.0.1:41327:41327)
   certificates issue ...  make the base64 certificate payload (--output FILE)
   test | shell            development helpers
 Anything else runs as a command in the container."""

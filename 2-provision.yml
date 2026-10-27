@@ -27,28 +27,22 @@
   hosts: localhost
   gather_facts: false
   tasks:
-    # Ansible evaluates stage tags before inventory variables exist, so each
-    # provider's tasks carry the same tags and are chosen with `when`.
     - name: Authenticate with Proxmox
       ansible.builtin.include_role:
         name: proxmox
       when: hypervisor_provider == 'proxmox'
-      tags: [sophon_stage_proxmox]
     - name: Authenticate with vCenter
       ansible.builtin.include_role:
         name: vcenter
       when: hypervisor_provider == 'vcenter'
-      tags: [sophon_stage_vcenter]
     - name: Authenticate with Hyper-V
       ansible.builtin.include_role:
         name: hyperv
       when: hypervisor_provider == 'hyperv'
-      tags: [sophon_stage_hyperv]
     - name: Create InfraVM with a blank disk and two ISOs
       ansible.builtin.include_role:
         name: "{{ hypervisor_provider }}"
         tasks_from: vm
-      tags: [sophon_stage_infravm]
     - name: Hand off to the InfraVM console
       ansible.builtin.debug:
         msg: |
@@ -58,4 +52,3 @@
             sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
             sudo bash /mnt/sophon/install.sh
           Then log in as core and run sophon-controller (step 4).
-      tags: [sophon_stage_end]

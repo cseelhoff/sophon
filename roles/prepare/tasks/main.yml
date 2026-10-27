@@ -138,19 +138,14 @@
 # ---- The reusable artifact ISO ---------------------------------------------------
 - name: Build the artifact ISO atomically
   ansible.builtin.command:
-    argv:
-      - "{{ ansible_playbook_python }}"
-      - "{{ playbook_dir }}/src/bundle.py"
-      - --output
-      - "{{ bundle_iso_path }}"
-      - --runner
-      - "{{ prepare_runner_path }}"
-      - --bootstrap-tools
-      - "{{ prepare_busybox_path }}"
-      - --manifest
-      - "{{ prepare_manifest_path }}"
-      - --portainer-image
-      - "{{ portainer_image }}"
-      - --portainer-archive
-      - "{{ portainer_image_tarname }}"
-  changed_when: true
+    argv: >-
+      {{ [ansible_playbook_python, playbook_dir ~ '/src/bundle.py',
+          '--output', bundle_iso_path,
+          '--runner', prepare_runner_path,
+          '--bootstrap-tools', prepare_busybox_path,
+          '--manifest', prepare_manifest_path,
+          '--portainer-image', portainer_image,
+          '--portainer-archive', portainer_image_tarname]
+         + (['--force'] if prepare_force | bool else []) }}
+  register: prepare_bundle
+  changed_when: "'up to date' not in prepare_bundle.stdout"

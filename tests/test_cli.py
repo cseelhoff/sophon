@@ -14,8 +14,7 @@ class CommandTests(unittest.TestCase):
                          ['ansible-playbook', '1-prepare.yml', '-e', 'prepare_force=true'])
         self.assertEqual(cli.COMMANDS['provision']([])[-2:], ['--', '2-provision.yml'])
         self.assertIn('--step', cli.COMMANDS['provision']([]))
-        dashboard = cli.COMMANDS['dashboard']([])
-        self.assertEqual(dashboard[dashboard.index('--bind') + 1], '0.0.0.0')
+        self.assertNotIn('dashboard', cli.COMMANDS)
         self.assertEqual(cli.COMMANDS['certificates'](['issue']), ['python3', 'src/certificates.py', 'issue'])
 
     def test_every_script_the_commands_run_exists(self):

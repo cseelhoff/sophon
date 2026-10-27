@@ -1,4 +1,5 @@
 artifacts/
+.env
 .tailscale/
 __pycache__/
 .ansible/

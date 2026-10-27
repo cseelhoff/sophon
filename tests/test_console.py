@@ -70,8 +70,8 @@ class ConsoleTests(unittest.TestCase):
                 patch('builtins.input', side_effect=lambda prompt: 'y' if prompt.endswith('[y/N] ') else ''), \
                 patch('console.getpass.getpass', return_value='') as hidden, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(console.main(['--state-dir', '/workspace/state']), 19)
-            run.assert_called_once_with(['--step', 'configure', '--state-dir', '/workspace/state', '--', '4-configure.yml'])
+            self.assertEqual(console.main([]), 19)
+            run.assert_called_once_with(['--step', 'configure', '--', '4-configure.yml'])
             self.assertEqual(hidden.call_count, sum(field[2] in ('password', 'certificate')
                                                    for field in deployment.step_fields('configure').values()))
             self.assertNotIn('FIXTURE_SECRET_VALUE', output.getvalue())
@@ -88,13 +88,6 @@ class ConsoleTests(unittest.TestCase):
                 self.assertNotIn('FIXTURE_SECRET_VALUE', error.getvalue())
                 self.assertIn('Configuration rejected:', error.getvalue())
 
-    def test_dashboard_starts_without_service_secrets(self):
-        with patch.dict(os.environ, {'SOPHON_DEPLOYMENT_STEP': 'configure'}, clear=True), \
-                patch('console.deployment.load_site_settings', return_value={}), \
-                patch('console.deployment.main', return_value=0) as run:
-            self.assertEqual(console.main(['--dashboard', '--port', '0']), 0)
-            run.assert_called_once_with(['--step', 'configure', '--serve', '--port', '0'])
-
     def test_certificate_refresh_is_explicit_and_console_only(self):
         with patch.dict(os.environ, service_values(), clear=True), \
                 patch('console.deployment.load_site_settings', return_value={}), \
@@ -104,9 +97,28 @@ class ConsoleTests(unittest.TestCase):
                                         '--extra-vars', 'traefik_acme_replace_existing=true'])
             run.reset_mock()
             with self.assertRaises(SystemExit) as error, contextlib.redirect_stderr(io.StringIO()):
-                console.main(['--dashboard', '--refresh-certificates'])
+                console.main(['--serve'])
             self.assertEqual(error.exception.code, 2)
             run.assert_not_called()
+
+    def test_values_chosen_at_install_are_not_asked_again(self):
+        site = {'SOPHON_INFRAVM_IP': '192.0.2.3', 'SOPHON_VNET_DNS': '192.0.2.53'}
+        prompts = []
+
+        def answer(prompt):
+            prompts.append(prompt)
+            return 'y' if prompt.endswith('[y/N] ') else ''
+
+        with patch.dict(os.environ, service_values() | site, clear=True), \
+                patch('console.deployment.load_site_settings', return_value=site), \
+                patch('console.deployment.main', return_value=0), \
+                patch('console.sys.stdin.isatty', return_value=True), \
+                patch('builtins.input', side_effect=answer), patch('console.getpass.getpass', return_value=''), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(console.main([]), 0)
+        self.assertFalse([prompt for prompt in prompts if 'SOPHON_INFRAVM_IP' in prompt or 'SOPHON_VNET_DNS' in prompt])
+        self.assertTrue([prompt for prompt in prompts if 'SOPHON_DOMAIN' in prompt])
+        self.assertIn('192.0.2.53 (from installation)', output.getvalue())
 
     def test_decline_does_not_deploy(self):
         with patch.dict(os.environ, service_values(), clear=True), \
@@ -134,39 +146,12 @@ class ConsoleTests(unittest.TestCase):
                                SOPHON_KOPIA_REPOSITORY_PASSWORD='DO_NOT_FORWARD',
                                PATH=str(directory) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(
-                [sys.executable, str(ROOT / 'src/console.py'), '--run', '--state-dir', str(directory / 'state')],
+                [sys.executable, str(ROOT / 'src/console.py'), '--run'],
                 env=environment, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 7, result.stderr)
             forwarded = json.loads(received.read_text())
             self.assertNotIn('DO_NOT_FORWARD', forwarded.values())
             self.assertEqual(forwarded['SOPHON_INFRAVM_IP'], '192.0.2.3')
-            self.assertEqual((directory / 'state/ansible.log').stat().st_mode & 0o777, 0o600)
-            self.assertEqual(json.loads((directory / 'state/status.json').read_text())['exit_code'], 7)
-
-    def test_optional_dashboard_launches_services_with_edited_values(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            received = directory / 'received.json'
-            binary = directory / 'ansible-playbook'
-            binary.write_text(
-                f'#!{sys.executable}\nimport json, os, sys\n'
-                f'open({str(received)!r}, "w").write(json.dumps([sys.argv[1:], dict(os.environ)]))\n')
-            binary.chmod(0o700)
-            control = deployment.new_control(dict(os.environ, **service_values(),
-                PATH=str(directory) + os.pathsep + os.environ['PATH']), 'configure')
-            data = json.dumps({'SOPHON_DOMAIN': 'edited.example'}).encode()
-            environment = {
-                'SERVER_PORT': '12345', 'HTTP_HOST': '127.0.0.1:12345', 'REQUEST_METHOD': 'POST',
-                'PATH_INFO': '/run', 'HTTP_ORIGIN': 'http://127.0.0.1:12345',
-                'HTTP_X_SOPHON_TOKEN': control['token'], 'CONTENT_TYPE': 'application/json',
-                'CONTENT_LENGTH': str(len(data)), 'wsgi.input': io.BytesIO(data),
-            }
-            status, payload = deployment.action_request(directory, control, environment)
-            self.assertEqual(status, '202 Accepted', payload)
-            control['processes'][0].wait(timeout=10)
-            args, forwarded = json.loads(received.read_text())
-            self.assertEqual(args, ['4-configure.yml'])
-            self.assertEqual(forwarded['SOPHON_DOMAIN'], 'edited.example')
             self.assertEqual(forwarded['SOPHON_DEPLOYMENT_STEP'], 'configure')
 
 

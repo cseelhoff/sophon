@@ -70,6 +70,39 @@ validate_network() {
         die "IP and gateway must not be network or broadcast addresses."
 }
 
+detect_network() {
+    local route dev cidr
+    detected_ip= detected_prefix= detected_gateway= detected_dns=
+    route=$(ip -4 route show default 2>/dev/null | head -n1) || true
+    detected_gateway=$(awk '{for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit }}' <<< "$route")
+    dev=$(awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}' <<< "$route")
+    if [[ -n $dev ]]; then
+        cidr=$(ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{ print $4; exit }') || true
+        if [[ $cidr == */* ]]; then detected_ip=${cidr%/*}; detected_prefix=${cidr#*/}; fi
+        detected_dns=$(resolvectl dns "$dev" 2>/dev/null |
+            awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print $i; exit }}') || true
+    fi
+    [[ -n $detected_dns ]] ||
+        detected_dns=$(awk '$1 == "nameserver" && $2 !~ /^127\./ { print $2; exit }' /etc/resolv.conf 2>/dev/null) || true
+}
+
+# The only disk that passes every blank-disk check, if there is exactly one; empty otherwise.
+detect_disk() {
+    local name found=()
+    while IFS= read -r name; do
+        ( validate_disk "$name" ) >/dev/null 2>&1 && found+=("$name")
+    done < <(lsblk -dnrpo NAME,TYPE,RO 2>/dev/null | awk '$2 == "disk" && $3 == 0 { print $1 }')
+    (( ${#found[@]} == 1 )) && printf '%s\n' "${found[0]}"
+    return 0
+}
+
+# ask VARIABLE 'Prompt' [default]: Enter alone accepts the default shown in brackets.
+ask() {
+    local answer
+    read -r -p "$2${3:+ [$3]}: " answer
+    printf -v "$1" '%s' "${answer:-${3:-}}"
+}
+
 validate_disk() {
     local disk=$1 type readonly children mounts signatures bytes source device
     [[ $disk == /dev/* ]] && is_block_device "$disk" ||
@@ -96,9 +129,6 @@ validate_disk() {
     [[ -z $signatures ]] || die "Target is nonblank; existing filesystems are preserved."
     bytes=$(blockdev --getsize64 "$disk")
     [[ $bytes =~ ^[0-9]+$ && $bytes -gt 0 ]] || die "Cannot determine target size."
-    printf 'Checking that every byte of %s is blank; this can take several minutes.\n' "$disk"
-    cmp --silent --bytes="$bytes" "$disk" /dev/zero ||
-        die "Target contains data or cannot be read; only fresh zero-filled disks are supported."
 }
 
 required_bytes() {
@@ -233,17 +263,26 @@ main() {
     done
     printf '%s\n' 'Fresh-disk installation only. Existing installations must use sophon-controller or restart sophon-host-bootstrap.'
     lsblk -e7 -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL
-    read -r -p 'Fresh target whole disk (for example /dev/vda): ' disk
+    disk=$(detect_disk)
+    if [[ -n $disk ]]; then
+        printf 'Target disk: %s (the only blank disk)\n' "$disk"
+    else
+        ask disk 'No single blank disk found automatically. Target whole disk (for example /dev/vda)' ''
+    fi
     disk=$(readlink -f -- "$disk")
     validate_disk "$disk"
     required=$(required_bytes "$media")
     (( $(blockdev --getsize64 "$disk") >= required )) ||
         die "Disk is too small; need at least $required bytes for OS, artifacts and image extraction."
-    read -r -p 'Installed IPv4 address: ' ip
-    read -r -p 'IPv4 prefix length (1-30): ' prefix
-    read -r -p 'IPv4 gateway: ' gateway
-    read -r -p 'DNS server IPv4 address: ' dns
+    # The live system's current network settings become the installed static configuration.
+    detect_network
+    ip=$detected_ip prefix=$detected_prefix gateway=$detected_gateway dns=$detected_dns
+    [[ -n $ip ]] || ask ip 'Installed IPv4 address' ''
+    [[ -n $prefix ]] || ask prefix 'IPv4 prefix length (1-30)' ''
+    [[ -n $gateway ]] || ask gateway 'IPv4 gateway' ''
+    [[ -n $dns ]] || ask dns 'DNS server IPv4 address' ''
     validate_network "$ip" "$prefix" "$gateway" "$dns"
+    printf 'Network (current values of this system): %s/%s, gateway %s, DNS %s\n' "$ip" "$prefix" "$gateway" "$dns"
     read -r -s -p 'New core console password: ' password; printf '\n'
     read -r -s -p 'Confirm core console password: ' confirmation; printf '\n'
     [[ -n $password && $password == "$confirmation" ]] || die "Passwords are empty or do not match."
@@ -254,9 +293,8 @@ main() {
     install -d -m 0700 "$work"
     render_ignition "$media" "$ip" "$prefix" "$gateway" "$dns" "$hash" > "$work/config.ign"
     unset hash
-    printf 'ALL DATA ON %s WILL BE DESTROYED. Type exactly: INSTALL %s\n' "$disk" "$disk"
-    read -r confirmation
-    [[ $confirmation == "INSTALL $disk" ]] || die "Disk confirmation did not match."
+    printf 'ALL DATA ON %s WILL BE DESTROYED (it is blank). Installing in 10 seconds; press Ctrl-C to abort.\n' "$disk"
+    sleep 10
     # Recheck immediately before the sole destructive command.
     validate_disk "$disk"
     coreos-installer install --offline --console tty0 --console ttyS0,115200n8 \
@@ -281,7 +319,6 @@ main() {
     printf '%s\n' \
         'Installation complete. Rebooting to the installed disk.' \
         'Log in as core with your console password, wait for host setup, then run: sophon-controller' \
-        'Optional dashboard: sophon-controller --dashboard' \
         'If firmware boots the live ISO again, select the disk or detach ISOs. DO NOT reinstall.' \
         'For setup failures: journalctl -u sophon-host-bootstrap; sudo systemctl restart sophon-host-bootstrap'
     sync

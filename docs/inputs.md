@@ -6,15 +6,18 @@ Keep every credential in a password manager: reruns need the same existing value
 ## Step 1 - prepare (internet)
 
 No inputs. Needs Docker or Podman, space for the images and ISOs, and internet.
-Add `-e prepare_force=true` after `prepare` in the step 1 command from the README to refresh cached downloads, for example:
-`docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare -e prepare_force=true`.
+Pass `-e prepare_force=true` after `prepare` to refresh cached downloads and force an ISO rebuild, for example:
+`bash sophon-provision.sh prepare -e prepare_force=true` (or `.\sophon-provision.ps1 prepare -e prepare_force=true`;
+the raw `docker run` form is in [manual-commands.md](manual-commands.md)).
 A laptop that is later offline
 must already have `artifacts/` and the built `sophon-tools` image from a completed run; steps 1-2 then
 use only the hypervisor's management network.
 
 ## Step 2 - provision
 
-Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or `hyperv`) or in the dashboard.
+Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or `hyperv`).
+Every step 1-2 variable below is also listed, with a comment, in [`.env.example`](../.env.example); copy it to `.env` and the
+`sophon-provision` scripts read it.
 
 | Proxmox | Meaning |
 |---|---|
@@ -39,17 +42,21 @@ Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or 
 | `SOPHON_HYPERV_CA_FILE` | optional CA PEM that verifies the HTTPS listener (port 5986); TLS verification is never disabled |
 | `SOPHON_HYPERV_SWITCH` | existing virtual switch already carrying the guest VLAN |
 | `SOPHON_HYPERV_PATH` | optional folder on the host for the VM, disk and ISOs (default: the host's VM path) |
+| `2-provision-hyperv-local.ps1` | same VM on the local machine as the signed-in user (no host or credentials); takes `-Switch` / `SOPHON_HYPERV_SWITCH`, `-Path` / `SOPHON_HYPERV_PATH` and the `SOPHON_INFRAVM_*` sizes |
 
 All providers: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
 A VM that already exists is only started if this workflow created it; anything else is left alone.
 
 ## Step 3 - install (console)
 
-`install.sh` asks for: the blank target disk (`/dev/vda` on Proxmox, `/dev/sda` on VMware and Hyper-V),
-a static IPv4 address and prefix, the gateway, an upstream DNS server, and a new password for the
-`core` console user. It refuses non-blank disks and requires typing `INSTALL <disk>`.
-The blank-disk check reads the whole disk and can take many minutes.
-Pick an address outside the DHCP pool; it is the address every service name resolves to.
+`install.sh` asks for nothing about the machine: it installs to the only blank disk (`/dev/vda` on Proxmox,
+`/dev/sda` on VMware and Hyper-V, found automatically) and keeps the live system's current address, prefix, gateway and
+DNS server as the installed static configuration. The one prompt is a new password for the `core` console user. If no
+single blank disk is found (zero or several) or no network is detected, it asks for that value. It refuses disks with
+partitions or filesystem signatures, rechecks that right before writing, and waits 10 seconds (Ctrl-C aborts).
+Those address and DNS values are saved, so `sophon-controller` (step 4) does not ask for them again. The address
+shown is usually a DHCP lease: reserve it on your DHCP server, or install from a network with a static address, because
+it is the address every service name resolves to.
 
 ## Step 4 - configure (console)
 
@@ -65,7 +72,6 @@ Pick an address outside the DHCP pool; it is the address every service name reso
 | Portainer licence | Business Edition key (a free 5-node starter licence works). |
 
 `sophon-controller --run` does the same non-interactively from exported `SOPHON_*` variables.
-`sophon-controller --dashboard` serves the optional progress UI on loopback.
 
 Service names (`traefik`, `portainer`, `dns`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.

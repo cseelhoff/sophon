@@ -1,7 +1,7 @@
 # Sophon glossary
 
 **Step**: one of the four stages of a deployment: 1 Prepare, 2 Provision, 3 Install, 4 Configure.
-The progress viewer and `sophon-controller` use the same names (`--step provision|configure`, covering steps 1-2 and 4).
+`sophon-controller` and the playbook launcher use the same names (`--step provision|configure`, covering steps 1-2 and 4).
 
 **Prepare**: the connected step that builds every artifact the later steps carry.
 

@@ -27,7 +27,7 @@ environment). It is never part of the payload.
 ## Import it (InfraVM, step 4)
 
 Paste the payload into the optional **Pre-issued certificates** prompt of `sophon-controller`
-(`@/workspace/path` reads a file instead; the dashboard has a text box), and leave the Cloudflare
+(`@/workspace/path` reads a file instead), and leave the Cloudflare
 token empty. Sophon checks that all six names are covered by trusted, unexpired chains whose keys
 match, then stores the file privately (mode 0600, replaced atomically) and Traefik is seeded from it.
 A malformed, account-only or wrong-domain payload is rejected before anything is replaced.
