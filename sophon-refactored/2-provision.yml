@@ -1,0 +1,55 @@
+---
+# Steps 1+2 - connected laptop with hypervisor access. Validates inputs, builds
+# the media (1-prepare.yml), then creates a blank InfraVM with both ISOs attached.
+- name: Validate provisioning inputs
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Require a supported hypervisor
+      ansible.builtin.assert:
+        that: hypervisor_provider in ['proxmox', 'vcenter']
+        fail_msg: "SOPHON_HYPERVISOR must be proxmox or vcenter."
+    - name: Require hypervisor settings
+      ansible.builtin.assert:
+        that: lookup('env', item) | trim | length > 0
+        fail_msg: "Supply {{ item }} before provisioning. Service credentials belong in step 4."
+        quiet: true
+      loop: >-
+        {{ ['SOPHON_PROXMOX_HOST', 'SOPHON_PROXMOX_PASSWORD'] if hypervisor_provider == 'proxmox' else
+           ['SOPHON_VCENTER_URL', 'SOPHON_VCENTER_PASSWORD', 'SOPHON_VCENTER_DATACENTER',
+            'SOPHON_VCENTER_CLUSTER', 'SOPHON_VCENTER_DATASTORE', 'SOPHON_VCENTER_NETWORK'] }}
+
+- name: Prepare installation media
+  ansible.builtin.import_playbook: 1-prepare.yml
+
+- name: Create InfraVM
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    # Ansible evaluates stage tags before inventory variables exist, so each
+    # provider's tasks carry the same tags and are chosen with `when`.
+    - name: Authenticate with Proxmox
+      ansible.builtin.include_role:
+        name: proxmox
+      when: hypervisor_provider == 'proxmox'
+      tags: [sophon_stage_proxmox]
+    - name: Authenticate with vCenter
+      ansible.builtin.include_role:
+        name: vcenter
+      when: hypervisor_provider == 'vcenter'
+      tags: [sophon_stage_vcenter]
+    - name: Create InfraVM with a blank disk and two ISOs
+      ansible.builtin.include_role:
+        name: "{{ hypervisor_provider }}"
+        tasks_from: vm
+      tags: [sophon_stage_infravm]
+    - name: Hand off to the InfraVM console
+      ansible.builtin.debug:
+        msg: |
+          InfraVM is running. Step 3: open its hypervisor console (the CoreOS live
+          environment) and run:
+            sudo mkdir -p /mnt/sophon
+            sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
+            sudo bash /mnt/sophon/install.sh
+          Then log in as core and run sophon-controller (step 4).
+      tags: [sophon_stage_end]

@@ -1,0 +1,106 @@
+---
+# Keycloak configuration
+keycloak_image_name: "quay.io/keycloak/keycloak"
+keycloak_image_tag: "26.5"
+
+# Network
+keycloak_port: 8080
+
+# Domain
+keycloak_hostname: "auth"
+keycloak_domain: "{{ domain_name }}"
+
+# Required credentials come from group_vars/all.yml or explicit overrides.
+keycloak_admin_user: "admin"
+
+# Database. Keycloak's realm, clients, mappers and group mappings are written
+# by configure.yml over the Admin REST API, so the DB must outlive the
+# container. Bundled Postgres on the shared `proxy` network, same pattern as
+# gitea-db: no host port, no traefik labels.
+keycloak_db_type: "postgres"
+keycloak_postgres_image: "docker.io/library/postgres:16-alpine"
+keycloak_db_host: "keycloak-db"
+keycloak_db_port: 5432
+keycloak_db_name: "keycloak"
+keycloak_db_user: "keycloak"
+
+# Prestaged tars loaded before the stack deploys (<vendor>-<image>_<tag>.tar).
+keycloak_image_tars:
+  - "{{ sophon_containers_dir }}/keycloak-keycloak_{{ keycloak_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
+
+# LDAP integration (requires openldap role deployed first)
+openldap_domain: "{{ domain_name }}"
+openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
+openldap_keycloak_password: "{{ openldap_admin_password }}"
+keycloak_ldap_url: "ldaps://ldap.{{ openldap_domain }}:636"
+keycloak_ldap_bind_dn: "cn=keycloak-bind,ou=services,{{ openldap_base_dn }}"
+
+# LDAP attribute / group mappers attached to the LDAP user federation provider
+keycloak_ldap_mappers:
+  - name: username
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["uid"]
+      is.mandatory.in.ldap: ["true"]
+      read.only: ["false"]
+      always.read.value.from.ldap: ["false"]
+      user.model.attribute: ["username"]
+  - name: first name
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["givenName"]
+      attribute.force.default: ["true"]
+      is.mandatory.in.ldap: ["true"]
+      is.binary.attribute: ["false"]
+      read.only: ["false"]
+      always.read.value.from.ldap: ["true"]
+      user.model.attribute: ["firstName"]
+  - name: last name
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["sn"]
+      is.mandatory.in.ldap: ["true"]
+      read.only: ["false"]
+      always.read.value.from.ldap: ["true"]
+      user.model.attribute: ["lastName"]
+  - name: email
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["mail"]
+      is.mandatory.in.ldap: ["false"]
+      always.read.value.from.ldap: ["false"]
+      read.only: ["false"]
+      user.model.attribute: ["email"]
+  - name: creation date
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["createTimestamp"]
+      is.mandatory.in.ldap: ["false"]
+      always.read.value.from.ldap: ["true"]
+      read.only: ["true"]
+      user.model.attribute: ["createTimestamp"]
+  - name: modify date
+    providerId: user-attribute-ldap-mapper
+    config:
+      ldap.attribute: ["modifyTimestamp"]
+      is.mandatory.in.ldap: ["false"]
+      read.only: ["true"]
+      always.read.value.from.ldap: ["true"]
+      user.model.attribute: ["modifyTimestamp"]
+  - name: group-ldap-mapper
+    providerId: group-ldap-mapper
+    config:
+      mode: ["LDAP_ONLY"]
+      membership.attribute.type: ["DN"]
+      user.roles.retrieve.strategy: ["GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE"]
+      group.name.ldap.attribute: ["cn"]
+      membership.ldap.attribute: ["member"]
+      ignore.missing.groups: ["false"]
+      preserve.group.inheritance: ["true"]
+      membership.user.ldap.attribute: ["uid"]
+      group.object.classes: ["groupOfNames"]
+      memberof.ldap.attribute: ["memberOf"]
+      groups.dn: ["ou=groups,{{ openldap_base_dn }}"]
+      drop.non.existing.groups.during.sync: ["false"]
+      groups.path: ["/"]

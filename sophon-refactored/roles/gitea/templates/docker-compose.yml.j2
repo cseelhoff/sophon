@@ -1,0 +1,164 @@
+# Gitea deployed via Portainer Stacks API
+# Admin user + Keycloak OIDC auth source are bootstrapped by the gitea-init
+# sidecar (one-shot) using the gitea CLI against the shared data volume.
+
+services:
+  gitea:
+    image: {{ gitea_image }}
+    pull_policy: never
+    container_name: gitea
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE={{ gitea_db_type }}
+      - GITEA__database__HOST={{ gitea_db_host }}
+      - GITEA__database__NAME={{ gitea_db_name }}
+      - GITEA__database__USER={{ gitea_db_user }}
+      - GITEA__database__PASSWD={{ gitea_db_password }}
+      - GITEA__database__SSL_MODE=disable
+      - GITEA__server__DOMAIN={{ gitea_hostname }}.{{ gitea_domain }}
+      - GITEA__server__ROOT_URL={{ gitea_root_url }}
+      - GITEA__server__SSH_DOMAIN={{ gitea_ssh_domain }}
+      - GITEA__server__SSH_PORT={{ gitea_port_ssh }}
+      - GITEA__server__SSH_LISTEN_PORT=22
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__server__LFS_START_SERVER=true
+      - GITEA__service__DISABLE_REGISTRATION={{ gitea_disable_registration | lower }}
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__security__REVERSE_PROXY_LIMIT=1
+      - GITEA__security__REVERSE_PROXY_TRUSTED_PROXIES=*
+{% if gitea_actions_enabled %}
+      - GITEA__actions__ENABLED=true
+{% endif %}
+{% if gitea_oauth_enabled %}
+      - GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION=true
+      - GITEA__oauth2_client__ACCOUNT_LINKING=auto
+      - GITEA__oauth2_client__USERNAME=nickname
+      - GITEA__oauth2_client__OPENID_CONNECT_SCOPES={{ gitea_oauth_scopes }}
+{% endif %}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    volumes:
+      - gitea_data:/data
+    ports:
+      - "{{ gitea_port_ssh }}:22"
+    networks:
+      - proxy
+    depends_on:
+      gitea-db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.gitea.entrypoints=websecure"
+      - "traefik.http.routers.gitea.rule=Host(`{{ gitea_hostname }}.{{ gitea_domain }}`)"
+      - "traefik.http.routers.gitea.tls=true"
+      - "traefik.http.routers.gitea.tls.certresolver=letsencrypt"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+
+  # Bundled PostgreSQL on the shared `proxy` network. Postgres binds no host
+  # port and has no traefik labels, so co-locating with proxy adds no exposure.
+  # Single-network setup keeps DNS resolution simple (only one nameserver in
+  # gitea's resolv.conf), which sidesteps Go-resolver/aardvark interactions.
+  gitea-db:
+    image: {{ gitea_postgres_image }}
+    pull_policy: never
+    container_name: gitea-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB={{ gitea_db_name }}
+      - POSTGRES_USER={{ gitea_db_user }}
+      - POSTGRES_PASSWORD={{ gitea_db_password }}
+    volumes:
+      - gitea_db_data:/var/lib/postgresql/data
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ gitea_db_user }} -d {{ gitea_db_name }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # One-shot bootstrap: creates the admin user and Keycloak OIDC auth source.
+  # Checks existing records before creation; real CLI failures must stop deploy.
+  gitea-init:
+    image: {{ gitea_image }}
+    pull_policy: never
+    container_name: gitea-init
+    restart: "no"
+    depends_on:
+      gitea:
+        condition: service_healthy
+    user: "1000:1000"
+    environment:
+      - GITEA_WORK_DIR=/data/gitea
+      - GITEA_CUSTOM=/data/gitea
+      - GITEA_APP_INI=/data/gitea/conf/app.ini
+    volumes:
+      - gitea_data:/data
+    networks:
+      - proxy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "gitea-init: waiting for app.ini..."
+        for i in $$(seq 1 60); do
+          [ -f /data/gitea/conf/app.ini ] && break
+          sleep 2
+        done
+
+        echo "gitea-init: ensuring admin user '{{ gitea_admin_user }}' exists..."
+        if gitea admin user list 2>/dev/null | awk 'NR>1 {print $$2}' | grep -qx '{{ gitea_admin_user }}'; then
+          echo "gitea-init: admin user already exists."
+        else
+          gitea admin user create \
+            --username '{{ gitea_admin_user }}' \
+            --password '{{ gitea_admin_password }}' \
+            --email '{{ gitea_admin_email }}' \
+            --admin --must-change-password=false
+        fi
+
+{% if gitea_oauth_enabled %}
+        echo "gitea-init: syncing Keycloak OIDC auth source..."
+        # Look up existing source by name. `gitea admin auth list` columns:
+        #   ID  Name  Type  Enabled
+        EXISTING_ID=$$(gitea admin auth list 2>/dev/null | awk -v n='{{ gitea_oauth_name }}' 'NR>1 && $$2==n {print $$1; exit}')
+
+        if [ -n "$$EXISTING_ID" ]; then
+          echo "gitea-init: updating existing OIDC source id=$$EXISTING_ID (keeps secret in sync with Keycloak)."
+          gitea admin auth update-oauth \
+            --id "$$EXISTING_ID" \
+            --name '{{ gitea_oauth_name }}' \
+            --provider openidConnect \
+            --key '{{ gitea_oauth_client_id }}' \
+            --secret '{{ gitea_oauth_client_secret }}' \
+            --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
+            --scopes '{{ gitea_oauth_scopes }}'
+        else
+          echo "gitea-init: creating new OIDC auth source."
+          gitea admin auth add-oauth \
+            --name '{{ gitea_oauth_name }}' \
+            --provider openidConnect \
+            --key '{{ gitea_oauth_client_id }}' \
+            --secret '{{ gitea_oauth_client_secret }}' \
+            --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
+            --scopes '{{ gitea_oauth_scopes }}'
+        fi
+{% endif %}
+
+        echo "gitea-init: done."
+
+volumes:
+  gitea_data:
+  gitea_db_data:
+
+networks:
+  proxy:
+    external: true

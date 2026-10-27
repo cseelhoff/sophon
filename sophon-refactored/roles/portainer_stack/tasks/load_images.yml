@@ -1,0 +1,32 @@
+---
+- name: Stat image archives
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ portainer_stack_image_tars }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: portainer_stack_tar_stat
+
+- name: Fail if any image archive is missing
+  ansible.builtin.fail:
+    msg: >-
+      Stack '{{ portainer_stack_name }}' is missing image archives:
+      {{ portainer_stack_tar_stat.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}.
+      Run 1-prepare.yml, and check prepare_container_images lists these images.
+  when: portainer_stack_tar_stat.results | rejectattr('stat.exists') | list | length > 0
+
+- name: Load image archives into the endpoint
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_stack_endpoint_id }}/docker/images/load"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+      Content-Type: "application/x-tar"
+    src: "{{ item }}"
+    remote_src: false
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: [200]
+    timeout: "{{ portainer_stack_image_load_timeout }}"
+  loop: "{{ portainer_stack_image_tars }}"
+  loop_control:
+    label: "{{ item | basename }}"

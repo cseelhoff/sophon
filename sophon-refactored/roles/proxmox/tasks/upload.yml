@@ -1,0 +1,34 @@
+---
+# Upload one ISO (item: source, filename) and wait for Proxmox to finish it.
+# upload.py keeps the session ticket out of argv and any credential file.
+
+- name: Upload {{ item.filename }}
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ role_path }}/files/upload.py"
+    stdin: >-
+      {{ {'url': proxmox_api ~ '/nodes/' ~ proxmox_node ~ '/storage/' ~ proxmox_iso_storage_id ~ '/upload',
+          'ticket': proxmox_ticket, 'csrf': proxmox_csrf,
+          'validate_certs': proxmox_validate_certs | bool,
+          'path': item.source, 'filename': item.filename} | to_json }}
+  register: proxmox_upload
+  changed_when: true
+  no_log: true
+
+- name: Wait for the upload task to finish
+  ansible.builtin.uri:
+    url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/tasks/{{ (proxmox_upload.stdout | from_json).data | urlencode }}/status"
+    headers:
+      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: proxmox_upload_task
+  until: proxmox_upload_task.json.data.status == 'stopped'
+  retries: 180
+  delay: 5
+  no_log: true
+
+- name: Require a successful upload
+  ansible.builtin.assert:
+    that: proxmox_upload_task.json.data.exitstatus == 'OK'
+    fail_msg: "Proxmox upload task failed; inspect the task log on Proxmox."

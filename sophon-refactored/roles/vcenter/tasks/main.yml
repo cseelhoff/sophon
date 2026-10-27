@@ -1,0 +1,9 @@
+---
+- name: Authenticate with vCenter using verified HTTPS
+  vcenter_vm:
+    action: authenticate
+    url: "{{ vcenter_url }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    ca_file: "{{ vcenter_ca_file }}"
+    datacenter: "{{ vcenter_datacenter }}"

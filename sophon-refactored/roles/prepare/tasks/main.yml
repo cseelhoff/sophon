@@ -1,0 +1,152 @@
+---
+- name: Create artifact directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ sophon_containers_dir }}"
+    - "{{ artifacts_dir }}/coreos"
+    - "{{ prepare_bootstrap_dir }}"
+    - "{{ prepare_coredns_src | dirname }}"
+
+# ---- Container archives (network only when something is missing) ------------
+- name: Stat the CoreDNS archive
+  ansible.builtin.stat:
+    path: "{{ prepare_coredns_tar }}"
+  register: prepare_coredns_stat
+
+- name: Pull and save missing container images
+  ansible.builtin.command:
+    argv: [sh, -c, 'docker pull "$0" && docker save -o "$1" "$0"', "{{ item.0 }}", "{{ sophon_containers_dir }}/{{ item.1 }}"]
+    creates: "{{ omit if prepare_force | bool else sophon_containers_dir ~ '/' ~ item.1 }}"
+  loop: "{{ prepare_container_images | zip(prepare_image_tars) | list }}"
+  loop_control:
+    label: "{{ item.0 }}"
+
+- name: Build and save the CoreDNS image
+  when: prepare_force | bool or not prepare_coredns_stat.stat.exists
+  block:
+    - name: Clone or update CoreDNS Docker Discovery source
+      ansible.builtin.git:
+        repo: "{{ prepare_coredns_repo }}"
+        dest: "{{ prepare_coredns_src }}"
+        version: master
+        update: true
+    - name: Build the CoreDNS image
+      ansible.builtin.command:
+        argv: [docker, build, -t, "{{ prepare_coredns_image }}", "{{ prepare_coredns_src }}"]
+      changed_when: true
+    - name: Save the CoreDNS archive
+      ansible.builtin.command:
+        argv: [docker, save, -o, "{{ prepare_coredns_tar }}", "{{ prepare_coredns_image }}"]
+      changed_when: true
+
+- name: Record the complete archive list
+  ansible.builtin.copy:
+    content: "{{ (prepare_image_tars + ['coredns-dockerdiscovery.tar']) | map('regex_replace', '^', 'artifacts/containers/') | list | to_nice_json }}\n"
+    dest: "{{ prepare_manifest_path }}"
+    mode: "0644"
+
+# ---- Stock CoreOS live ISO ----------------------------------------------------
+- name: Inspect the cached stream metadata and ISO
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop: ["{{ prepare_coreos_metadata_path }}", "{{ coreos_iso_path }}"]
+  register: prepare_coreos_cache
+
+- name: Download the official CoreOS stable stream metadata
+  ansible.builtin.get_url:
+    url: "{{ prepare_coreos_stream_url }}"
+    dest: "{{ prepare_coreos_metadata_path }}"
+    mode: "0644"
+    force: true
+  when: prepare_force | bool or not prepare_coreos_cache.results[0].stat.exists
+
+- name: Read the live ISO location and digest
+  ansible.builtin.set_fact:
+    prepare_coreos_media: >-
+      {{ (lookup('file', prepare_coreos_metadata_path) | from_json)
+         .architectures.x86_64.artifacts.metal.formats.iso.disk }}
+
+- name: Require trusted HTTPS media metadata
+  ansible.builtin.assert:
+    that:
+      - prepare_coreos_media.location is match('^https://builds\.coreos\.fedoraproject\.org/.*\.iso$')
+      - prepare_coreos_media.sha256 is match('^[a-f0-9]{64}$')
+
+- name: Download the unchanged full CoreOS live ISO
+  ansible.builtin.get_url:
+    url: "{{ prepare_coreos_media.location }}"
+    dest: "{{ coreos_iso_path }}"
+    checksum: "sha256:{{ prepare_coreos_media.sha256 }}"
+    mode: "0644"
+    force: true
+  when: prepare_force | bool or prepare_coreos_cache.results[1].stat.checksum | default('') != prepare_coreos_media.sha256
+
+# ---- Offline runner image (built from the Containerfile) -----------------------
+- name: Build the runner image
+  ansible.builtin.command:
+    argv: [docker, build, --target, runner, -t, "{{ prepare_runner_image }}", -f, "{{ playbook_dir }}/Containerfile", "{{ playbook_dir }}"]
+  changed_when: false
+
+- name: Read the runner image ID
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ prepare_runner_image }}"]
+  register: prepare_runner_id
+  changed_when: false
+
+- name: Inspect the saved runner
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: ["{{ prepare_runner_path }}", "{{ prepare_runner_path }}.id"]
+  register: prepare_runner_cache
+
+- name: Save the runner archive when the image changed
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - docker save -o "$0.tmp" "$1" && mv -- "$0.tmp" "$0" && printf %s "$2" > "$0.id"
+      - "{{ prepare_runner_path }}"
+      - "{{ prepare_runner_image }}"
+      - "{{ prepare_runner_id.stdout | trim }}"
+  when: >-
+    prepare_force | bool or not prepare_runner_cache.results[0].stat.exists or
+    not prepare_runner_cache.results[1].stat.exists or
+    lookup('file', prepare_runner_path ~ '.id') != prepare_runner_id.stdout | trim
+  changed_when: true
+
+# ---- Static installer helper (busybox runs before the OS has any tools) --------
+- name: Extract the static busybox
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - >-
+        docker pull "$1" && docker run --rm --entrypoint cat "$1" /bin/busybox > "$0.tmp"
+        && chmod 0755 "$0.tmp" && mv -- "$0.tmp" "$0"
+      - "{{ prepare_busybox_path }}"
+      - "{{ prepare_busybox_image }}"
+    creates: "{{ omit if prepare_force | bool else prepare_busybox_path }}"
+
+# ---- The reusable artifact ISO ---------------------------------------------------
+- name: Build the artifact ISO atomically
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/src/bundle.py"
+      - --output
+      - "{{ bundle_iso_path }}"
+      - --runner
+      - "{{ prepare_runner_path }}"
+      - --bootstrap-tools
+      - "{{ prepare_busybox_path }}"
+      - --manifest
+      - "{{ prepare_manifest_path }}"
+      - --portainer-image
+      - "{{ portainer_image }}"
+      - --portainer-archive
+      - "{{ portainer_image_tarname }}"
+  changed_when: true

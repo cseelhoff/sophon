@@ -1,0 +1,6 @@
+artifacts/
+__pycache__/
+.ansible/
+.bundle-test-*/
+.prepare-test-*/
+.installer-fixture-*/

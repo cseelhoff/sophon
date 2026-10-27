@@ -1,0 +1,34 @@
+---
+# Re-fetch and rebuild every input even if it is cached.
+prepare_force: false
+
+# Every image any role deploys. A stack whose image is missing here cannot start
+# without egress (compose files use pull_policy: never).
+prepare_container_images:
+  - "{{ portainer_image }}"
+  - "docker.io/library/traefik:v3.2"
+  - "docker.io/gitea/gitea:1.22"
+  - "docker.io/library/postgres:16-alpine"
+  - "docker.io/bitnamilegacy/openldap:2.6.10-debian-12-r4"
+  - "docker.io/ldez/traefik-certs-dumper:v2.8.3"
+  - "quay.io/keycloak/keycloak:26.5"
+# <vendor>-<image>_<tag>.tar, the name every role and the installer expect.
+prepare_image_tars: >-
+  {{ prepare_container_images
+     | map('regex_replace', '^(?:.*/)?([^/:]+)/([^/:]+):(.+)$', '\1-\2_\3.tar') | list }}
+
+# CoreDNS is a custom build (coredns-dockerdiscovery), not an upstream image.
+prepare_coredns_repo: "https://github.com/cseelhoff-ms/coredns-dockerdiscovery.git"
+prepare_coredns_src: "{{ artifacts_dir }}/cache/coredns-dockerdiscovery"
+prepare_coredns_image: "coredns-dockerdiscovery:latest"
+prepare_coredns_tar: "{{ sophon_containers_dir }}/coredns-dockerdiscovery.tar"
+
+prepare_coreos_stream_url: "https://builds.coreos.fedoraproject.org/streams/stable.json"
+prepare_coreos_metadata_path: "{{ artifacts_dir }}/coreos/stable.json"
+
+prepare_bootstrap_dir: "{{ artifacts_dir }}/bootstrap"
+prepare_runner_image: "sophon:latest"
+prepare_busybox_image: "docker.io/library/busybox:1.37-musl"
+prepare_runner_path: "{{ prepare_bootstrap_dir }}/runner.tar"
+prepare_busybox_path: "{{ prepare_bootstrap_dir }}/busybox"
+prepare_manifest_path: "{{ sophon_containers_dir }}/manifest.json"

@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sophon | Deployment</title>
+  <style>
+    :root { color-scheme: dark; --ink:#e6edf3; --muted:#a9b7c0; --line:#46545e; --green:#62d69a; --blue:#78baff; --red:#ff8992; --amber:#e7bd65; --background:#101619; --surface:#1b242a; --canvas:#151c20; }
+    * { box-sizing:border-box; letter-spacing:0; }
+    body { margin:0; color:var(--ink); background:var(--background); font:14px "DejaVu Sans", sans-serif; }
+    button { font:inherit; cursor:pointer; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:4px; }
+    button:focus-visible { outline:3px solid var(--blue); outline-offset:2px; }
+    header { display:flex; align-items:center; flex-wrap:wrap; gap:12px 28px; padding:18px 24px; border-bottom:1px solid var(--line); background:var(--surface); }
+    h1 { margin:0; font-size:24px; font-weight:700; }
+    h1 span { font-size:14px; font-weight:400; color:var(--muted); margin-left:12px; }
+    #run-state { font-weight:700; }
+    #run-time { margin-left:auto; font:12px "DejaVu Sans Mono", monospace; color:var(--muted); }
+    main { display:grid; grid-template-columns:250px minmax(0,1fr); min-height:calc(100vh - 70px); }
+    aside { border-right:1px solid var(--line); background:var(--surface); padding:20px 12px; }
+    h2 { font-size:12px; font-weight:700; margin:0 10px 16px; color:var(--muted); }
+    ol { list-style:none; padding:0; margin:0; }
+    .stage { width:100%; display:grid; grid-template-columns:24px minmax(0,1fr); gap:3px 8px; text-align:left; padding:12px 10px; margin-bottom:4px; border-color:transparent; min-height:65px; }
+    .stage:hover { background:#26343c; }
+    .stage[aria-pressed="true"] { background:#203d33; border-color:#589b7a; }
+    .stage .symbol { grid-row:span 2; align-self:center; font-size:18px; text-align:center; }
+    .stage .name { font-weight:600; overflow-wrap:anywhere; }
+    .stage .state { color:var(--muted); font-size:12px; }
+    [data-state="completed"] .symbol { color:var(--green); }
+    [data-state="running"] .symbol { color:var(--blue); }
+    [data-state="failed"] .symbol { color:var(--red); }
+    [data-state="unknown"] .symbol, [data-state="interrupted"] .symbol { color:var(--amber); }
+    .workspace { min-width:0; padding:16px 20px; }
+    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
+    .toolbar strong { margin-right:auto; font-size:14px; }
+    .toolbar button { min-width:36px; height:36px; padding:0 10px; }
+    #zoom-level { width:48px; text-align:center; font:12px "DejaVu Sans Mono", monospace; }
+    #diagram-pane { height:calc(100vh - 198px); min-height:360px; overflow:auto; border:1px solid var(--line); border-radius:4px; background-color:var(--canvas); background-image:radial-gradient(var(--line) .7px, transparent .7px); background-size:16px 16px; }
+    object { display:block; width:100%; aspect-ratio:1661 / 1095; }
+    #detail { padding:14px 0; display:flex; flex-wrap:wrap; gap:8px 20px; min-height:46px; color:var(--muted); font-size:12px; }
+    #detail strong { color:var(--ink); }
+    .workspace.has-tasks #diagram-pane { height:35vh; min-height:220px; }
+    #task-panel { border-top:1px solid var(--line); padding-top:12px; }
+    .task-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-bottom:10px; }
+    .task-heading h2 { margin:0 auto 0 0; font-size:14px; color:var(--ink); }
+    #task-filter { font:inherit; padding:6px 8px; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:4px; }
+    #hide-tasks { padding:6px 12px; }
+    #task-results { max-height:43vh; min-height:100px; overflow:auto; }
+    .task-result { border-bottom:1px solid var(--line); background:var(--surface); }
+    .task-result summary { cursor:pointer; padding:10px 8px; overflow-wrap:anywhere; }
+    .task-result summary:focus-visible { outline:2px solid var(--blue); outline-offset:-2px; }
+    .task-name { font-weight:600; }
+    .task-state { display:inline-block; margin-left:10px; font-size:12px; color:var(--muted); }
+    .task-result[data-state="failed"] .task-state { color:var(--red); font-weight:700; }
+    .task-result[data-state="retrying"] .task-state, .task-result[data-state="ignored"] .task-state { color:var(--amber); }
+    .task-meta { margin:0; padding:4px 12px 10px; color:var(--muted); font:12px "DejaVu Sans Mono", monospace; overflow-wrap:anywhere; }
+    .task-output { margin:4px 12px 12px; padding:10px; max-height:220px; overflow:auto; background:var(--background); font:12px/1.5 "DejaVu Sans Mono", monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .task-caption { margin:10px 12px 4px; font-size:12px; font-weight:600; }
+    #task-empty { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+    #notice { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--amber); background:#382e1d; color:var(--amber); overflow-wrap:anywhere; }
+    #notice:empty { display:none; }
+    #run-error { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--red); background:#352126; color:var(--ink); white-space:pre-wrap; overflow-wrap:anywhere; }
+    #run-error:empty { display:none; }
+    #step-note { margin:0 0 12px; padding:10px 12px; border-left:3px solid var(--blue); background:var(--surface); color:var(--ink); overflow-wrap:anywhere; }
+    #configure { min-height:36px; padding:0 14px; }
+    button:disabled { cursor:default; opacity:.55; }
+    dialog { width:min(760px, calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:var(--surface); }
+    dialog::backdrop { background:rgb(0 0 0 / .65); }
+    #deployment-form { display:flex; flex-direction:column; max-height:calc(100dvh - 36px); }
+    .form-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:18px 20px; border-bottom:1px solid var(--line); }
+    .form-heading h2 { margin:0; font-size:20px; color:var(--ink); }
+    .form-heading button, .form-actions button { min-height:38px; padding:0 16px; }
+    .form-body { overflow:auto; padding:0 20px 20px; }
+    #shell-command { width:100%; min-height:240px; white-space:pre; color:var(--ink); background:var(--background); border:1px solid var(--line); font:12px/1.5 monospace; }
+    .security-note { color:var(--muted); font-size:12px; line-height:1.5; }
+    fieldset { min-width:0; margin:0; padding:18px 0; border:0; border-bottom:1px solid var(--line); }
+    legend { padding:16px 0 0; font-weight:700; }
+    .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    .field { display:flex; flex-direction:column; gap:6px; min-width:0; font-size:13px; }
+    .field span { overflow-wrap:anywhere; }
+    .field input, .field select, .field textarea { width:100%; min-width:0; height:38px; padding:8px 10px; border:1px solid var(--line); border-radius:4px; background:var(--background); color:var(--ink); font:inherit; }
+    .field textarea { height:100px; resize:vertical; overflow-wrap:anywhere; }
+    .field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
+    .field[hidden] { display:none; }
+    .field small { color:var(--muted); font-size:11px; }
+    #cloudflare-token-help { color:var(--muted); font-size:12px; line-height:1.5; }
+    #cloudflare-token-help a { color:var(--blue); }
+    #cloudflare-token-help table { width:100%; border-collapse:collapse; margin:6px 0; }
+    #cloudflare-token-help th, #cloudflare-token-help td { padding:3px 6px; border-bottom:1px solid var(--line); text-align:left; overflow-wrap:anywhere; }
+    .form-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; padding:14px 20px; border-top:1px solid var(--line); }
+    #deploy-button { background:var(--green); border-color:var(--green); color:var(--background); }
+    #form-error { margin:0; padding:12px 20px; color:var(--red); overflow-wrap:anywhere; }
+    #form-error:empty { display:none; }
+    @media (max-width:700px) {
+      header { padding:16px; gap:10px; }
+      #run-time { width:100%; margin:0; }
+      main { display:flex; flex-direction:column; }
+      .workspace { order:0; padding:14px 12px 0; }
+      aside { order:1; border-right:0; border-top:1px solid var(--line); padding:16px 12px; }
+      ol { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
+      #diagram-pane { height:42vh; min-height:280px; }
+      .stage { padding:10px 6px; }
+      h1 span { margin-left:8px; }
+    }
+    @media (prefers-reduced-motion:no-preference) { .stage { transition:background-color .15s; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sophon <span>Deployment</span></h1>
+    <span id="run-state" role="status" aria-live="polite">Connecting</span>
+    <span id="run-time"></span>
+    <button id="configure" type="button" disabled>Configure</button>
+  </header>
+  <main>
+    <aside><h2>DEPLOYMENT STAGES</h2><ol id="stages"></ol></aside>
+    <section class="workspace" aria-label="Deployment diagram">
+      <div class="toolbar">
+        <strong>Site diagram</strong>
+        <button id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">-</button>
+        <span id="zoom-level">Fit</span>
+        <button id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="fit" type="button" title="Fit diagram width">Fit</button>
+      </div>
+      <p id="notice" role="alert"></p>
+      <p id="run-error" role="alert"></p>
+      <p id="step-note"></p>
+      <div id="diagram-pane"><object id="diagram" type="image/svg+xml" aria-label="Sophon site topology"></object></div>
+      <div id="detail" aria-live="polite"></div>
+      <section id="task-panel" aria-labelledby="task-title" hidden>
+        <div class="task-heading">
+          <h2 id="task-title">Task results</h2>
+          <select id="task-filter" aria-label="Task filter">
+            <option value="all">All tasks</option>
+            <option value="problems">Failures and recoveries</option>
+          </select>
+          <button id="hide-tasks" type="button" aria-label="Hide task results">Hide</button>
+        </div>
+        <p id="task-empty"></p>
+        <div id="task-results"></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="deployment-dialog" aria-labelledby="settings-title">
+    <form id="deployment-form" method="dialog" autocomplete="off">
+      <div class="form-heading">
+        <h2 id="settings-title">Deployment settings</h2>
+        <button id="close-settings" type="button">Close</button>
+      </div>
+      <div class="form-body">
+        <p class="security-note">Only settings for this deployment step are shown. Secrets stay off the deployment ISO. Form changes stay in this browser tab, not your shell. Run only one deployment at a time per trace directory.</p>
+        <div id="settings-fields"></div>
+        <section id="command-panel" hidden aria-labelledby="command-title">
+          <h3 id="command-title">Shell deployment command</h3>
+          <p class="security-note">Contains passwords and tokens in plain text. Copy only to a trusted terminal on this controller, in the project environment. Clipboard and shell history may retain secrets.</p>
+          <textarea id="shell-command" aria-label="Shell deployment command containing secrets" readonly spellcheck="false" autocomplete="off"></textarea>
+          <button id="copy-command" type="button">Copy</button>
+          <span id="copy-status" role="status"></span>
+        </section>
+      </div>
+      <p id="form-error" role="alert"></p>
+      <div class="form-actions">
+        <button id="generate-command" type="submit" value="command" disabled>Generate shell deployment command</button>
+        <button id="deploy-button" type="submit" value="run" disabled>Run</button>
+      </div>
+    </form>
+  </dialog>
+  <template id="cloudflare-token-help-template">
+    <div id="cloudflare-token-help">
+      <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create a Cloudflare API token</a>
+      using Create Custom Token:
+      <table aria-label="Required Cloudflare API token permissions">
+        <thead><tr><th scope="col">Group</th><th scope="col">Permission</th><th scope="col">Access</th></tr></thead>
+        <tbody>
+          <tr><td>Zone</td><td>Zone</td><td>Read</td></tr>
+          <tr><td>Zone</td><td>DNS</td><td>Edit</td></tr>
+          <tr><td>Account</td><td>Cloudflare Tunnel</td><td>Edit</td></tr>
+        </tbody>
+      </table>
+      Scope Zone Resources to your specific domain and Account Resources to its owning account.
+      Paste the token secret, not a Global API Key or tunnel connector token.
+    </div>
+  </template>
+  <script>
+    const labels = {idle:'No deployment run', pending:'Not reached', running:'Running', completed:'Deployment complete', skipped:'Skipped', failed:'Failed', interrupted:'Interrupted', unknown:'Outcome unknown'};
+    const symbols = {pending:'-', running:'>', completed:'+', skipped:'/', failed:'!', interrupted:'!', unknown:'?'};
+    const palette = getComputedStyle(document.documentElement);
+    const colors = Object.fromEntries(Object.entries({pending:'muted', running:'blue', completed:'green', skipped:'muted', failed:'red', interrupted:'amber', unknown:'amber'}).map(([state, color]) => [state, palette.getPropertyValue(`--${color}`).trim()]));
+    const stageList = document.getElementById('stages');
+    const diagram = document.getElementById('diagram');
+    const pane = document.getElementById('diagram-pane');
+    const notice = document.getElementById('notice');
+    let config, latest, selected, zoom = 1, tasksHidden = false;
+    const rows = new Map();
+    let mapped = new Map();
+    let taskSnapshot = '';
+    let taskContext = '', taskExpansionRun = '';
+    const taskExpansion = new Map();
+    const taskPanel = document.getElementById('task-panel');
+    const taskResults = document.getElementById('task-results');
+    const taskFilter = document.getElementById('task-filter');
+    const workspace = document.querySelector('.workspace');
+    taskFilter.onchange = () => { if (latest) render(latest); };
+    document.getElementById('hide-tasks').onclick = () => {
+      const stage = selected || latest?.current;
+      tasksHidden = true;
+      selected = undefined;
+      if (latest) render(latest);
+      rows.get(stage)?.focus({preventScroll:true});
+    };
+
+    function renderTasks(report, stage) {
+      taskPanel.hidden = !stage;
+      workspace.classList.toggle('has-tasks', Boolean(stage));
+      if (!stage) return;
+      const tasks = report.stages[stage].tasks;
+      const snapshot = JSON.stringify([report.run_id, stage, report.state, tasks, taskFilter.value]);
+      if (snapshot === taskSnapshot) return;
+      taskSnapshot = snapshot;
+      if (taskExpansionRun !== report.run_id) {
+        taskExpansion.clear();
+        taskExpansionRun = report.run_id;
+      }
+      const context = `${report.run_id}:${stage}`;
+      const scrollTop = taskContext === context ? taskResults.scrollTop : 0;
+      taskContext = context;
+      taskResults.replaceChildren();
+      document.getElementById('task-title').textContent = `${config.stages[stage]}: task results`;
+      let shown = 0;
+      const taskLabels = {ok:'OK', changed:'Changed', failed:'Failed', skipped:'Skipped', ignored:'Ignored failure', rescued:'Rescued', running:'Running', retrying:'Retrying', unknown:'Outcome unknown', interrupted:'Interrupted'};
+      for (const [index, task] of (tasks || []).entries()) {
+        const state = task.state === 'running' && report.state !== 'running'
+          ? (report.state === 'completed' ? 'unknown' : report.state) : task.state;
+        if (taskFilter.value === 'problems' && !['failed', 'ignored', 'rescued', 'retrying', 'unknown', 'interrupted'].includes(state)) continue;
+        shown++;
+        const item = document.createElement('details');
+        item.className = 'task-result';
+        item.dataset.state = state;
+        item.dataset.key = `${report.run_id}:${stage}:${task.id}:${index}`;
+        item.open = taskExpansion.get(item.dataset.key) ?? state === 'failed';
+        item.addEventListener('toggle', () => taskExpansion.set(item.dataset.key, item.open));
+        const summary = document.createElement('summary');
+        const name = document.createElement('span');
+        name.className = 'task-name';
+        name.textContent = task.name;
+        const status = document.createElement('span');
+        status.className = 'task-state';
+        status.textContent = `${taskLabels[state] || state}${task.duration === undefined ? '' : ` | ${task.duration}s`}`;
+        summary.append(name, status);
+        const meta = document.createElement('p');
+        meta.className = 'task-meta';
+        const coordinates = [task.action, task.source];
+        for (const [key, label] of [['rc','Exit code'], ['status','HTTP status'], ['attempts','Attempts']]) {
+          if (task[key] !== undefined) coordinates.push(`${label}: ${task[key]}`);
+        }
+        meta.textContent = coordinates.filter(Boolean).join(' | ');
+        item.append(summary, meta);
+        for (const [label, value] of [['Message', task.message], ['Standard error', task.stderr], ['Standard output', task.stdout], ['Failed loop items', task.items?.join('\n')]]) {
+          if (!value) continue;
+          const caption = document.createElement('p');
+          caption.className = 'task-caption';
+          caption.textContent = label;
+          const output = document.createElement('pre');
+          output.className = 'task-output';
+          output.textContent = value;
+          item.append(caption, output);
+        }
+        taskResults.append(item);
+      }
+      taskResults.scrollTop = scrollTop;
+      document.getElementById('task-empty').textContent = tasks === undefined
+        ? 'Task details were not recorded for this run. Private Controller log: artifacts/deployment/deploy.log.'
+        : shown ? '' : taskFilter.value === 'problems' ? 'No failures or recoveries recorded.' : 'No tasks recorded for this stage yet.';
+    }
+    const settingsDialog = document.getElementById('deployment-dialog');
+    const settingsForm = document.getElementById('deployment-form');
+    const settingsFields = document.getElementById('settings-fields');
+    const formError = document.getElementById('form-error');
+    const deployButton = document.getElementById('deploy-button');
+    const generateButton = document.getElementById('generate-command');
+    const commandPanel = document.getElementById('command-panel');
+    const commandText = document.getElementById('shell-command');
+    let settingsLoaded = false, submitting = false, pendingRun;
+    async function api(path, values) {
+      const response = await fetch(path, {
+        method: values === undefined ? 'GET' : 'POST', cache:'no-store',
+        headers:{'Content-Type':'application/json', 'X-Sophon-Token':config?.token || ''},
+        body:values === undefined ? undefined : JSON.stringify(values),
+        signal:AbortSignal.timeout(5000)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Dashboard request failed. Reopen the page if the server restarted.');
+      return result;
+    }
+    function updateDeployButton() {
+      generateButton.disabled = !settingsLoaded || submitting;
+      deployButton.disabled = !settingsLoaded || submitting || pendingRun !== undefined || latest?.state === 'running';
+    }
+    document.getElementById('close-settings').onclick = () => settingsDialog.close();
+    function clearCommand() {
+      commandText.value = '';
+      commandPanel.hidden = true;
+      document.getElementById('copy-status').textContent = '';
+    }
+    settingsForm.addEventListener('input', clearCommand);
+    function showProviderFields() {
+      const provider = settingsForm.elements.SOPHON_HYPERVISOR?.value;
+      for (const field of settingsFields.querySelectorAll('[data-provider]')) {
+        field.hidden = Boolean(field.dataset.provider && field.dataset.provider !== provider);
+        for (const input of field.querySelectorAll('input, select, textarea')) input.disabled = field.hidden;
+      }
+      for (const group of settingsFields.querySelectorAll('fieldset')) {
+        group.hidden = ![...group.querySelectorAll('input, select, textarea')].some(input => !input.disabled);
+      }
+    }
+    settingsForm.addEventListener('change', showProviderFields);
+    settingsDialog.addEventListener('close', clearCommand);
+    document.getElementById('copy-command').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(commandText.value);
+        document.getElementById('copy-status').textContent = 'Copied. Clear your clipboard after use.';
+      } catch {
+        commandText.focus();
+        commandText.select();
+        document.getElementById('copy-status').textContent = 'Clipboard access unavailable. Press Ctrl+C (or Cmd+C) to copy the selected command.';
+      }
+    };
+    document.getElementById('configure').onclick = async () => {
+      if (settingsDialog.open) return;
+      formError.textContent = '';
+      settingsDialog.showModal();
+      if (settingsLoaded) return;
+      try {
+        const settings = await api('/settings.json');
+        settingsFields.replaceChildren();
+        const groups = new Map();
+        for (const field of settings.fields) {
+          if (!groups.has(field.group)) {
+            const group = document.createElement('fieldset');
+            const legend = document.createElement('legend');
+            legend.textContent = field.group;
+            const grid = document.createElement('div');
+            grid.className = 'field-grid';
+            group.append(legend, grid);
+            settingsFields.append(group);
+            groups.set(field.group, grid);
+          }
+          const label = document.createElement('label');
+          label.className = 'field';
+          label.dataset.provider = field.provider || '';
+          const caption = document.createElement('span');
+          caption.textContent = field.label + (field.required ? ' *' : '');
+          const input = document.createElement(field.choices ? 'select' : field.kind === 'certificate' ? 'textarea' : 'input');
+          input.name = field.name;
+          input.title = field.name;
+          if (field.choices) {
+            for (const value of field.choices) input.add(new Option(value === 'vcenter' ? 'VMware vCenter' : 'Proxmox', value));
+          } else if (field.kind !== 'certificate') {
+            input.type = ['number', 'email', 'password'].includes(field.kind) ? field.kind : 'text';
+          }
+          input.value = field.value;
+          input.maxLength = field.kind === 'certificate' ? 2 * 1024 * 1024 : 4096;
+          if (field.kind === 'certificate') {
+            input.autocomplete = 'off';
+            input.spellcheck = false;
+          }
+          input.required = field.required;
+          if (field.name === 'SOPHON_PORTAINER_ADMIN_PASSWORD') input.minLength = 12;
+          if (field.kind === 'ipv4') input.inputMode = 'decimal';
+          if (field.limits) {
+            input.min = field.limits[0];
+            input.max = field.limits[1];
+            input.step = '1';
+          }
+          label.append(caption, input);
+          if (field.kind === 'password') {
+            input.autocomplete = 'new-password';
+            const presence = document.createElement('small');
+            presence.textContent = field.required
+              ? 'Required. Included in generated commands; reuse the existing credential.'
+              : ['SOPHON_GITEA_DB_PASSWORD', 'SOPHON_KOPIA_ADMIN_PASSWORD', 'SOPHON_KOPIA_REPOSITORY_PASSWORD'].includes(field.name)
+                ? 'Empty reuses the supplied Portainer password. Keep existing deployment values.'
+                : 'Included in generated commands. Empty means unset.';
+            label.append(presence);
+          }
+          if (field.name === 'SOPHON_CF_TOKEN') {
+            input.setAttribute('aria-describedby', 'cloudflare-token-help');
+            const wrapper = document.createElement('div');
+            wrapper.className = 'field';
+            wrapper.append(label, document.getElementById('cloudflare-token-help-template').content.cloneNode(true));
+            groups.get(field.group).append(wrapper);
+          } else {
+            groups.get(field.group).append(label);
+          }
+        }
+        settingsLoaded = true;
+        showProviderFields();
+        updateDeployButton();
+      } catch (error) {
+        formError.textContent = error.message;
+      }
+    };
+    settingsForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const action = event.submitter?.value || 'command';
+      if (submitting || !settingsLoaded || (action === 'run' && deployButton.disabled) || !settingsForm.reportValidity()) return;
+      const values = Object.fromEntries(new FormData(settingsForm));
+      const target = config.step === 'configure'
+        ? `Run Step 4 service deployment on this InfraVM?\nPortainer: ${values.SOPHON_INFRAVM_IP}:9443\nNo hypervisor access is used.`
+        : values.SOPHON_HYPERVISOR === 'vcenter'
+          ? `Create ${values.SOPHON_INFRAVM_NAME} on ${values.SOPHON_VCENTER_URL} / ${values.SOPHON_VCENTER_CLUSTER}?\nDatastore: ${values.SOPHON_VCENTER_DATASTORE}\nPort group: ${values.SOPHON_VCENTER_NETWORK}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`
+          : `Create ${values.SOPHON_INFRAVM_NAME} on ${values.SOPHON_PROXMOX_HOST} / ${values.SOPHON_PROXMOX_NODE}?\nBridge: ${values.SOPHON_VNET_INTERFACE}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`;
+      if (action === 'run' && !confirm(`${target}\nDo not also run the copied command.`)) return;
+      submitting = true;
+      if (action === 'run') pendingRun = latest?.run_id || '';
+      for (const group of settingsFields.querySelectorAll('fieldset')) group.disabled = true;
+      document.getElementById('close-settings').disabled = true;
+      formError.textContent = '';
+      updateDeployButton();
+      try {
+        const result = await api(`/${action}`, values);
+        const certificate = settingsForm.elements.SOPHON_ACME_PAYLOAD;
+        if (certificate) certificate.value = '';
+        if (action === 'command') {
+          commandText.value = result.command;
+          commandPanel.hidden = false;
+          document.getElementById('copy-status').textContent = '';
+          commandText.focus();
+        } else {
+          if (config.step === 'provision') selectProvider(values.SOPHON_HYPERVISOR);
+          settingsDialog.close();
+        }
+      } catch (error) {
+        formError.textContent = error.message;
+        if (action === 'run' && ['TimeoutError', 'TypeError', 'SyntaxError'].includes(error.name)) {
+          formError.textContent = 'Run request outcome unknown. Check progress and the controller log before retrying; do not also paste the command.';
+        } else if (action === 'run') {
+          pendingRun = undefined;
+        }
+      } finally {
+        submitting = false;
+        for (const group of settingsFields.querySelectorAll('fieldset')) group.disabled = false;
+        showProviderFields();
+        document.getElementById('close-settings').disabled = false;
+        updateDeployButton();
+      }
+    });
+    function setZoom(value) {
+      zoom = Math.min(5, Math.max(.25, value));
+      diagram.style.width = `${zoom * 100}%`;
+      document.getElementById('zoom-level').textContent = zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`;
+      document.getElementById('zoom-out').disabled = zoom === .25;
+      document.getElementById('zoom-in').disabled = zoom === 5;
+    }
+    document.getElementById('zoom-in').onclick = () => setZoom(zoom + .25);
+    document.getElementById('zoom-out').onclick = () => setZoom(zoom - .25);
+    document.getElementById('fit').onclick = () => { setZoom(1); pane.scrollTo(0, 0); };
+    function mapDiagram(redraw = true) {
+      if (!config || !diagram.contentDocument?.documentElement || diagram.contentDocument.documentElement.localName !== 'svg') return;
+      for (const nodes of mapped.values()) for (const node of nodes) {
+        node.querySelector('.deployment-border')?.remove();
+        node.removeAttribute('aria-label');
+        node.removeAttribute('role');
+        node.style.removeProperty('opacity');
+        for (const artwork of node.children) artwork.style.removeProperty('filter');
+      }
+      mapped = new Map();
+      const documentSvg = diagram.contentDocument;
+      const viewBox = documentSvg.documentElement.viewBox.baseVal;
+      diagram.style.aspectRatio = `${viewBox.width} / ${viewBox.height}`;
+      for (const [cell, label] of Object.entries(config.labels)) {
+        const node = documentSvg.querySelector(`[data-cell-id="${cell}"]`);
+        if (!node) continue;
+        const title = node.querySelector('.deployment-title') || documentSvg.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.setAttribute('class', 'deployment-title');
+        title.textContent = `${label}: Not tracked by this deployment viewer`;
+        node.prepend(title);
+      }
+      for (const [stage, cells] of Object.entries(config.cells)) {
+        const nodes = cells.map(cell => documentSvg.querySelector(`[data-cell-id="${cell}"]`)).filter(Boolean);
+        mapped.set(stage, nodes);
+        for (const node of nodes) {
+          node.setAttribute('role', 'img');
+          let border = node.querySelector('.deployment-border');
+          if (!border) {
+            const bounds = node.getBBox();
+            border = documentSvg.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            border.setAttribute('class', 'deployment-border');
+            for (const [key, value] of Object.entries({x:bounds.x-4, y:bounds.y-4, width:bounds.width+8, height:bounds.height+8, rx:4, fill:'none', 'stroke-width':2, 'pointer-events':'none'})) border.setAttribute(key, value);
+            node.append(border);
+          }
+        }
+      }
+      if (latest && redraw) render(latest);
+    }
+    diagram.addEventListener('load', mapDiagram);
+    function render(report) {
+      if (pendingRun === undefined && config.step === 'provision') selectProvider(report.hypervisor);
+      latest = report;
+      updateDeployButton();
+      const noStagesReached = Object.values(report.stages).every(stage => stage.state === 'pending');
+      const failure = report.state === 'failed'
+        ? report.error || (noStagesReached
+          ? 'Deployment failed before any stage started. Ansible may not have started, or initial playbook checks failed. If ansible-playbook is unavailable, stop the viewer and restart it with ./sophon dashboard.'
+          : 'Deployment failed. Select a failed stage to inspect its task results.')
+        : '';
+      document.getElementById('run-error').textContent = failure
+        ? `${failure}${report.exit_code === undefined ? '' : `\nExit code: ${report.exit_code}`}\nPrivate log: ${config.log_path}. Logs may contain secrets; redact before sharing.`
+        : '';
+      document.getElementById('run-state').textContent = labels[report.state] || 'Outcome unknown';
+      document.getElementById('step-note').textContent = config.step === 'configure'
+        ? 'Step 4: deploy services from this InfraVM. No hypervisor credentials or management-network access are used.'
+        : report.state === 'completed'
+          ? 'Steps 1-2 complete. In the InfraVM live console, mount the SOPHON_DEPLOY ISO read-only at /mnt/sophon and run sudo bash /mnt/sophon/install.sh (step 3). Confirm the fresh disk, networking, and core console password. After reboot, log in as core and run sophon-controller (step 4).'
+          : 'Steps 1-2: prepare the stock CoreOS and Sophon artifact ISOs, then create a blank InfraVM on the selected hypervisor. Guest networking and credentials are entered at Step 3 in its console.';
+      document.getElementById('run-time').textContent = report.state === 'idle' ? '' : `Last event ${new Date(report.updated_at * 1000).toLocaleTimeString()} | Run ${report.run_id.slice(0, 8)}`;
+      for (const [stage, values] of Object.entries(report.stages)) {
+        const row = rows.get(stage);
+        if (!row) continue;
+        row.dataset.state = values.state;
+        row.querySelector('.symbol').textContent = symbols[values.state];
+        row.querySelector('.state').textContent = labels[values.state];
+        row.setAttribute('aria-pressed', String(stage === selected));
+        for (const node of mapped.get(stage) || []) {
+          for (const artwork of node.children) {
+            if (!artwork.classList.contains('deployment-border')) artwork.style.filter = values.state === 'completed' ? '' : 'grayscale(1)';
+          }
+          node.style.opacity = values.state === 'pending' ? '.65' : values.state === 'skipped' ? '.75' : '1';
+          const label = config.labels[node.getAttribute('data-cell-id')] || config.stages[stage];
+          const description = `${label} | ${config.stages[stage]}: ${labels[values.state]} (stage status, not individual verification)`;
+          node.setAttribute('aria-label', description);
+          const title = node.querySelector('.deployment-title');
+          if (title) title.textContent = description;
+          node.querySelector('.deployment-border').setAttribute('stroke', colors[values.state]);
+        }
+      }
+      const focus = tasksHidden ? undefined : selected || (config.stages[report.current] ? report.current : undefined);
+      const detail = document.getElementById('detail');
+      detail.replaceChildren();
+      if (focus) {
+        const values = report.stages[focus];
+        const name = document.createElement('strong');
+        name.textContent = config.stages[focus];
+        const counters = document.createElement('span');
+        counters.textContent = `${values.ok} successful | ${values.skipped} skipped | ${values.rescued} rescued | ${values.ignored} ignored`;
+        detail.append(name, counters);
+        const icons = document.createElement('span');
+        icons.textContent = `Diagram: ${(config.cells[focus] || []).map(cell => config.labels[cell]).filter(Boolean).join(', ')}. Stage status only; not individual artifact or service verification.`;
+        detail.append(icons);
+      }
+      renderTasks(report, focus);
+    }
+    let statusSnapshot = '';
+    async function refresh() {
+      try {
+        const response = await fetch('/status.json', {cache:'no-store', signal:AbortSignal.timeout(4000)});
+        if (!response.ok) throw new Error('Status unavailable');
+        const snapshot = await response.text();
+        if (snapshot !== statusSnapshot) {
+          const report = JSON.parse(snapshot);
+          if (pendingRun !== undefined && report.run_id !== pendingRun && report.state !== 'idle') pendingRun = undefined;
+          render(report);
+          statusSnapshot = snapshot;
+        }
+        notice.textContent = '';
+      } catch {
+        statusSnapshot = '';
+        notice.textContent = 'Dashboard connection lost. Current outcome unknown.';
+        document.getElementById('run-state').textContent = 'Outcome unknown';
+        if (latest) {
+          const stale = structuredClone(latest);
+          stale.state = 'unknown';
+          for (const values of Object.values(stale.stages)) if (values.state === 'running') values.state = 'unknown';
+          render(stale);
+        }
+      }
+      setTimeout(refresh, 1000);
+    }
+    function buildStageList() {
+      stageList.replaceChildren();
+      rows.clear();
+      for (const [stage, label] of Object.entries(config.stages)) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.className = 'stage';
+        button.type = 'button';
+        for (const [className, text] of [['symbol','-'], ['name',label], ['state','Not reached']]) {
+          const element = document.createElement('span');
+          element.className = className;
+          element.textContent = text;
+          if (className === 'symbol') element.setAttribute('aria-hidden', 'true');
+          button.append(element);
+        }
+        button.onclick = () => {
+          tasksHidden = false;
+          selected = stage;
+          if (latest) render(latest);
+          const node = mapped.get(stage)?.[0];
+          if (node) {
+            const bounds = node.getBoundingClientRect();
+            pane.scrollTo({left:Math.max(0, bounds.x + bounds.width / 2 - pane.clientWidth / 2), top:Math.max(0, bounds.y + bounds.height / 2 - pane.clientHeight / 2)});
+          }
+          taskPanel.scrollIntoView({block:'nearest'});
+        };
+        item.append(button);
+        stageList.append(item);
+        rows.set(stage, button);
+      }
+    }
+    function selectProvider(provider) {
+      if (!config.providers[provider] || Object.hasOwn(config.stages, provider)) return;
+      const details = config.providers[provider];
+      config.stages = {prepare:config.stages.prepare, [provider]:details.label, infravm:config.stages.infravm};
+      config.cells = {prepare:config.cells.prepare, [provider]:details.cells, infravm:config.cells.infravm};
+      selected = undefined;
+      buildStageList();
+      mapDiagram(false);
+    }
+    async function start() {
+      config = await api('/config.json');
+      document.getElementById('configure').disabled = false;
+      buildStageList();
+      setZoom(1);
+      diagram.data = '/diagram.svg';
+      refresh();
+    }
+    start().catch(() => { notice.textContent = 'Dashboard configuration unavailable.'; });
+  </script>
+</body>
+</html>

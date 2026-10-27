@@ -1,0 +1,136 @@
+---
+# Deploy a stack to Portainer through its REST API (no SSH).
+
+- name: Authenticate with Portainer
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: 200
+  register: portainer_stack_auth_response
+  changed_when: false
+  retries: "{{ portainer_stack_api_retries }}"
+  delay: "{{ portainer_stack_api_delay }}"
+  until: portainer_stack_auth_response.status == 200
+
+- name: Set auth token
+  ansible.builtin.set_fact:
+    portainer_stack_auth_token: "{{ portainer_stack_auth_response.json.jwt }}"
+
+- name: Get endpoints
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: 200
+  register: portainer_stack_endpoints_response
+  changed_when: false
+  retries: "{{ portainer_stack_api_retries }}"
+  delay: "{{ portainer_stack_api_delay }}"
+  until: portainer_stack_endpoints_response.status == 200
+
+- name: Set endpoints fact
+  ansible.builtin.set_fact:
+    portainer_stack_endpoints: "{{ portainer_stack_endpoints_response.json | default([]) }}"
+  changed_when: false
+
+- name: Find or create local endpoint
+  when: portainer_stack_endpoints | length == 0
+  block:
+    - name: Create local endpoint
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/endpoints"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ portainer_stack_auth_token }}"
+        body_format: form-multipart
+        body:
+          Name:
+            content: "local"
+          EndpointCreationType:
+            content: "1"
+          URL:
+            content: "unix:///var/run/docker.sock"
+        validate_certs: "{{ portainer_stack_validate_certs }}"
+        status_code: [200, 201]
+      register: portainer_stack_endpoint_create
+
+    - name: Set new endpoint ID
+      ansible.builtin.set_fact:
+        portainer_stack_endpoint_id: "{{ portainer_stack_endpoint_create.json.Id }}"
+
+- name: Set endpoint ID from existing
+  ansible.builtin.set_fact:
+    portainer_stack_endpoint_id: "{{ portainer_stack_endpoints[0].Id }}"
+  when: portainer_stack_endpoints | length > 0
+
+- name: Load the stack's offline images
+  ansible.builtin.include_tasks: load_images.yml
+
+- name: Get existing stacks
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/stacks"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: 200
+  register: portainer_stack_list_response
+  changed_when: false
+  retries: "{{ portainer_stack_api_retries }}"
+  delay: "{{ portainer_stack_api_delay }}"
+  until: portainer_stack_list_response.status == 200
+
+- name: Check if stack already exists
+  ansible.builtin.set_fact:
+    portainer_stack_existing: "{{ portainer_stack_list_response.json | selectattr('Name', 'equalto', portainer_stack_name) | list | first | default(none) }}"
+  changed_when: false
+
+- name: Deploy new stack to Portainer
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/stacks/create/standalone/string?endpointId={{ portainer_stack_endpoint_id }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    body_format: json
+    body:
+      name: "{{ portainer_stack_name }}"
+      stackFileContent: "{{ portainer_stack_compose_content }}"
+      env: "{{ portainer_stack_env_vars | default([]) }}"
+      fromAppTemplate: false
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: [200, 201]
+    timeout: "{{ portainer_stack_deploy_timeout }}"
+  register: portainer_stack_deploy_result
+  when: portainer_stack_existing is none
+  changed_when: portainer_stack_existing is none
+
+# When the stack already exists, push the latest compose content. Portainer
+# diffs the file server-side and recreates only the affected services.
+# `prune: true` removes containers/networks no longer declared in the compose
+# (e.g. a removed sidecar, or a renamed network), which is what we want for
+# declarative Ansible-driven deploys.
+- name: Update existing stack in Portainer
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/stacks/{{ portainer_stack_existing.Id }}?endpointId={{ portainer_stack_endpoint_id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ portainer_stack_auth_token }}"
+    body_format: json
+    body:
+      stackFileContent: "{{ portainer_stack_compose_content }}"
+      env: "{{ portainer_stack_env_vars | default([]) }}"
+      prune: true
+      pullImage: false
+    validate_certs: "{{ portainer_stack_validate_certs }}"
+    status_code: [200]
+    timeout: "{{ portainer_stack_deploy_timeout }}"
+  register: portainer_stack_update_result
+  when: portainer_stack_existing is not none
+  changed_when: portainer_stack_update_result.status == 200

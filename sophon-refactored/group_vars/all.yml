@@ -1,0 +1,75 @@
+---
+# Every site setting is read from a SOPHON_* environment variable, so a run is
+# just `ansible-playbook <playbook>`. `-e` still overrides. Credentials have no
+# generated fallback; 4-configure.yml checks them before deploying anything.
+
+# --- Steps 1-2: hypervisor (laptop only) -------------------------------------
+hypervisor_provider: "{{ lookup('env', 'SOPHON_HYPERVISOR') | default('proxmox', true) }}"
+
+vcenter_url: "{{ lookup('env', 'SOPHON_VCENTER_URL') }}"
+vcenter_username: "{{ lookup('env', 'SOPHON_VCENTER_USERNAME') | default('administrator@vsphere.local', true) }}"
+vcenter_password: "{{ lookup('env', 'SOPHON_VCENTER_PASSWORD') }}"
+vcenter_ca_file: "{{ lookup('env', 'SOPHON_VCENTER_CA_FILE') | default('', true) }}"
+vcenter_datacenter: "{{ lookup('env', 'SOPHON_VCENTER_DATACENTER') }}"
+vcenter_cluster: "{{ lookup('env', 'SOPHON_VCENTER_CLUSTER') }}"
+vcenter_datastore: "{{ lookup('env', 'SOPHON_VCENTER_DATASTORE') }}"
+vcenter_network: "{{ lookup('env', 'SOPHON_VCENTER_NETWORK') }}"
+vcenter_folder: "{{ lookup('env', 'SOPHON_VCENTER_FOLDER') | default('', true) }}"
+
+proxmox_host: "{{ lookup('env', 'SOPHON_PROXMOX_HOST') | default('', true) }}"
+proxmox_port: "{{ lookup('env', 'SOPHON_PROXMOX_PORT') | default(8006, true) | int }}"
+proxmox_node: "{{ lookup('env', 'SOPHON_PROXMOX_NODE') | default('proxmox', true) }}"
+proxmox_password: "{{ lookup('env', 'SOPHON_PROXMOX_PASSWORD') | default('', true) }}"
+proxmox_iso_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_ISO_STORAGE') | default('local', true) }}"
+proxmox_disk_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_DISK_STORAGE') | default('local-lvm', true) }}"
+vnet_interface: "{{ lookup('env', 'SOPHON_VNET_INTERFACE') | default('vmbr0', true) }}"
+vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
+
+infravm_vm_name: "{{ lookup('env', 'SOPHON_INFRAVM_NAME') | default('sophon-infravm', true) }}"
+infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
+infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(8192, true) | int }}"
+infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(100, true) | int }}"
+# Written into the VM so a rerun can tell this workflow's VM from anyone else's.
+infravm_marker: "sophon-infravm-two-iso-v1"
+
+# --- Step 4: services (InfraVM only) -----------------------------------------
+infravm_ip: "{{ lookup('env', 'SOPHON_INFRAVM_IP') | default('', true) }}"
+vnet_dns: "{{ lookup('env', 'SOPHON_VNET_DNS') | default('', true) }}"
+domain_name: "{{ lookup('env', 'SOPHON_DOMAIN') | default('', true) }}"
+traefik_acme_email: "{{ lookup('env', 'SOPHON_ACME_EMAIL') | default('admin@example.com', true) }}"
+coredns_cf_token: "{{ lookup('env', 'SOPHON_CF_TOKEN') | default('', true) }}"
+
+keycloak_realm: "{{ lookup('env', 'SOPHON_KEYCLOAK_REALM') | default('sophon', true) }}"
+keycloak_realm_display_name: >-
+  {{ lookup('env', 'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME') | default(keycloak_realm, true) }}
+keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') }}"
+keycloak_db_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_DB_PASSWORD') }}"
+keycloak_portainer_client_secret: "{{ lookup('env', 'SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET') }}"
+gitea_admin_password: "{{ lookup('env', 'SOPHON_GITEA_ADMIN_PASSWORD') }}"
+openldap_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_ADMIN_PASSWORD') }}"
+openldap_example_user_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD') }}"
+openldap_example_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD') }}"
+openldap_example_user_uid: "john.doe"
+openldap_example_admin_uid: "john.doe.admin"
+
+portainer_image_repo: "docker.io/portainer/portainer-ee"
+portainer_image_tag: "2.41.0"
+portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
+# Business Edition; a free 5-node Starter licence is available from portainer.io.
+portainer_license_key: "{{ lookup('env', 'SOPHON_PORTAINER_LICENSE_KEY') | default('', true) }}"
+portainer_admin_password: "{{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD') }}"
+# Existing deployments must keep supplying the same database password.
+gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(portainer_admin_password, true) }}"
+
+# --- Shared paths --------------------------------------------------------------
+artifacts_dir: "{{ playbook_dir }}/artifacts"
+coreos_iso_path: "{{ artifacts_dir }}/coreos/fedora-coreos-live.iso"
+bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
+# <vendor>-<image>_<tag>.tar, e.g. portainer-portainer-ee_2.41.0.tar
+sophon_containers_dir: "{{ artifacts_dir }}/containers"
+portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
+
+# Addressed by IP: the runner is local to InfraVM and no DNS exists yet when it
+# first talks to Portainer. Users reach portainer.<domain> through Traefik.
+infravm_portainer_port: 9443
+infravm_portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"

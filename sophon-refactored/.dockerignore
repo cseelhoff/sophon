@@ -1,0 +1,6 @@
+artifacts
+.git
+.ansible
+**/__pycache__
+.bundle-test-*
+.prepare-test-*

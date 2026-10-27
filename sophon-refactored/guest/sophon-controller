@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Installed console entry point. The runner has HTTP access, not host privileges.
+set -euo pipefail
+
+if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
+    echo "Log in as core to run sophon-controller (do not use sudo)." >&2
+    exit 1
+fi
+export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
+unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+if [[ ! -f /run/user/1000/sophon-ready ]]; then
+    echo "Host setup is not ready. Inspect: journalctl -u sophon-host-bootstrap" >&2
+    echo "Retry without reinstalling: sudo systemctl restart sophon-host-bootstrap" >&2
+    exit 1
+fi
+
+args=(
+    --remote=false run --rm --network host --pull never
+    -v /var/lib/sophon/project:/workspace:Z --workdir /workspace
+    --env SOPHON_DEPLOYMENT_STEP=configure
+)
+if [[ -t 0 && -t 1 ]]; then
+    args+=(-it)
+fi
+for name in \
+    SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
+    SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_NAME SOPHON_KEYCLOAK_REALM \
+    SOPHON_KEYCLOAK_REALM_DISPLAY_NAME SOPHON_KEYCLOAK_ADMIN_PASSWORD \
+    SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET \
+    SOPHON_GITEA_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
+    SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD \
+    SOPHON_PORTAINER_LICENSE_KEY SOPHON_PORTAINER_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD
+do
+    if [[ -v $name ]]; then
+        args+=(--env "$name")
+    fi
+done
+exec podman "${args[@]}" sophon:latest python3 src/console.py "$@"

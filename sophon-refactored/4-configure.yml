@@ -1,0 +1,88 @@
+---
+# Step 4 - runs inside the InfraVM's runner container (via sophon-controller).
+# Deploys services through Portainer's HTTP API; no hypervisor access, no SSH.
+- name: Deploy services from InfraVM
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Require the InfraVM runner and no hypervisor credentials
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'SOPHON_DEPLOYMENT_STEP') == 'configure'
+          - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
+          - lookup('env', 'SOPHON_VCENTER_PASSWORD') == ''
+        fail_msg: "Run sophon-controller on the installed InfraVM. Provisioning is a separate laptop step."
+      tags: [always]
+    - name: Validate service credentials
+      ansible.builtin.assert:
+        that:
+          - lookup('vars', item) is string
+          - lookup('vars', item) | trim | length > 0
+        fail_msg: "Supply SOPHON_{{ item | upper }} through sophon-controller on InfraVM."
+        quiet: true
+      loop:
+        - portainer_admin_password
+        - keycloak_admin_password
+        - keycloak_db_password
+        - keycloak_portainer_client_secret
+        - gitea_admin_password
+        - openldap_admin_password
+        - openldap_example_user_password
+        - openldap_example_admin_password
+        - gitea_db_password
+      tags: [always]
+    - name: Validate the Portainer password length
+      ansible.builtin.assert:
+        that: portainer_admin_password | length >= 12
+        fail_msg: "SOPHON_PORTAINER_ADMIN_PASSWORD must contain at least 12 characters."
+      tags: [always]
+    - name: Validate domain and InfraVM address
+      ansible.builtin.assert:
+        that:
+          - domain_name | length > 0
+          - domain_name | length <= 253
+          - domain_name is match('^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?\Z')
+          - infravm_ip is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
+          - infravm_ip.split('.') | map('int') | max <= 255
+        fail_msg: "Supply a valid SOPHON_DOMAIN and SOPHON_INFRAVM_IP on InfraVM."
+      tags: [always]
+    # CoreDNS is not running yet, so the runner resolves service names itself.
+    - name: Point service names at InfraVM inside the runner
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} SOPHON SERVICE NAMES"
+        unsafe_writes: true
+        block: |
+          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns'] %}
+          {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
+          {% endfor %}
+      tags: [always]
+  tasks:
+    - name: Initialize Portainer
+      ansible.builtin.include_role:
+        name: portainer
+      tags: [sophon_stage_infravm]
+    - name: Deploy CoreDNS
+      ansible.builtin.include_role:
+        name: coredns
+      tags: [sophon_stage_coredns]
+    - name: Deploy Traefik
+      ansible.builtin.include_role:
+        name: traefik
+      tags: [sophon_stage_traefik]
+    - name: Deploy OpenLDAP
+      ansible.builtin.include_role:
+        name: openldap
+      tags: [sophon_stage_openldap]
+    - name: Deploy Keycloak
+      ansible.builtin.include_role:
+        name: keycloak
+      tags: [sophon_stage_keycloak]
+    - name: Deploy Gitea
+      ansible.builtin.include_role:
+        name: gitea
+      tags: [sophon_stage_gitea]
+    - name: Finish service deployment
+      ansible.builtin.debug:
+        msg: "Deployment complete. Portainer: {{ infravm_portainer_url }}. Retain credentials in your password manager."
+      tags: [sophon_stage_end]

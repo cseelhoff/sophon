@@ -1,0 +1,30 @@
+---
+traefik_image_tag: "v3.2"
+traefik_image_tars:
+  - "{{ sophon_containers_dir }}/library-traefik_{{ traefik_image_tag }}.tar"
+
+traefik_port_http: 80
+traefik_port_https: 443
+traefik_fqdn: "traefik.{{ domain_name }}"
+traefik_log_level: "INFO"
+
+traefik_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
+# traefik_acme_server: "https://acme-staging-v02.api.letsencrypt.org/directory" # staging
+
+# acme.json holds the ACME account key and every certificate's private key:
+# treat it as a secret. A copy lives under artifacts/ so a rebuilt volume is
+# reseeded instead of reissuing (Let's Encrypt allows 5 duplicates a week).
+traefik_acme_artifacts_dir: "{{ playbook_dir }}/artifacts/traefik"
+traefik_acme_backup_path: "{{ traefik_acme_artifacts_dir }}/acme.json"
+
+# Portainer names the volume <stack>_<volume>.
+traefik_compose_project: "traefik"
+traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
+
+# Normal reruns keep the live store; sophon-controller --refresh-certificates
+# sets this to replace it with the imported payload.
+traefik_acme_replace_existing: false
+
+# Short-lived helper that mounts the data volume so acme.json can be moved in and
+# out through Portainer's Docker API. Reuses the already-loaded Traefik image.
+traefik_acme_helper_image: "docker.io/library/traefik:{{ traefik_image_tag }}"

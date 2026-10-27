@@ -1,0 +1,13 @@
+---
+# Step 1 - connected laptop. Builds everything the later steps carry:
+# the stock CoreOS live ISO, container archives, the offline runner and
+# artifacts/bootstrap/sophon-deployment.iso. Cached inputs are reused;
+# `-e prepare_force=true` refreshes them.
+- name: Prepare installation media
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Build or reuse the cached media
+      ansible.builtin.include_role:
+        name: prepare
+      tags: [sophon_stage_prepare]

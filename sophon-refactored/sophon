@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Run Sophon's laptop tools in a container. Needs only Docker or Podman (socket enabled).
+#
+#   ./sophon prepare                       step 1: build media and cache artifacts
+#   ./sophon provision                     steps 1-2: create the blank InfraVM
+#   ./sophon dashboard [port]              step 2 progress UI on http://127.0.0.1:41327
+#   ./sophon certificates issue [...]      make the base64 certificate payload
+#   ./sophon test | shell | <any command>  development helpers (test = all tests except the browser one)
+#
+# SOPHON_* settings and CF_DNS_API_TOKEN are passed through from your environment.
+set -euo pipefail
+
+cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+engine=${SOPHON_ENGINE:-$(command -v docker || command -v podman || true)}
+[[ -n $engine ]] || { echo "Install Docker or Podman first." >&2; exit 1; }
+image=sophon-tools:latest
+
+# The tools image drives the host engine (image pulls, saves, builds) through its socket.
+socket=$("$engine" info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || true)
+socket=${socket#unix://}
+[[ -S ${socket:-} ]] || socket=${DOCKER_HOST:-/var/run/docker.sock}
+socket=${socket#unix://}
+if [[ ! -S $socket ]]; then
+    echo "No container engine socket at $socket." >&2
+    echo "Podman: systemctl --user enable --now podman.socket     Docker: start the daemon." >&2
+    exit 1
+fi
+
+hash=$(sha256sum Containerfile | cut -c1-16)
+if [[ $("$engine" image inspect --format '{{index .Config.Labels "sophon.containerfile"}}' "$image" 2>/dev/null || true) != "$hash" ]]; then
+    echo "Building the Sophon tools image (needs internet once)..." >&2
+    "$engine" build --target tools --label "sophon.containerfile=$hash" -t "$image" -f Containerfile . >&2
+fi
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/sophon
+mkdir -p -- "$state"
+args=(run --rm --init --network host -v "$PWD:/workspace" -w /workspace -v "$state:/state" -e SOPHON_STATE_DIR=/state
+      -e "SOPHON_PROJECT_DIR=$PWD" -v "$socket:/var/run/docker.sock" -e DOCKER_HOST=unix:///var/run/docker.sock)
+if [[ $("$engine" info --format '{{.Host.Security.Rootless}}' 2>/dev/null || echo false) != true ]]; then
+    # Rootful Docker: keep files owned by you and let the container use the socket.
+    args+=(--user "$(id -u):$(id -g)" --group-add "$(stat -c %g "$socket")" -e HOME=/tmp)
+fi
+[[ -t 0 ]] && args+=(-it) || args+=(-i)
+while IFS= read -r name; do args+=(-e "$name"); done < <(compgen -e | grep -E '^(SOPHON_|CF_DNS_API_TOKEN$)' | grep -vxE 'SOPHON_STATE_DIR|SOPHON_PROJECT_DIR' || true)
+
+command=${1:-help}
+shift || true
+case $command in
+    prepare)      set -- ansible-playbook 1-prepare.yml "$@" ;;
+    provision)    set -- python3 src/deployment.py --step provision "$@" -- 2-provision.yml ;;
+    dashboard)    set -- python3 src/deployment.py --step provision --serve --port "${1:-41327}" ;;
+    certificates) set -- python3 src/certificates.py "$@" ;;
+    test)         set -- sh -c 'python3 -m unittest discover -s tests "$@" && python3 tests/test_deployment.py >/dev/null && python3 tests/test_steps.py' sh "$@" ;;
+    shell)        set -- bash ;;
+    help|-h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *)            set -- "$command" "$@" ;;
+esac
+exec "$engine" "${args[@]}" "$image" "$@"

@@ -1,0 +1,479 @@
+services:
+  certs-dumper:
+    image: docker.io/{{ openldap_certs_dumper_image_name }}:{{ openldap_certs_dumper_image_tag }}
+    pull_policy: never
+    container_name: certs-dumper
+    restart: unless-stopped
+    networks:
+      - proxy
+    volumes:
+      - acme_data:/data:ro
+      - ldap_certs:/output
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
+      - "traefik.http.routers.ldap-certs.entrypoints=websecure"
+      - "traefik.http.routers.ldap-certs.tls=true"
+      - "traefik.http.routers.ldap-certs.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ldap-certs.loadbalancer.server.port=8666"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "certs-dumper: waiting for acme.json to contain certificate data..."
+        echo "certs-dumper: checking /data directory..."
+        ls -la /data/ 2>&1 || echo "certs-dumper: /data directory does not exist!"
+        attempt=0
+        while true; do
+          attempt=$$((attempt + 1))
+          if [ ! -f /data/acme.json ]; then
+            echo "certs-dumper: [attempt $$attempt] /data/acme.json does not exist, retrying in 10s..."
+          elif [ ! -s /data/acme.json ]; then
+            echo "certs-dumper: [attempt $$attempt] /data/acme.json exists but is empty (0 bytes), retrying in 10s..."
+          elif grep -q '"Certificates"' /data/acme.json 2>/dev/null; then
+            SIZE=$$(wc -c < /data/acme.json)
+            echo "certs-dumper: acme.json has certificate data ($$SIZE bytes, attempt $$attempt), starting dump..."
+            break
+          else
+            SIZE=$$(wc -c < /data/acme.json)
+            echo "certs-dumper: [attempt $$attempt] /data/acme.json has data ($$SIZE bytes) but no Certificates key yet, retrying in 10s..."
+            if [ $$((attempt % 6)) -eq 0 ]; then
+              echo "certs-dumper: acme.json preview: $$(head -c 200 /data/acme.json)..."
+            fi
+          fi
+          sleep 10
+        done
+        exec traefik-certs-dumper file --source /data/acme.json --dest /output --version v2 --watch --post-hook "chmod -R a+r /output/private/"
+
+  ldap:
+    container_name: ldap
+    image: docker.io/{{ openldap_image_name }}:{{ openldap_image_tag }}
+    pull_policy: never
+    restart: always
+    networks:
+      - proxy
+    ports:
+      - "{{ openldap_port_ldaps }}:636"
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -Q -Y EXTERNAL -H ldapi://%2Fopt%2Fbitnami%2Fopenldap%2Fvar%2Frun%2Fldapi -b '' -s base namingContexts 2>/dev/null | grep -q namingContexts"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    depends_on:
+      certs-dumper:
+        condition: service_started
+    environment:
+      - LDAP_ROOT={{ openldap_base_dn }}
+      - LDAP_ADMIN_USERNAME=admin
+      - LDAP_ADMIN_PASSWORD={{ openldap_admin_password }}
+      - LDAP_LOGLEVEL={{ openldap_log_level }}
+      - LDAP_PORT_NUMBER={{ openldap_port_ldap }}
+      - LDAP_LDAPS_PORT_NUMBER={{ openldap_port_ldaps }}
+      - LDAP_ALLOW_ANON_BINDING=no
+      - LDAP_ENABLE_TLS=yes
+      # REQUIRE_TLS=no is required when using ldapi:// socket auth in init scripts.
+      # External clients should use ldaps:// with TLS required for security, but the init scripts need to be able to bind without TLS to configure the server before certs are available.
+      - LDAP_REQUIRE_TLS=no
+      - LDAP_TLS_CERT_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
+      - LDAP_TLS_KEY_FILE=/opt/bitnami/openldap/certs/private/{{ openldap_tls_domain }}.key
+      - LDAP_TLS_CA_FILE=/opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt
+      - LDAP_CONFIG_ADMIN_ENABLED=yes
+      - LDAP_CONFIG_ADMIN_USERNAME=configadmin
+      - LDAP_CONFIG_ADMIN_PASSWORD={{ openldap_config_password | default(openldap_admin_password) }}
+      - LDAP_SKIP_DEFAULT_TREE=no
+      - LDAP_USERS=
+      - LDAP_PASSWORDS=
+    labels:
+      - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
+    volumes:
+      - openldap_data:/bitnami/openldap
+      - ldap_certs:/opt/bitnami/openldap/certs:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "ldap: waiting for TLS certificate from certs-dumper..."
+        cert_attempt=0
+        while [ ! -f /opt/bitnami/openldap/certs/certs/{{ openldap_tls_domain }}.crt ]; do
+          cert_attempt=$$((cert_attempt + 1))
+          echo "ldap: [attempt $$cert_attempt] TLS cert not ready yet, waiting 10s..."
+          sleep 10
+        done
+        echo "ldap: TLS certificate found, starting OpenLDAP..."
+
+        /opt/bitnami/scripts/openldap/entrypoint.sh /opt/bitnami/scripts/openldap/run.sh &
+        SLAPD_PID=$$!
+
+        LDAPI_URL="ldapi://%2Fopt%2Fbitnami%2Fopenldap%2Fvar%2Frun%2Fldapi"
+
+        echo "Waiting for slapd to be ready..."
+        for i in $$(seq 1 40); do
+          ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b '' -s base namingContexts >/dev/null 2>&1 && break
+          echo "Attempt $$i/40..."
+          sleep 2
+        done
+
+        # ────────────────────────────────────────────────────────────────
+        # ACL rules (must be first so ldapi socket has manage access)
+        # ────────────────────────────────────────────────────────────────
+        EXISTING=$$(ldapsearch -Q -Y EXTERNAL -H "$$LDAPI_URL" -b "olcDatabase={2}mdb,cn=config" -LLL olcAccess 2>/dev/null | grep -c olcAccess || true)
+        if [ "$$EXISTING" -gt 0 ]; then
+          echo "ACLs already configured, skipping."
+        else
+          echo "Applying ACL rules..."
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF
+        dn: olcDatabase={2}mdb,cn=config
+        changetype: modify
+        add: olcAccess
+        olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=1001,cn=peercred,cn=external,cn=auth manage by * break
+        olcAccess: {1}to attrs=userPassword,shadowLastChange by self write by dn="cn=admin,{{ openldap_base_dn }}" write by group.exact="cn=ldap-admins,ou=groups,{{ openldap_base_dn }}" write by anonymous auth by * none
+        olcAccess: {2}to * by self read by dn="cn=admin,{{ openldap_base_dn }}" write by group.exact="cn=ldap-admins,ou=groups,{{ openldap_base_dn }}" write by users read
+        EOF
+
+          if [ $$? -eq 0 ]; then
+            echo "ACLs applied successfully."
+          else
+            echo "Failed to apply ACLs."
+          fi
+        fi
+
+        # ────────────────────────────────────────────────────────────────
+        # Enable memberof overlay for reverse group membership (memberOf attr on users)
+        # ────────────────────────────────────────────────────────────────
+        echo "Setting up memberof overlay..."
+        MEMBEROF_SO=$$(find /opt/bitnami/openldap/lib -name "memberof*" -type f 2>/dev/null | head -1)
+        if [ -n "$$MEMBEROF_SO" ]; then
+          MODDIR=$$(dirname "$$MEMBEROF_SO")
+          echo "Found memberof module: $$MEMBEROF_SO (dir: $$MODDIR)"
+          ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=module,cn=config
+        objectClass: olcModuleList
+        olcModulePath: $$MODDIR
+        olcModuleLoad: memberof
+        EOF
+        else
+          echo "No memberof module file found, overlay may be built-in or unavailable."
+        fi
+
+        echo "Enabling memberof overlay on database if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: olcOverlay=memberof,olcDatabase={2}mdb,cn=config
+        objectClass: olcOverlayConfig
+        objectClass: olcMemberOfConfig
+        olcOverlay: memberof
+        olcMemberOfDangling: drop
+        olcMemberOfRefInt: TRUE
+        olcMemberOfGroupOC: groupOfNames
+        olcMemberOfMemberAD: member
+        olcMemberOfMemberOfAD: memberOf
+        EOF
+
+        echo "memberof overlay setup complete (check logs for errors)."
+
+        # ────────────────────────────────────────────────────────────────
+        # Enable ppolicy overlay for automatic password hashing + policy
+        # ────────────────────────────────────────────────────────────────
+        echo "Setting up ppolicy overlay..."
+        PPOLICY_SO=$$(find /opt/bitnami/openldap/lib -name "ppolicy*" -type f 2>/dev/null | head -1)
+        if [ -n "$$PPOLICY_SO" ]; then
+          PPOLICY_MODDIR=$$(dirname "$$PPOLICY_SO")
+          echo "Found ppolicy module: $$PPOLICY_SO (dir: $$PPOLICY_MODDIR)"
+          ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=module,cn=config
+        objectClass: olcModuleList
+        olcModulePath: $$PPOLICY_MODDIR
+        olcModuleLoad: ppolicy
+        EOF
+        else
+          echo "No ppolicy module file found, trying to load from default path..."
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=module{0},cn=config
+        changetype: modify
+        add: olcModuleLoad
+        olcModuleLoad: ppolicy
+        EOF
+        fi
+
+        echo "Loading ppolicy schema if not present..."
+        PPOLICY_SCHEMA=$$(find /opt/bitnami/openldap/etc -name "ppolicy.ldif" -type f 2>/dev/null | head -1)
+        if [ -n "$$PPOLICY_SCHEMA" ]; then
+          ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" -f "$$PPOLICY_SCHEMA" 2>/dev/null || true
+          echo "ppolicy schema loaded (or already present)."
+        else
+          echo "ppolicy schema file not found, objectClass may already be built-in."
+        fi
+
+        echo "Enabling ppolicy overlay on database if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: olcOverlay=ppolicy,olcDatabase={2}mdb,cn=config
+        objectClass: olcOverlayConfig
+        objectClass: olcPPolicyConfig
+        olcOverlay: ppolicy
+        olcPPolicyHashCleartext: TRUE
+        olcPPolicyUseLockout: FALSE
+        olcPPolicyDefault: cn=default,ou=policies,{{ openldap_base_dn }}
+        EOF
+
+        echo "ppolicy overlay setup complete."
+
+        # ────────────────────────────────────────────────────────────────
+        # Configure password hashing to argon2 if not already set (security best practice)
+        # ────────────────────────────────────────────────────────────────
+        echo "Loading argon2 module if available..."
+        ARGON2_SO=$$(find /opt/bitnami/openldap/lib -name "argon2*" -type f 2>/dev/null | head -1)
+        if [ -n "$$ARGON2_SO" ]; then
+          ARGON2_MODDIR=$$(dirname "$$ARGON2_SO")
+          ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=module,cn=config
+        objectClass: olcModuleList
+        olcModulePath: $$ARGON2_MODDIR
+        olcModuleLoad: argon2
+        EOF
+
+          echo "Configuring password hashing to argon2..."
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: olcDatabase={-1}frontend,cn=config
+        changetype: modify
+        replace: olcPasswordHash
+        olcPasswordHash: {ARGON2}
+        EOF
+        else
+          echo "Argon2 module not found, skipping password hash configuration."
+        fi
+
+        # ────────────────────────────────────────────────────────────────
+        # Fix root entry: replace Bitnami default o=example
+        # ────────────────────────────────────────────────────────────────
+        echo "Fixing root entry organization name..."
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: {{ openldap_base_dn }}
+        changetype: modify
+        replace: o
+        o: {{ openldap_domain }}
+        EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Ensure OUs exist
+        # ────────────────────────────────────────────────────────────────
+        echo "Ensuring ou=groups exists..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: ou=groups,{{ openldap_base_dn }}
+        objectClass: organizationalUnit
+        ou: groups
+        EOF
+
+        echo "Ensuring ou=services exists..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: ou=services,{{ openldap_base_dn }}
+        objectClass: organizationalUnit
+        ou: services
+        EOF
+
+        echo "Ensuring ou=policies exists..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: ou=policies,{{ openldap_base_dn }}
+        objectClass: organizationalUnit
+        ou: policies
+        EOF
+
+        echo "Ensuring ou=people exists..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: ou=people,{{ openldap_base_dn }}
+        objectClass: organizationalUnit
+        ou: people
+        EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Remove Bitnami default test users and groups (security hygiene)
+        # Delete the group first so memberof can clean up memberOf attrs on users
+        # ────────────────────────────────────────────────────────────────
+        echo "Removing Bitnami default 'readers' group if present..."
+        ldapdelete -Q -Y EXTERNAL -H "$$LDAPI_URL" "cn=readers,ou=groups,{{ openldap_base_dn }}" >/dev/null 2>&1 || true
+
+        echo "Removing default test users if present..."
+        for user in user01 user02; do
+          ldapdelete -Q -Y EXTERNAL -H "$$LDAPI_URL" "cn=$$user,ou=users,{{ openldap_base_dn }}" >/dev/null 2>&1 || true
+        done
+        echo "Default entries cleanup complete."
+
+        # ────────────────────────────────────────────────────────────────
+        # Create groupOfNames groups with "member" attribute
+        # ────────────────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────
+        # Create service accounts (before groups, so member DNs exist)
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating keycloak-bind service account if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        objectClass: inetOrgPerson
+        objectClass: simpleSecurityObject
+        cn: keycloak-bind
+        sn: keycloak-bind
+        uid: keycloak-bind
+        description: Keycloak LDAP federation service account
+        userPassword: {{ openldap_keycloak_password }}
+        EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Create groupOfNames groups with "member" attribute
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating groupOfNames 'people' group if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=people,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        objectClass: top
+        cn: people
+        description: Default people group
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        EOF
+
+        echo "Creating groupOfNames 'ldap-admins' group if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=ldap-admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        objectClass: top
+        cn: ldap-admins
+        description: Administrators group
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        EOF
+
+        echo "Creating groupOfNames 'portainer-admins' group if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=portainer-admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        objectClass: top
+        cn: portainer-admins
+        description: Members are auto-promoted to Portainer administrators via Keycloak OIDC groups claim
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        EOF
+
+        echo "Groups setup complete."
+
+        # ────────────────────────────────────────────────────────────────
+        # Default password policy (ppolicy)
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating default password policy if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=default,ou=policies,{{ openldap_base_dn }}
+        objectClass: pwdPolicy
+        objectClass: organizationalRole
+        objectClass: top
+        cn: default
+        pwdAttribute: userPassword
+        pwdMinLength: 12
+        pwdInHistory: 5
+        pwdMustChange: FALSE
+        pwdAllowUserChange: TRUE
+        pwdExpireWarning: 604800
+        pwdMaxAge: 0
+        EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Default POSIX group for LAM Unix module (separate from groupOfNames)
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating default posixGroup for LAM Unix module if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
+        objectClass: posixGroup
+        objectClass: top
+        cn: posix-users
+        gidNumber: 10000
+        description: Default POSIX group for LAM Unix module
+        EOF
+
+        # ────────────────────────────────────────────────────────────────
+        # Example/seed users (one standard user, one admin)
+        #   - inetOrgPerson + posixAccount + shadowAccount
+        #   - userPassword is sent in cleartext; ppolicy hashes it on write
+        #     (olcPPolicyHashCleartext: TRUE configured above).
+        #   - Group memberships added via separate ldapmodify so re-runs are
+        #     idempotent (`|| true` swallows "already exists" errors).
+        # ────────────────────────────────────────────────────────────────
+        echo "Creating example standard user '{{ openldap_example_user_uid }}' if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
+        objectClass: top
+        objectClass: person
+        objectClass: organizationalPerson
+        objectClass: inetOrgPerson
+        objectClass: posixAccount
+        objectClass: shadowAccount
+        uid: {{ openldap_example_user_uid }}
+        cn: {{ openldap_example_user_givenname }} {{ openldap_example_user_sn }}
+        sn: {{ openldap_example_user_sn }}
+        givenName: {{ openldap_example_user_givenname }}
+        displayName: {{ openldap_example_user_givenname }} {{ openldap_example_user_sn }}
+        mail: {{ openldap_example_user_uid }}@{{ openldap_domain }}
+        uidNumber: {{ openldap_example_user_uidnumber }}
+        gidNumber: 10000
+        homeDirectory: /home/{{ openldap_example_user_uid }}
+        loginShell: /bin/bash
+        userPassword: {{ openldap_example_user_password }}
+        EOF
+
+        echo "Creating example admin user '{{ openldap_example_admin_uid }}' if missing..."
+        ldapadd -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+        objectClass: top
+        objectClass: person
+        objectClass: organizationalPerson
+        objectClass: inetOrgPerson
+        objectClass: posixAccount
+        objectClass: shadowAccount
+        uid: {{ openldap_example_admin_uid }}
+        cn: {{ openldap_example_admin_givenname }} {{ openldap_example_admin_sn }}
+        sn: {{ openldap_example_admin_sn }}
+        givenName: {{ openldap_example_admin_givenname }}
+        displayName: {{ openldap_example_admin_givenname }} {{ openldap_example_admin_sn }}
+        mail: {{ openldap_example_admin_uid }}@{{ openldap_domain }}
+        uidNumber: {{ openldap_example_admin_uidnumber }}
+        gidNumber: 10000
+        homeDirectory: /home/{{ openldap_example_admin_uid }}
+        loginShell: /bin/bash
+        userPassword: {{ openldap_example_admin_password }}
+        EOF
+
+        echo "Adding example people to groups (idempotent)..."
+        # Standard user: cn=people (app SSO) + cn=posix-users (Linux nss)
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=people,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: member
+        member: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
+        EOF
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: memberUid
+        memberUid: {{ openldap_example_user_uid }}
+        EOF
+
+        # Admin user: cn=people + cn=ldap-admins + cn=portainer-admins + cn=posix-users
+        for grp in people ldap-admins portainer-admins; do
+          ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=$$grp,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: member
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+        EOF
+        done
+        ldapmodify -Q -Y EXTERNAL -H "$$LDAPI_URL" <<EOF || true
+        dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
+        changetype: modify
+        add: memberUid
+        memberUid: {{ openldap_example_admin_uid }}
+        EOF
+
+        echo "Example people setup complete."
+
+        wait $$SLAPD_PID
+
+volumes:
+  openldap_data:
+  ldap_certs:
+  acme_data:
+    external: true
+    name: {{ openldap_traefik_acme_volume }}
+
+networks:
+  proxy:
+    external: true

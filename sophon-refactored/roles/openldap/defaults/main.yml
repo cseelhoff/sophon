@@ -1,0 +1,53 @@
+---
+# OpenLDAP configuration
+openldap_image_name: "bitnamilegacy/openldap"
+openldap_image_tag: "2.6.10-debian-12-r4"
+
+# Network ports (bitnami supports privileged ports)
+openldap_port_ldap: 389
+openldap_port_ldaps: 636
+
+# Domain configuration
+openldap_domain: "{{ domain_name }}"
+openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
+
+# Required credentials are supplied by group_vars/all.yml or explicit overrides.
+openldap_admin_password: ""
+# openldap_config_password: ""  # defaults to openldap_admin_password if unset
+
+# Keycloak service account (bind DN for LDAP federation)
+openldap_keycloak_password: "{{ openldap_admin_password }}"
+
+# -----------------------------------------------------------------------------
+# Example/seed users created during LDAP bootstrap
+# -----------------------------------------------------------------------------
+# Two stereotypical accounts are seeded so SSO and Linux logins are testable
+# out of the box. Supply their passwords through the environment or -e.
+openldap_example_user_uid: "john.doe"
+openldap_example_user_givenname: "John"
+openldap_example_user_sn: "Doe"
+openldap_example_user_uidnumber: 10001
+openldap_example_user_password: ""
+
+openldap_example_admin_uid: "john.doe.admin"
+openldap_example_admin_givenname: "John"
+openldap_example_admin_sn: "Doe"
+openldap_example_admin_uidnumber: 10002
+openldap_example_admin_password: ""
+
+# TLS settings
+openldap_tls_enabled: true
+openldap_tls_enforce: true
+openldap_tls_domain: "ldap.{{ openldap_domain }}"
+
+# Certs dumper (extracts ACME certs from Traefik for LDAPS)
+openldap_certs_dumper_image_name: "ldez/traefik-certs-dumper"
+openldap_certs_dumper_image_tag: "v2.8.3"
+openldap_traefik_acme_volume: "traefik_traefik_data"
+
+openldap_image_tars:
+  - "{{ sophon_containers_dir }}/bitnamilegacy-openldap_{{ openldap_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/ldez-traefik-certs-dumper_{{ openldap_certs_dumper_image_tag }}.tar"
+
+# Logging
+openldap_log_level: 256

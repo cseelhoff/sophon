@@ -1,0 +1,56 @@
+---
+# Gitea role defaults
+
+# Image
+gitea_image_name: "gitea/gitea"
+gitea_image_tag: "1.22"
+gitea_image: "docker.io/{{ gitea_image_name }}:{{ gitea_image_tag }}"
+
+# Database — bundled PostgreSQL (recommended for production).
+# A `gitea-db` Postgres container is deployed alongside Gitea on an internal
+# network. To point at an external DB, override gitea_db_host and remove the
+# postgres service from the compose template.
+gitea_db_type: "postgres"
+gitea_db_host: "gitea-db:5432"
+gitea_db_name: "gitea"
+gitea_db_user: "gitea"
+
+# Postgres image used for the bundled DB container.
+gitea_postgres_image: "docker.io/library/postgres:16-alpine"
+
+gitea_image_tars:
+  - "{{ sophon_containers_dir }}/gitea-gitea_{{ gitea_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
+
+# Network
+gitea_port_http: 3000
+gitea_port_ssh: 222
+
+# Domain / URLs
+gitea_hostname: "git"
+gitea_domain: "{{ domain_name }}"
+gitea_root_url: "https://{{ gitea_hostname }}.{{ gitea_domain }}/"
+gitea_ssh_domain: "{{ gitea_hostname }}.{{ gitea_domain }}"
+
+# App settings
+gitea_app_name: "Sophon Git"
+gitea_run_mode: "prod"
+gitea_disable_registration: true
+
+# Actions runner
+gitea_actions_enabled: true
+
+# Initial admin (created by gitea-init sidecar on first deploy).
+# NOTE: Gitea reserves 'admin' as a username; use a different name.
+gitea_admin_user: "siteadmin"
+gitea_admin_email: "siteadmin@{{ gitea_domain }}"
+
+# Keycloak OIDC integration
+# These reference the keycloak role's vars directly; the keycloak role must
+# run before gitea (it does in 4-configure.yml) so these resolve correctly.
+gitea_oauth_enabled: true
+gitea_oauth_name: "Keycloak"
+gitea_oauth_client_id: "gitea"
+gitea_oauth_client_secret: "{{ keycloak_gitea_client_secret | default('') }}"
+gitea_oauth_discovery_url: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/.well-known/openid-configuration"
+gitea_oauth_scopes: "openid profile email groups"
