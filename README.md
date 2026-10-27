@@ -34,10 +34,10 @@ After that, every laptop step below is a plain `docker run` using that image.
 | 3. Install | InfraVM console | Installs CoreOS to the blank disk offline with a static IP and a `core` console password, then reboots. |
 | 4. Configure | InfraVM console | Asks for the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. |
 
-Run the laptop commands from the project directory. They are single lines that work in bash and
-PowerShell (in cmd write `%cd%` for `$(pwd)`). Every setting is listed in [docs/inputs.md](docs/inputs.md).
+Run the laptop commands from the project directory. In PowerShell write `${PWD}` for `$(pwd)` (cmd: `%cd%`); Step 1
+shows the Windows lines in full, and Step 2 and the dashboard follow the same pattern. Every setting is listed in [docs/inputs.md](docs/inputs.md).
 
-### Which engine do I have? (decides the `-v …:/var/run/docker.sock` part)
+### Which engine do I have? (decides the socket path in the commands)
 
 The container drives your engine through its socket, so the left side of that `-v` must be a socket that exists:
 
@@ -45,6 +45,7 @@ The container drives your engine through its socket, so the left side of that `-
 |---|---|
 | Docker Engine or Docker Desktop (Linux, Windows, macOS) | `/var/run/docker.sock` |
 | Podman, **including a `docker` command that is really Podman** (`podman-docker`, typical on WSL and Fedora) | `/run/user/$(id -u)/podman/podman.sock` |
+| Podman on Windows or macOS (`podman machine`) | `/run/user/1000/podman/podman.sock` (inside the machine; see Step 1) |
 
 If you see `statfs /var/run/docker.sock: no such file or directory`, you are on Podman. Enable its socket once with
 `systemctl --user enable --now podman.socket` and use the Podman path. In every command below, replace
@@ -63,6 +64,24 @@ Podman (this works with `docker` in place of `podman` too):
 ```bash
 podman run --rm -it -v "$(pwd):/workspace" -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
 ```
+
+**Windows PowerShell, Docker Desktop** (same as the bash line; `${PWD}` is PowerShell's current folder). The socket path
+is inside Docker Desktop's Linux VM, so it stays `/var/run/docker.sock`:
+
+```powershell
+docker run --rm -it -v "${PWD}:/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
+```
+
+**Windows PowerShell, Podman** (`podman machine`; PowerShell has no `$(id -u)`, and the socket lives inside the machine VM,
+usually `/run/user/1000/podman/podman.sock`):
+
+```powershell
+podman run --rm -it -v "${PWD}:/workspace" -v /run/user/1000/podman/podman.sock:/var/run/docker.sock sophon-tools prepare
+```
+
+Check the socket path with `podman machine ssh "ls /run/user/*/podman/podman.sock /run/podman/podman.sock"`; if only
+`/run/podman/podman.sock` exists (a rootful machine) use that instead. Keep the project under `C:\Users\...`, the folder
+`podman machine` shares by default. The Windows commands are **untested**.
 
 ### Step 2: provision
 
