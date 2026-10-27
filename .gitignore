@@ -1,4 +1,5 @@
 artifacts/
+.tailscale/
 __pycache__/
 .ansible/
 .bundle-test-*/
