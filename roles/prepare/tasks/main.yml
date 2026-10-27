@@ -27,12 +27,17 @@
 - name: Build and save the CoreDNS image
   when: prepare_force | bool or not prepare_coredns_stat.stat.exists
   block:
-    - name: Clone or update CoreDNS Docker Discovery source
+    # Always start clean: an interrupted earlier run can leave a half-made clone that git then refuses to update.
+    - name: Remove any previous CoreDNS Docker Discovery clone
+      ansible.builtin.file:
+        path: "{{ prepare_coredns_src }}"
+        state: absent
+    - name: Clone CoreDNS Docker Discovery source
       ansible.builtin.git:
         repo: "{{ prepare_coredns_repo }}"
         dest: "{{ prepare_coredns_src }}"
         version: master
-        update: true
+        depth: 1
     - name: Build the CoreDNS image
       ansible.builtin.command:
         argv: [docker, build, -t, "{{ prepare_coredns_image }}", "{{ prepare_coredns_src }}"]
