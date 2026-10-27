@@ -500,7 +500,7 @@
       const noStagesReached = Object.values(report.stages).every(stage => stage.state === 'pending');
       const failure = report.state === 'failed'
         ? report.error || (noStagesReached
-          ? 'Deployment failed before any stage started. Ansible may not have started, or initial playbook checks failed. If ansible-playbook is unavailable, stop the viewer and restart it with ./sophon dashboard.'
+          ? 'Deployment failed before any stage started. Ansible may not have started, or initial playbook checks failed. If ansible-playbook is unavailable, stop the viewer and restart it with the sophon-tools container (see the README).'
           : 'Deployment failed. Select a failed stage to inspect its task results.')
         : '';
       document.getElementById('run-error').textContent = failure

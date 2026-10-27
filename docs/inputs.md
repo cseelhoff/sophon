@@ -6,7 +6,7 @@ Keep every credential in a password manager: reruns need the same existing value
 ## Step 1 - prepare (internet)
 
 No inputs. Needs Docker or Podman, space for the images and ISOs, and internet.
-`./sophon prepare -e prepare_force=true` refreshes cached downloads. A laptop that is later offline
+`docker run … sophon-tools prepare -e prepare_force=true` (full command in the README) refreshes cached downloads. A laptop that is later offline
 must already have `artifacts/` and the built `sophon-tools` image from a completed run; steps 1-2 then
 use only the hypervisor's management network.
 

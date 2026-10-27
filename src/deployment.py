@@ -234,9 +234,11 @@ def shell_command(directory, values, environment, step='provision'):
     if step == 'configure':
         return '\n'.join(lines + [
             f'sophon-controller --run --state-dir {shlex.quote(str(directory))}', ''])
-    # Inside the container ROOT is /workspace; the wrapper passes the laptop path.
-    project = os.environ.get('SOPHON_PROJECT_DIR') or str(ROOT)
-    return '\n'.join(lines + [f'cd -- {shlex.quote(project)} && ./sophon provision', ''])
+    # Bash command, run from the project directory; names without values pass the exported secrets through.
+    passed = ' '.join(f'-e {name}' for name in exports)
+    return '\n'.join(lines + [
+        'docker run --rm --init -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock '
+        f'-v sophon-state:/state {passed} sophon-tools provision', ''])
 
 
 def action_request(directory, control, environment):
@@ -421,7 +423,7 @@ def load_diagram():
     return ET.tostring(root, encoding='utf-8'), labels
 
 
-def serve(directory, port=0, step='provision'):
+def serve(directory, port=0, step='provision', bind='127.0.0.1'):
     try:
         diagram, labels = load_diagram()
     except ValueError as error:
@@ -433,7 +435,8 @@ def serve(directory, port=0, step='provision'):
     }
     control = new_control(os.environ, step)
     control['diagram_labels'] = labels
-    with make_server('127.0.0.1', port, partial(application, directory, assets, control),
+    # Requests are still only accepted for Host/Origin 127.0.0.1:<port>; --bind only lets a container publish the port.
+    with make_server(bind, port, partial(application, directory, assets, control),
                      server_class=DashboardServer) as server:
         print(f'http://127.0.0.1:{server.server_port}/', flush=True)
         server.serve_forever()
@@ -468,8 +471,8 @@ def launch(directory, arguments):
         process = subprocess.Popen(['ansible-playbook', *arguments], env=environment)
         exit_code = process.wait()
     except OSError:
-        startup_error = ('Could not start ansible-playbook. Run the dashboard with ./sophon dashboard '
-                         '(a container with every tool), or install ansible-core.')
+        startup_error = ('Could not start ansible-playbook. Run the dashboard with the sophon-tools container '
+                         '(docker run ... sophon-tools dashboard), or install ansible-core.')
         print(startup_error, file=sys.stderr)
         exit_code = 127
     finally:
@@ -506,6 +509,7 @@ def main(argv=None):
     parser.add_argument('--state-dir', type=Path)
     parser.add_argument('--serve', action='store_true', help='Serve the dashboard; deployment starts only on request')
     parser.add_argument('--port', type=int, default=0, help='Dashboard port with --serve (default: choose a free port)')
+    parser.add_argument('--bind', default='127.0.0.1', help='Dashboard bind address (a container publishing the port needs 0.0.0.0)')
     parser.add_argument('--step', choices=STEP_STAGES, default=os.environ.get('SOPHON_DEPLOYMENT_STEP', 'provision'),
                         help='provision on the laptop; configure on installed InfraVM')
     parser.add_argument('arguments', nargs=argparse.REMAINDER, help='-- 4-configure.yml [Ansible arguments]')
@@ -520,16 +524,17 @@ def main(argv=None):
             parser.error('Start step 4 using sophon-controller on installed InfraVM.')
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
         parser.error('SOPHON_HYPERVISOR must be proxmox or vcenter.')
+    state_root = Path(os.environ.get('SOPHON_STATE_DIR') or ROOT / 'artifacts')
     for name in list(os.environ):
-        if name.startswith('SOPHON_') and name not in step_fields(options.step) and name != 'SOPHON_PROJECT_DIR':
+        if name.startswith('SOPHON_') and name not in step_fields(options.step):
             os.environ.pop(name, None)
     os.environ['SOPHON_DEPLOYMENT_STEP'] = options.step
     if not 0 <= options.port <= 65535:
         parser.error('--port must be between 0 and 65535')
-    directory = (options.state_dir or ROOT / 'artifacts' / 'deployment' / options.step).resolve()
+    directory = (options.state_dir or state_root / 'deployment' / options.step).resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if options.serve:
-        return serve(directory, options.port, options.step)
+        return serve(directory, options.port, options.step, options.bind)
     arguments = options.arguments
     if arguments and arguments[0] == '--':
         arguments = arguments[1:]

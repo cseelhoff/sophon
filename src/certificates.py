@@ -178,6 +178,7 @@ def issue_main(argv):
     default_state = Path(os.environ.get('SOPHON_STATE_DIR') or Path.home() / '.local/state/sophon') / 'certificates'
     parser.add_argument('--state-dir', type=Path, default=default_state)
     parser.add_argument('--timeout', type=int, default=600)
+    parser.add_argument('--output', type=Path, help='write the payload to this file instead of stdout (avoids shell redirection encoding)')
     options = parser.parse_args(argv)
 
     def prompt(label):
@@ -212,7 +213,7 @@ def issue_main(argv):
             if not token.strip():
                 raise ValueError('A Cloudflare API token is required for issuance.')
             if not shutil.which('traefik'):
-                raise ValueError('Run this through ./sophon certificates issue (the traefik binary is in the tools image).')
+                raise ValueError('Run this through the sophon-tools container (the traefik binary is in that image).')
             print(f'Issuing/renewing certificates for {domain}. Private state: {directory}', file=sys.stderr)
             issue(source, domain, email, token, options.timeout)
         source.chmod(0o600)
@@ -222,7 +223,13 @@ def issue_main(argv):
         if len(encoded) > MAX_PAYLOAD:
             raise ValueError('The ACME store exceeds the 2 MiB import limit; use a dedicated store for this domain.')
         print(f'Exporting complete certificate store. Keep this payload private. State: {directory}', file=sys.stderr)
-        print(encoded)
+        if options.output:
+            descriptor = os.open(options.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'w') as output:
+                output.write(encoded + '\n')
+            print(f'Payload written to {options.output}', file=sys.stderr)
+        else:
+            print(encoded)
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'Certificate issuance failed: {error}\n')
     except (EOFError, KeyboardInterrupt):

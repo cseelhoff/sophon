@@ -287,7 +287,7 @@ def test_startup_failure():
     assert report['current'] is None
     assert all(stage['state'] == 'pending' for stage in report['stages'].values())
     assert 'Could not start ansible-playbook' in report['error']
-    assert './sophon dashboard' in report['error']
+    assert 'the sophon-tools container' in report['error']
     assert 'PRIVATE_STARTUP_PASSWORD' not in json.dumps(report)
 
 
@@ -577,23 +577,29 @@ def test_shell_command():
     marker = directory / 'must-not-exist'
     values = new_control({}, 'provision')['values']
     values['SOPHON_PROXMOX_PASSWORD'] = f"apostrophe' spaces $HOME $(touch {marker}) `id` ; & \\"
-    wrapper = directory / 'sophon'
+    wrapper = directory / 'docker'
     wrapper.write_text('\n'.join([
       f'#!{sys.executable}', 'import json, os, sys',
       f'with open({str(directory / "received.json")!r}, "w") as output:',
       '    json.dump({"environment": dict(os.environ), "args": sys.argv[1:]}, output)',
     ]))
     wrapper.chmod(0o700)
-    environment = dict(os.environ, SOPHON_CONTROLLER_SSH_PUBLIC_KEY='stale')
-    with patch.dict(os.environ, SOPHON_PROJECT_DIR=str(directory)):
-      command = shell_command(state, values, environment, 'provision')
-    assert command.rstrip().endswith('./sophon provision')
+    environment = dict(os.environ, SOPHON_CONTROLLER_SSH_PUBLIC_KEY='stale',
+                       PATH=str(directory) + os.pathsep + os.environ['PATH'])
+    command = shell_command(state, values, environment, 'provision')
+    assert command.rstrip().endswith('sophon-tools provision')
     assert not state.exists(), 'Generating a command must not create files or launch a process'
     for shell in filter(shutil.which, ('sh', 'bash', 'zsh')):
-      result = subprocess.run([shell], input=command, env=environment, capture_output=True, text=True, timeout=10)
+      result = subprocess.run([shell], input=command, env=environment, capture_output=True, text=True,
+                              timeout=10, cwd=directory)
       assert result.returncode == 0, result.stderr
       received = json.loads((directory / 'received.json').read_text())
-      assert received['args'] == ['provision']
+      args = received['args']
+      assert args[:3] == ['run', '--rm', '--init'] and args[-2:] == ['sophon-tools', 'provision']
+      assert f'{directory}:/workspace' in args
+      # Settings travel as names only; values come from the exported environment, never the command line.
+      assert all(value not in ' '.join(args) for value in values.values() if value)
+      assert {args[index + 1] for index, arg in enumerate(args) if arg == '-e'} >= set(values)
       assert received['environment']['SOPHON_DEPLOYMENT_STEP'] == 'provision'
       assert {name: received['environment'][name] for name in values} == values
       assert 'SOPHON_ACME_PAYLOAD' not in received['environment']
@@ -643,17 +649,18 @@ def test_shell_trace():
       'hosts': 'localhost', 'gather_facts': False,
       'tasks': [{'ansible.builtin.include_role': {'name': 'fixture'}, 'tags': ['sophon_stage_gitea']}],
     }]))
-    # The wrapper's in-container command, run without a container.
-    wrapper = directory / 'sophon'
-    wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} src/deployment.py --step provision -- 2-provision.yml\n')
-    wrapper.chmod(0o700)
+    # Stand-in for `docker run ... sophon-tools provision`: run the container entry point on this project.
+    (directory / 'src/cli.py').write_text((ROOT / 'src/cli.py').read_text())
     state = directory / 'artifacts/deployment/provision'
-    with patch.dict(os.environ, SOPHON_PROJECT_DIR=str(directory)):
-      command = shell_command(state, new_control({})['values'], {})
+    docker = directory / 'docker'
+    docker.write_text(f'#!/bin/sh\ncd {directory}\nSOPHON_STATE_DIR={directory / "artifacts"} exec {sys.executable} src/cli.py provision\n')
+    docker.chmod(0o700)
+    command = shell_command(state, new_control({})['values'], {})
     previous_run = None
     for expected in ('completed', 'failed'):
-      result = subprocess.run(['sh'], input=command, env=dict(os.environ, ANSIBLE_STDOUT_CALLBACK='default'),
-                              capture_output=True, text=True, timeout=30)
+      result = subprocess.run(['sh'], input=command, capture_output=True, text=True, timeout=30, cwd=directory,
+                              env=dict(os.environ, ANSIBLE_STDOUT_CALLBACK='default',
+                                       PATH=str(directory) + os.pathsep + os.environ['PATH']))
       report = json.loads((state / 'status.json').read_text())
       assert report['state'] == expected, result.stdout + result.stderr
       assert (result.returncode == 0) == (expected == 'completed')

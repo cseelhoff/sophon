@@ -179,7 +179,7 @@ def check_startup_error(page, report_path, step):
     page.get_by_role('button', name='Prepare media' if step == 'provision' else 'Portainer', exact=False).click()
     assert error.is_visible()
     assert page.locator('#task-results').inner_text() == ''
-    report['error'] = 'Could not start ansible-playbook. Restart the viewer with ./sophon dashboard.'
+    report['error'] = 'Could not start ansible-playbook. Restart the viewer with the sophon-tools container.'
     report_path.write_text(json.dumps(report))
     error.get_by_text(report['error'], exact=False).wait_for()
     page.wait_for_timeout(1200)
