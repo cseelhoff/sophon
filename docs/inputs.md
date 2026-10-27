@@ -14,7 +14,7 @@ use only the hypervisor's management network.
 
 ## Step 2 - provision
 
-Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, or `vcenter`) or in the dashboard.
+Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter`, or `workstation`) or in the dashboard.
 
 | Proxmox | Meaning |
 |---|---|
@@ -31,6 +31,16 @@ Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, or `vcenter`)
 | `SOPHON_VCENTER_DATACENTER`, `_CLUSTER`, `_DATASTORE` | existing inventory names; the datastore must be shared by the cluster |
 | `SOPHON_VCENTER_NETWORK` | existing port group already carrying the guest VLAN |
 | `SOPHON_VCENTER_FOLDER` | optional existing folder |
+
+| Workstation | Meaning |
+|---|---|
+| `SOPHON_WORKSTATION_NETWORK` | `bridged` (default), `nat`, or `hostonly` |
+| `SOPHON_WORKSTATION_VM_DIR` | optional Windows host directory for VMX/VMDK files (default `%LOCALAPPDATA%\Sophon\VMs`) |
+
+Workstation provisioning is supported by `sophon.ps1` on Windows with VMware Workstation Pro installed
+on the same machine. Its host helper runs while provisioning is active and uses `vmrun` and
+`vmware-vdiskmanager`; no Workstation management credentials are required. The Bash/container launcher
+does not support Workstation because its tools run on the Windows host.
 
 Both: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
 A VM that already exists is only started if this workflow created it; anything else is left alone.

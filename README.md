@@ -1,7 +1,7 @@
 # Sophon
 
 Offline-capable deployment of DNS, reverse proxy, directory, SSO and Git services onto one
-Fedora CoreOS VM (**InfraVM**), on Proxmox or VMware vCenter. Services run as rootless Podman
+Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter, or VMware Workstation Pro. Services run as rootless Podman
 containers managed through Portainer; the Ansible runner is a container on InfraVM itself.
 
 ## The four steps
@@ -104,14 +104,16 @@ sophon-controller
 
 Both ISOs can then be detached.
 
-### Another hypervisor (for example Hyper-V or VMware Workstation)
+### Another hypervisor (for example Hyper-V)
 
-Only Proxmox and vCenter are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
+Proxmox, vCenter, and VMware Workstation Pro are automated. For Workstation, run `.\sophon.ps1 provision` from Windows PowerShell with VMware Workstation Pro installed on that same machine. Select **VMware Workstation** in the PowerShell-launched dashboard or set `SOPHON_HYPERVISOR=workstation`; direct Docker/container commands do not start the required Windows host helper. Choose bridged, NAT, or host-only networking. The VM files default to `%LOCALAPPDATA%\Sophon\VMs` and can be moved by setting `SOPHON_WORKSTATION_VM_DIR`.
+
+For other hypervisors, do step 2 by hand; steps 3 and 4 are unchanged.
 
 1. Run the step 1 command and copy `artifacts/coreos/fedora-coreos-live.iso` and
    `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
 2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
-   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged).
+  one 40+ GiB (default 100) disk, and one NIC that can reach your network.
 3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
 4. Power on and continue with steps 3 and 4 above. If it boots the live ISO again after install,
    move the disk above the CDs or eject the ISOs.
@@ -173,5 +175,5 @@ docker run --rm -v "$(pwd):/workspace" sophon-tools test   # unit, fixture, prog
 
 `tests/test_dashboard.py` drives a real Chromium through Playwright and is skipped unless
 Playwright is installed (run it with `python3 tests/test_dashboard.py` on a machine that has it).
-The 4-step flow has been verified end to end on both hypervisors; the layout above is the
+The 4-step flow has been verified end to end on Proxmox and vCenter; the layout above is the
 re-architecture of that working project.

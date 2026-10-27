@@ -7,15 +7,16 @@
   tasks:
     - name: Require a supported hypervisor
       ansible.builtin.assert:
-        that: hypervisor_provider in ['proxmox', 'vcenter']
-        fail_msg: "SOPHON_HYPERVISOR must be proxmox or vcenter."
+        that: hypervisor_provider in ['proxmox', 'vcenter', 'workstation']
+        fail_msg: "SOPHON_HYPERVISOR must be proxmox, vcenter or workstation."
     - name: Require hypervisor settings
       ansible.builtin.assert:
         that: lookup('env', item) | trim | length > 0
         fail_msg: "Supply {{ item }} before provisioning. Service credentials belong in step 4."
         quiet: true
       loop: >-
-        {{ ['SOPHON_PROXMOX_HOST', 'SOPHON_PROXMOX_PASSWORD'] if hypervisor_provider == 'proxmox' else
+          {{ ['SOPHON_PROXMOX_HOST', 'SOPHON_PROXMOX_PASSWORD'] if hypervisor_provider == 'proxmox' else
+            [] if hypervisor_provider == 'workstation' else
            ['SOPHON_VCENTER_URL', 'SOPHON_VCENTER_PASSWORD', 'SOPHON_VCENTER_DATACENTER',
             'SOPHON_VCENTER_CLUSTER', 'SOPHON_VCENTER_DATASTORE', 'SOPHON_VCENTER_NETWORK'] }}
 
@@ -38,6 +39,12 @@
         name: vcenter
       when: hypervisor_provider == 'vcenter'
       tags: [sophon_stage_vcenter]
+    - name: Check VMware Workstation host helper
+      ansible.builtin.include_role:
+        name: workstation
+        tasks_from: main
+      when: hypervisor_provider == 'workstation'
+      tags: [sophon_stage_workstation]
     - name: Create InfraVM with a blank disk and two ISOs
       ansible.builtin.include_role:
         name: "{{ hypervisor_provider }}"

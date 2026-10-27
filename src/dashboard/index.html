@@ -353,7 +353,11 @@
           input.name = field.name;
           input.title = field.name;
           if (field.choices) {
-            for (const value of field.choices) input.add(new Option(value === 'vcenter' ? 'VMware vCenter' : 'Proxmox', value));
+            for (const value of field.choices) {
+              const label = {proxmox:'Proxmox', vcenter:'VMware vCenter', workstation:'VMware Workstation',
+                bridged:'Bridged', nat:'NAT', hostonly:'Host-only'}[value] || value;
+              input.add(new Option(label, value));
+            }
           } else if (field.kind !== 'certificate') {
             input.type = ['number', 'email', 'password'].includes(field.kind) ? field.kind : 'text';
           }
@@ -408,7 +412,9 @@
         ? `Run Step 4 service deployment on this InfraVM?\nPortainer: ${values.SOPHON_INFRAVM_IP}:9443\nNo hypervisor access is used.`
         : values.SOPHON_HYPERVISOR === 'vcenter'
           ? `Create ${values.SOPHON_INFRAVM_NAME} on ${values.SOPHON_VCENTER_URL} / ${values.SOPHON_VCENTER_CLUSTER}?\nDatastore: ${values.SOPHON_VCENTER_DATASTORE}\nPort group: ${values.SOPHON_VCENTER_NETWORK}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`
-          : `Create ${values.SOPHON_INFRAVM_NAME} on ${values.SOPHON_PROXMOX_HOST} / ${values.SOPHON_PROXMOX_NODE}?\nBridge: ${values.SOPHON_VNET_INTERFACE}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`;
+          : values.SOPHON_HYPERVISOR === 'workstation'
+            ? `Create ${values.SOPHON_INFRAVM_NAME} in VMware Workstation?\nNetwork: ${values.SOPHON_WORKSTATION_NETWORK}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`
+            : `Create ${values.SOPHON_INFRAVM_NAME} on ${values.SOPHON_PROXMOX_HOST} / ${values.SOPHON_PROXMOX_NODE}?\nBridge: ${values.SOPHON_VNET_INTERFACE}\nDisk: ${values.SOPHON_INFRAVM_DISK_GB} GiB\nTwo ISOs will be attached; continue in the live console.`;
       if (action === 'run' && !confirm(`${target}\nDo not also run the copied command.`)) return;
       submitting = true;
       if (action === 'run') pendingRun = latest?.run_id || '';

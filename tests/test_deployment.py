@@ -467,9 +467,28 @@ def test_site_markers():
     tasks = playbook_tasks(filename)
     markers = [tag.removeprefix('sophon_stage_') for task in tasks
                for tag in task.get('tags', []) if tag.startswith('sophon_stage_')]
-    for provider in ('proxmox', 'vcenter'):
-      selected = [marker for marker in markers if marker not in ('proxmox', 'vcenter') or marker == provider]
+    for provider in ('proxmox', 'vcenter', 'workstation'):
+      selected = [marker for marker in markers
+          if marker not in ('proxmox', 'vcenter', 'workstation') or marker == provider]
       assert selected == [*step_stages(step, provider), 'end'], markers
+
+
+def test_workstation_provider_settings():
+  assert field_provider('Workstation') == 'workstation'
+  assert 'SOPHON_WORKSTATION_NETWORK' in step_fields('provision')
+  values = new_control({}, 'provision')['values']
+  valid, error = validate_settings(values, {
+    'SOPHON_HYPERVISOR': 'workstation', 'SOPHON_WORKSTATION_NETWORK': 'bridged'})
+  assert error is None, error
+  assert step_stages('provision', valid['SOPHON_HYPERVISOR']) == (
+    'prepare', 'workstation', 'infravm')
+  command = shell_command('/state', valid, {}, 'provision')
+  assert "$env:SOPHON_HYPERVISOR = 'workstation'" in command
+  assert '.\\sophon.ps1 provision' in command
+  assert 'docker run' not in command
+  invalid, error = validate_settings(values, {
+    'SOPHON_HYPERVISOR': 'workstation', 'SOPHON_WORKSTATION_NETWORK': 'invalid'})
+  assert invalid is None and 'one of' in error
 
 
 def test_credential_inputs():
@@ -598,7 +617,8 @@ def test_shell_command():
       assert args[:3] == ['run', '--rm', '--init'] and args[-2:] == ['sophon-tools', 'provision']
       assert f'{directory}:/workspace' in args
       # Settings travel as names only; values come from the exported environment, never the command line.
-      assert all(value not in ' '.join(args) for value in values.values() if value)
+      assert all(values[name] not in ' '.join(args) for name, field in FIELDS.items()
+             if field[2] == 'password' and values.get(name))
       assert {args[index + 1] for index, arg in enumerate(args) if arg == '-e'} >= set(values)
       assert received['environment']['SOPHON_DEPLOYMENT_STEP'] == 'provision'
       assert {name: received['environment'][name] for name in values} == values

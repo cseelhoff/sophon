@@ -1,0 +1,4 @@
+---
+- name: Authenticate with VMware Workstation host helper
+  workstation_vm:
+    action: authenticate

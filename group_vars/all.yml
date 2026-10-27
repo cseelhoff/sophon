@@ -15,6 +15,7 @@ vcenter_cluster: "{{ lookup('env', 'SOPHON_VCENTER_CLUSTER') }}"
 vcenter_datastore: "{{ lookup('env', 'SOPHON_VCENTER_DATASTORE') }}"
 vcenter_network: "{{ lookup('env', 'SOPHON_VCENTER_NETWORK') }}"
 vcenter_folder: "{{ lookup('env', 'SOPHON_VCENTER_FOLDER') | default('', true) }}"
+workstation_network: "{{ lookup('env', 'SOPHON_WORKSTATION_NETWORK') | default('bridged', true) }}"
 
 proxmox_host: "{{ lookup('env', 'SOPHON_PROXMOX_HOST') | default('', true) }}"
 proxmox_port: "{{ lookup('env', 'SOPHON_PROXMOX_PORT') | default(8006, true) | int }}"

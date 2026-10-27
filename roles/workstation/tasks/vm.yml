@@ -1,0 +1,16 @@
+---
+- name: Provision a blank InfraVM with two ISOs on VMware Workstation
+  workstation_vm:
+    action: provision
+    name: "{{ infravm_vm_name }}"
+    cores: "{{ infravm_cores }}"
+    memory: "{{ infravm_memory }}"
+    disk_gb: "{{ infravm_disk_gb }}"
+    network: "{{ workstation_network }}"
+    coreos_iso: "{{ coreos_iso_path }}"
+    bundle_iso: "{{ bundle_iso_path }}"
+  register: infravm_workstation
+
+- name: Show the selected Workstation VM
+  ansible.builtin.debug:
+    msg: "Continue in the VMware Workstation console for {{ infravm_workstation.vm_path }}."

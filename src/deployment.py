@@ -25,6 +25,7 @@ STAGES = {
     'prepare': 'Prepare media',
     'proxmox': 'Proxmox authentication',
     'vcenter': 'vCenter authentication',
+    'workstation': 'VMware Workstation',
     'infravm': 'InfraVM',
     'coredns': 'CoreDNS',
     'traefik': 'Traefik',
@@ -41,6 +42,7 @@ CELLS = {
     ],
     'proxmox': ['_SmIZJivoSQWszKZv9Yz-3'],
     'vcenter': [],
+    'workstation': [],
     'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5'],
     'coredns': ['497KWN3HuOLj0ZWtI1qn-3'],
     'traefik': ['BveltJdI-pWs-qTDEDWz-51'],
@@ -65,6 +67,7 @@ FIELDS = {
     'SOPHON_VCENTER_DATASTORE': ('Shared datastore', 'vCenter', 'text', '', True),
     'SOPHON_VCENTER_NETWORK': ('Port group (already configured for its VLAN)', 'vCenter', 'text', '', True),
     'SOPHON_VCENTER_FOLDER': ('VM folder (empty uses datacenter VM root)', 'vCenter', 'text', '', False),
+    'SOPHON_WORKSTATION_NETWORK': ('Network mode', 'Workstation', 'choice', 'bridged', True),
     'SOPHON_VNET_INTERFACE': ('Bridge', 'Network', 'text', 'vmbr0', True),
     'SOPHON_VNET_VLAN': ('VLAN', 'Network', 'number', '', False),
     'SOPHON_INFRAVM_CORES': ('CPU cores', 'VM', 'number', '8', True),
@@ -99,14 +102,16 @@ STEP_STAGES = {
     'provision': ('prepare', 'proxmox', 'infravm'),
     'configure': ('infravm', 'coredns', 'traefik', 'openldap', 'keycloak', 'gitea'),
 }
-CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter')}
-PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Network', 'VM')
+CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'workstation'),
+           'SOPHON_WORKSTATION_NETWORK': ('bridged', 'nat', 'hostonly')}
+PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Workstation', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
                     if field[2] not in ('password', 'certificate') and field[1] not in PROVISION_GROUPS and name != 'SOPHON_DOMAIN')
 
 
 def field_provider(group):
-    return 'proxmox' if group in ('Proxmox', 'Network') else 'vcenter' if group == 'vCenter' else None
+    return ('proxmox' if group in ('Proxmox', 'Network') else
+            'vcenter' if group == 'vCenter' else 'workstation' if group == 'Workstation' else None)
 
 
 def step_stages(step, provider='proxmox'):
@@ -155,7 +160,7 @@ def validate_settings(current, changes, step='provision'):
     values = current | changes
     provider = values.get('SOPHON_HYPERVISOR', 'proxmox').strip()
     if provider not in CHOICES['SOPHON_HYPERVISOR']:
-        return None, 'Hypervisor must be proxmox or vcenter.'
+        return None, 'Hypervisor must be proxmox, vcenter or workstation.'
     for name, (label, group, kind, default, required) in definitions.items():
         if field_provider(group) not in (None, provider):
             continue
@@ -169,6 +174,8 @@ def validate_settings(current, changes, step='provision'):
             return None, f'{label} ({name}) must contain at least 12 characters.'
         if not value:
             continue
+        if name in CHOICES and value not in CHOICES[name]:
+            return None, f'{label} must be one of: {", ".join(CHOICES[name])}.'
         try:
             if kind == 'ipv4':
                 ipaddress.IPv4Address(value)
@@ -231,6 +238,14 @@ def shell_command(directory, values, environment, step='provision'):
         'unset ' + ' '.join(name for name in FIELDS if name not in step_fields(step)),
         *[f'export {name}={shlex.quote(value)}' for name, value in exports.items()],
     ]
+    if step == 'provision' and values.get('SOPHON_HYPERVISOR') == 'workstation':
+        powershell = [f"$env:{name} = '{value.replace(chr(39), chr(39) * 2)}'"
+                      for name, value in exports.items()]
+        powershell.append(".\\sophon.ps1 provision")
+        return '\n'.join([
+            '# Contains secrets. Do not share; your terminal may save this in history.',
+            *powershell, '',
+        ])
     if step == 'configure':
         return '\n'.join(lines + [
             f'sophon-controller --run --state-dir {shlex.quote(str(directory))}', ''])
@@ -523,7 +538,7 @@ def main(argv=None):
         if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
             parser.error('Start step 4 using sophon-controller on installed InfraVM.')
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
-        parser.error('SOPHON_HYPERVISOR must be proxmox or vcenter.')
+        parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or workstation.')
     state_root = Path(os.environ.get('SOPHON_STATE_DIR') or ROOT / 'artifacts')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in step_fields(options.step):

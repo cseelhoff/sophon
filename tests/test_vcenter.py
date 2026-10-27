@@ -159,7 +159,7 @@ class VCenterTests(unittest.TestCase):
                                 env=dict(os.environ, SOPHON_HYPERVISOR='unsupported'),
                                 capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 2)
-        self.assertIn('SOPHON_HYPERVISOR must be proxmox or vcenter', result.stderr)
+        self.assertIn('SOPHON_HYPERVISOR must be proxmox, vcenter or workstation', result.stderr)
 
     def test_ansible_module_documentation_is_valid(self):
         result = subprocess.run(['ansible-doc', '-M', str(ROOT / 'library'), 'vcenter_vm'],
