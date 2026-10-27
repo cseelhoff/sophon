@@ -14,17 +14,17 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'src'))
 import console
 import deployment
 
 
 def service_values():
-    values = deployment.new_control({}, 'services')['values']
-    values.update({name: 'FIXTURE_SECRET_VALUE' for name, field in deployment.phase_fields('services').items()
+    values = deployment.new_control({}, 'configure')['values']
+    values.update({name: 'FIXTURE_SECRET_VALUE' for name, field in deployment.step_fields('configure').items()
                    if field[2] == 'password' and field[4]})
     values.update(SOPHON_DOMAIN='example.test', SOPHON_INFRAVM_IP='192.0.2.3',
-                  SOPHON_DEPLOYMENT_PHASE='services')
+                  SOPHON_DEPLOYMENT_STEP='configure')
     return values
 
 
@@ -33,7 +33,7 @@ class ConsoleTests(unittest.TestCase):
         pid, terminal = pty.fork()
         if pid == 0:
             os.execv(sys.executable, [sys.executable, '-c',
-                f'import sys,termios; sys.path.insert(0,{str(ROOT)!r}); import console; '
+                f'import sys,termios; sys.path.insert(0,{str(ROOT / "src")!r}); import console; '
                 'before=termios.tcgetattr(0); value=console.read_certificate("CERTIFICATE: "); '
                 'assert termios.tcgetattr(0)==before; '
                 'assert value=="X"*120000; print("COMPLETE_PRIVATE_PASTE",flush=True)'])
@@ -71,9 +71,9 @@ class ConsoleTests(unittest.TestCase):
                 patch('console.getpass.getpass', return_value='') as hidden, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main(['--state-dir', '/workspace/state']), 19)
-            run.assert_called_once_with(['--phase', 'services', '--state-dir', '/workspace/state', '--', 'site.yml'])
+            run.assert_called_once_with(['--step', 'configure', '--state-dir', '/workspace/state', '--', '4-configure.yml'])
             self.assertEqual(hidden.call_count, sum(field[2] in ('password', 'certificate')
-                                                   for field in deployment.phase_fields('services').values()))
+                                                   for field in deployment.step_fields('configure').values()))
             self.assertNotIn('FIXTURE_SECRET_VALUE', output.getvalue())
 
     def test_invalid_run_does_not_launch_or_expose_secret(self):
@@ -89,18 +89,18 @@ class ConsoleTests(unittest.TestCase):
                 self.assertIn('Configuration rejected:', error.getvalue())
 
     def test_dashboard_starts_without_service_secrets(self):
-        with patch.dict(os.environ, {'SOPHON_DEPLOYMENT_PHASE': 'services'}, clear=True), \
+        with patch.dict(os.environ, {'SOPHON_DEPLOYMENT_STEP': 'configure'}, clear=True), \
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main', return_value=0) as run:
             self.assertEqual(console.main(['--dashboard', '--port', '0']), 0)
-            run.assert_called_once_with(['--phase', 'services', '--serve', '--port', '0'])
+            run.assert_called_once_with(['--step', 'configure', '--serve', '--port', '0'])
 
     def test_certificate_refresh_is_explicit_and_console_only(self):
         with patch.dict(os.environ, service_values(), clear=True), \
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main', return_value=0) as run:
             self.assertEqual(console.main(['--run', '--refresh-certificates']), 0)
-            run.assert_called_once_with(['--phase', 'services', '--', 'site.yml',
+            run.assert_called_once_with(['--step', 'configure', '--', '4-configure.yml',
                                         '--extra-vars', 'traefik_acme_replace_existing=true'])
             run.reset_mock()
             with self.assertRaises(SystemExit) as error, contextlib.redirect_stderr(io.StringIO()):
@@ -134,7 +134,7 @@ class ConsoleTests(unittest.TestCase):
                                SOPHON_KOPIA_REPOSITORY_PASSWORD='DO_NOT_FORWARD',
                                PATH=str(directory) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(
-                [sys.executable, str(ROOT / 'console.py'), '--run', '--state-dir', str(directory / 'state')],
+                [sys.executable, str(ROOT / 'src/console.py'), '--run', '--state-dir', str(directory / 'state')],
                 env=environment, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 7, result.stderr)
             forwarded = json.loads(received.read_text())
@@ -153,7 +153,7 @@ class ConsoleTests(unittest.TestCase):
                 f'open({str(received)!r}, "w").write(json.dumps([sys.argv[1:], dict(os.environ)]))\n')
             binary.chmod(0o700)
             control = deployment.new_control(dict(os.environ, **service_values(),
-                PATH=str(directory) + os.pathsep + os.environ['PATH']), 'services')
+                PATH=str(directory) + os.pathsep + os.environ['PATH']), 'configure')
             data = json.dumps({'SOPHON_DOMAIN': 'edited.example'}).encode()
             environment = {
                 'SERVER_PORT': '12345', 'HTTP_HOST': '127.0.0.1:12345', 'REQUEST_METHOD': 'POST',
@@ -165,9 +165,9 @@ class ConsoleTests(unittest.TestCase):
             self.assertEqual(status, '202 Accepted', payload)
             control['processes'][0].wait(timeout=10)
             args, forwarded = json.loads(received.read_text())
-            self.assertEqual(args, ['site.yml'])
+            self.assertEqual(args, ['4-configure.yml'])
             self.assertEqual(forwarded['SOPHON_DOMAIN'], 'edited.example')
-            self.assertEqual(forwarded['SOPHON_DEPLOYMENT_PHASE'], 'services')
+            self.assertEqual(forwarded['SOPHON_DEPLOYMENT_STEP'], 'configure')
 
 
 if __name__ == '__main__':

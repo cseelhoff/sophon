@@ -1,5 +1,0 @@
----
-dependencies:
-  - role: proxmox
-  - role: vnet
-    when: (nfs_ip == "") or (vnet_gateway == "") or (vnet_cidr == "") or (vnet_dns == "")

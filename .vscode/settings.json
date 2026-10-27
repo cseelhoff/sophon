@@ -1,5 +1,0 @@
-{
-    "ansible.python.interpreterPath": "/home/vscode/.nix-profile/bin/python3",
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": []
-}

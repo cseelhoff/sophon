@@ -1,68 +1,30 @@
 ---
-# Traefik configuration
-traefik_enabled: true
-
-# Portainer connection
-traefik_image_name: "traefik"
 traefik_image_tag: "v3.2"
-
 traefik_image_tars:
   - "{{ sophon_containers_dir }}/library-traefik_{{ traefik_image_tag }}.tar"
 
-# Network ports
 traefik_port_http: 80
 traefik_port_https: 443
+traefik_fqdn: "traefik.{{ domain_name }}"
+traefik_log_level: "INFO"
 
-# Domain configuration
-traefik_domain: "{{ domain_name | default('example.local') }}"
-traefik_fqdn: "traefik.{{ traefik_domain }}"
-
-# Let's Encrypt / ACME configuration
-traefik_acme_email: "admin@example.com"
 traefik_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
 # traefik_acme_server: "https://acme-staging-v02.api.letsencrypt.org/directory" # staging
 
-# DNS provider for ACME DNS challenge (cloudflare, route53, etc)
-traefik_dns_provider: "cloudflare"
-# traefik_cf_dns_api_token: "" # Supply explicitly if used
-
-# Log level
-traefik_log_level: "INFO"
-
-# Dashboard authentication (htpasswd format)
-# Generate with: htpasswd -nB admin | sed -e 's/\$/\$\$/g'
-# traefik_dashboard_auth: "admin:$$2y$$..." # Supply explicitly if used
-
-# Validate backend certs (set to false for self-signed)
-traefik_insecure_skip_verify: true
-
-# -----------------------------------------------------------------------------
-# ACME / acme.json persistence
-# -----------------------------------------------------------------------------
-# Local controller-side copy of acme.json. Used to seed a freshly-created
-# traefik_data volume so we don't burn through Let's Encrypt's "duplicate
-# certificate" quota (5 / week per identical SAN set) on every redeploy.
-# `artifacts/` is gitignored — file contains the ACME account private key
-# and issued cert private keys, treat as a secret and back it up via kopia.
+# acme.json holds the ACME account key and every certificate's private key:
+# treat it as a secret. A copy lives under artifacts/ so a rebuilt volume is
+# reseeded instead of reissuing (Let's Encrypt allows 5 duplicates a week).
 traefik_acme_artifacts_dir: "{{ playbook_dir }}/artifacts/traefik"
 traefik_acme_backup_path: "{{ traefik_acme_artifacts_dir }}/acme.json"
 
-# Compose project name -> podman volume name is "<project>_<volume>".
-# Portainer uses the stack name as the project name.
+# Portainer names the volume <stack>_<volume>.
 traefik_compose_project: "traefik"
 traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
 
-# When true and a local backup exists, seed traefik_data BEFORE the stack
-# starts so traefik reuses the existing account + certs instead of issuing new.
-traefik_acme_restore_on_deploy: true
+# Normal reruns keep the live store; sophon-controller --refresh-certificates
+# sets this to replace it with the imported payload.
 traefik_acme_replace_existing: false
 
-# When true, snapshot acme.json from the running traefik container after
-# every deploy. Safe no-op (404) until the first cert has been issued.
-traefik_acme_backup_after_deploy: true
-
-# Image used for the short-lived seed helper container that mounts the
-# traefik_data volume so acme.json can be uploaded into it via the
-# Portainer-proxied Docker archive API. Reuses the traefik image (already
-# present on the host, including air-gapped) to avoid extra image loads.
+# Short-lived helper that mounts the data volume so acme.json can be moved in and
+# out through Portainer's Docker API. Reuses the already-loaded Traefik image.
 traefik_acme_helper_image: "docker.io/library/traefik:{{ traefik_image_tag }}"

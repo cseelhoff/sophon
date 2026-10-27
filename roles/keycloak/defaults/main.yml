@@ -10,9 +10,8 @@ keycloak_port: 8080
 keycloak_hostname: "auth"
 keycloak_domain: "{{ domain_name }}"
 
-# Required credentials are supplied by group_vars/all.yml or explicit overrides.
+# Required credentials come from group_vars/all.yml or explicit overrides.
 keycloak_admin_user: "admin"
-keycloak_admin_password: ""
 
 # Database. Keycloak's realm, clients, mappers and group mappings are written
 # by configure.yml over the Admin REST API, so the DB must outlive the
@@ -24,11 +23,8 @@ keycloak_db_host: "keycloak-db"
 keycloak_db_port: 5432
 keycloak_db_name: "keycloak"
 keycloak_db_user: "keycloak"
-keycloak_db_password: ""
-keycloak_portainer_client_secret: ""
 
-# Prestaged tars loaded before the stack deploys. Names follow prestage.yml's
-# <vendor>-<image>_<tag>.tar convention.
+# Prestaged tars loaded before the stack deploys (<vendor>-<image>_<tag>.tar).
 keycloak_image_tars:
   - "{{ sophon_containers_dir }}/keycloak-keycloak_{{ keycloak_image_tag }}.tar"
   - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
@@ -39,27 +35,6 @@ openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.
 openldap_keycloak_password: "{{ openldap_admin_password }}"
 keycloak_ldap_url: "ldaps://ldap.{{ openldap_domain }}:636"
 keycloak_ldap_bind_dn: "cn=keycloak-bind,ou=services,{{ openldap_base_dn }}"
-
-# Realm configuration
-keycloak_realm: "sophon"
-keycloak_realm_display_name: "Sophon"
-
-# OIDC Clients (auto-provisioned)
-keycloak_clients:
-  - client_id: gitea
-    name: "Gitea"
-    redirect_uris:
-      - "https://git.{{ domain_name }}/*"
-    enabled: "{{ gitea_enabled | default(false) }}"
-  - client_id: portainer
-    name: "Portainer"
-    redirect_uris:
-      - "https://portainer.{{ domain_name }}/*"
-    enabled: "{{ portainer_enabled | default(false) }}"
-
-# Portainer OAuth integration
-# Set to false to skip configuring Portainer's OAuth settings via API
-keycloak_configure_portainer_oauth: true
 
 # LDAP attribute / group mappers attached to the LDAP user federation provider
 keycloak_ldap_mappers:

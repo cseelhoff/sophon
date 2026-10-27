@@ -1,29 +1,14 @@
 ---
 
-- name: Prompt for missing domain
-  ansible.builtin.pause:
-    prompt: "Domain name"
-  register: _coredns_dn
-  when: coredns_domain_name == ""
-
-- name: Set updated variable values
-  ansible.builtin.set_fact:
-    coredns_domain_name: "{{ _coredns_dn.user_input | default(coredns_domain_name) }}"
-
 - name: Deploy CoreDNS
-  when: coredns_enabled | default(true)
   block:
-
-    # - name: Render Corefile and encode for init container
-    #   ansible.builtin.set_fact:
-    #     _coredns_corefile_b64: "{{ lookup('template', 'Corefile.j2') | b64encode }}"
 
     # Bad Cloudflare credentials fail silently and late: lego logs "zone could
     # not be found" inside the Traefik container, Traefik serves its self-signed
     # default, and the deploy still reports success. Checking here, before
     # anything is deployed, turns that into one actionable message.
     #
-    # ADR-0006 forbids failing the deploy because egress is absent, so an
+    # Missing egress must not fail the deploy (docs/decisions.md #5), so an
     # unreachable API is a warning, not an error -- only an authoritative
     # negative from Cloudflare fails.
     - name: Preflight Cloudflare credentials
@@ -233,7 +218,7 @@
           ansible.builtin.debug:
             msg: >-
               Could not reach the Cloudflare API to validate the token, so the check was
-              skipped. If this site has no egress that is expected (ADR-0006); certificate
+              skipped. If this site has no egress that is expected; certificate
               renewal and tunnel publishing stay down until egress returns.
 
     - name: Deploy CoreDNS stack via Portainer
@@ -244,25 +229,10 @@
         portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
         portainer_stack_image_tars: "{{ coredns_image_tars }}"
 
-    # - name: Wait for CoreDNS to be listening on port {{ coredns_dns_port }}
-    #   ansible.builtin.wait_for:
-    #     host: "{{ infravm_ip }}"
-    #     port: "{{ coredns_dns_port }}"
-    #     timeout: 60
-
-    # - name: Test DNS resolution through CoreDNS
-    #   ansible.builtin.command:
-    #     cmd: "dig @{{ infravm_ip }} google.com +short +timeout=3"
-    #   register: coredns_dns_check
-    #   until: coredns_dns_check.rc == 0 and coredns_dns_check.stdout | trim | length > 0
-    #   retries: 30
-    #   delay: 3
-    #   changed_when: false
-
-    # ADR-0007. Deploy addresses services by FQDN over validated TLS from here
-    # on -- keycloak/tasks/configure.yml alone makes 27 such calls -- so the
-    # Controller's resolver must answer through the same Python path as uri.
-    - name: Preflight Controller resolution of the service domain
+    # The runner's resolver must answer the way Ansible's uri module does:
+    # everything after this addresses services by FQDN over validated TLS
+    # (keycloak/tasks/configure.yml alone makes 27 such calls).
+    - name: Preflight resolution of the service domain
       ansible.builtin.command:
         argv:
           - "{{ ansible_playbook_python }}"
@@ -273,14 +243,14 @@
       changed_when: false
       failed_when: false
 
-    # Matching the address matters as much as resolving at all: a Controller
-    # with internet access resolves these names through public DNS and hairpins
+    # Matching the address matters as much as resolving at all: a runner with
+    # internet access would resolve these names through public DNS and hairpin
     # out via the Cloudflare tunnel, which works until the site loses egress.
-    - name: Fail if the Controller does not resolve the service domain to InfraVM
+    - name: Fail if the runner does not resolve the service domain to InfraVM
       when: infravm_ip not in coredns_preflight.stdout_lines
       ansible.builtin.fail:
         msg: |
-          The Controller cannot resolve {{ coredns_preflight_fqdn }} to {{ infravm_ip }}.
+          The runner cannot resolve {{ coredns_preflight_fqdn }} to {{ infravm_ip }}.
 
           Python resolution returned: {{ coredns_preflight.stdout | trim | replace('\n', ' / ') | default('(no answer)', true) }}
           {{ coredns_preflight.stderr | default('') }}
@@ -294,4 +264,4 @@
 
     - name: Display CoreDNS status
       ansible.builtin.debug:
-        msg: "CoreDNS ready at {{ infravm_ip }}:{{ coredns_dns_port }}, Controller resolution verified"
+        msg: "CoreDNS ready at {{ infravm_ip }}:{{ coredns_dns_port }}, runner resolution verified"

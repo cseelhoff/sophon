@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 
 from deployment import new_control, validate_settings
 from library.vcenter_vm import MARKER, connection_environment, provision
@@ -122,8 +122,8 @@ class VCenterTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 connection_environment(self.params | {'url': url})
 
-    def test_provider_specific_settings_and_phase_boundary(self):
-        values = new_control({}, 'bootstrap')['values']
+    def test_provider_specific_settings_and_step_boundary(self):
+        values = new_control({}, 'provision')['values']
         changes = {'SOPHON_HYPERVISOR': 'vcenter', 'SOPHON_VCENTER_URL': self.params['url'],
                    'SOPHON_VCENTER_PASSWORD': self.params['password'],
                    'SOPHON_VCENTER_DATACENTER': 'DC', 'SOPHON_VCENTER_CLUSTER': 'Cluster',
@@ -136,7 +136,7 @@ class VCenterTests(unittest.TestCase):
             if field == 'SOPHON_HYPERVISOR':
                 invalid[field] = 'unsupported'
             self.assertIsNotNone(validate_settings(values, invalid)[1], field)
-        services = new_control(changes, 'services')
+        services = new_control(changes, 'configure')
         self.assertNotIn(self.params['password'], json.dumps(services))
         self.assertFalse(any(key.startswith('SOPHON_VCENTER_') for key in services['environment']))
         self.assertIsNotNone(validate_settings(values, changes | {'SOPHON_VCENTER_URL': 'http://untrusted'})[1])
@@ -144,9 +144,9 @@ class VCenterTests(unittest.TestCase):
     def test_selected_provider_stage_is_reported(self):
         from test_deployment import run_fixture
         import yaml
-        bootstrap = yaml.safe_load((ROOT / 'bootstrap.yml').read_text())[0]['tasks']
+        bootstrap = yaml.safe_load((ROOT / '2-provision.yml').read_text())[-1]['tasks']
         tasks = [{'ansible.builtin.set_fact': {'hypervisor_provider': 'vcenter'}},
-                 *bootstrap[1:3],
+                 *bootstrap[0:2],
                  {'ansible.builtin.debug': {'msg': 'Done'}, 'tags': ['sophon_stage_end']}]
         result, report = run_fixture(Path(self.temporary.name), tasks, {
             'vcenter': '- ansible.builtin.debug:\n    msg: Authenticated\n'})
@@ -155,7 +155,7 @@ class VCenterTests(unittest.TestCase):
         self.assertEqual(report['stages']['proxmox']['state'], 'skipped', report)
 
     def test_invalid_provider_is_rejected_before_starting_the_dashboard(self):
-        result = subprocess.run([sys.executable, str(ROOT / 'deployment.py'), '--phase', 'bootstrap', '--serve'],
+        result = subprocess.run([sys.executable, str(ROOT / 'src/deployment.py'), '--step', 'provision', '--serve'],
                                 env=dict(os.environ, SOPHON_HYPERVISOR='unsupported'),
                                 capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 2)

@@ -14,10 +14,10 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from deployment import phase_fields
+sys.path.insert(0, str(ROOT / 'src'))
+from deployment import step_fields
 
-SCRIPTS = ROOT / "scripts"
+SCRIPTS = ROOT / "guest"
 INSTALL = SCRIPTS / "install.sh"
 BUSYBOX = os.environ.get("BUSYBOX", shutil.which("busybox"))
 HASH = "$6$testsalt$" + "a" * 86
@@ -52,10 +52,10 @@ def bundle(media):
         "install.sh": INSTALL.read_text(),
         "runner.tar": "fixture runner",
         "tools/busybox": "fixture binary",
-        "project/console.py": "print('console')",
+        "project/src/console.py": "print('console')",
         "project/site.json": '{"SOPHON_INFRAVM_IP":"10.0.60.2"}',
-        "project/scripts/sophon-controller": (SCRIPTS / "sophon-controller").read_text(),
-        "project/scripts/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
+        "guest/sophon-controller": (SCRIPTS / "sophon-controller").read_text(),
+        "guest/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
         "project/bootstrap/portainer-image": "docker.io/portainer/portainer-ee:2.33.3\n",
         "project/bootstrap/portainer-archive": "portainer.tar\n",
         "project/artifacts/containers/portainer.tar": "fixture portainer",
@@ -109,7 +109,7 @@ elif name == "podman":
     if args[:2] == ["image", "exists"]:
         status = int(args[2] not in state["images"])
     elif args[0] == "load":
-        image = ("sophon-nix-runner:latest" if args[-1].endswith("runner.tar")
+        image = ("sophon:latest" if args[-1].endswith("runner.tar")
                  else "docker.io/portainer/portainer-ee:2.33.3")
         state["images"].append(image)
     elif args[:2] == ["network", "exists"]:
@@ -182,7 +182,7 @@ class InstallerTests(unittest.TestCase):
         with fixture() as media:
             bundle(media)
             original = (media / "SHA256SUMS").read_text()
-            for invalid in ("../outside", "/etc/passwd", "project/../escape", "project/./console.py"):
+            for invalid in ("../outside", "/etc/passwd", "project/../escape", "project/./src/console.py"):
                 with self.subTest(path=invalid):
                     (media / "SHA256SUMS").write_text(original + "0" * 64 + "  " + invalid + "\n")
                     self.assertIn("Unsafe", shell('verify_bundle "$1"', media).stderr)
@@ -463,7 +463,7 @@ udevadm() { [[ $1 == settle ]]; }
     def test_wrapper_argument_and_environment_boundary(self):
         source = (SCRIPTS / "sophon-controller").read_text()
         allowed = source.split("for name in", 1)[1].split("\ndo", 1)[0].replace("\\", "").split()
-        self.assertEqual(set(allowed), {name for name, field in phase_fields("services").items()
+        self.assertEqual(set(allowed), {name for name, field in step_fields("configure").items()
                                        if field[2] != "certificate"})
         with fixture() as directory:
             ready = directory / "ready"
@@ -477,15 +477,15 @@ udevadm() { [[ $1 == settle ]]; }
                        SOPHON_NFS_IP="forbidden", SOPHON_VNET_GATEWAY="forbidden",
                        SOPHON_KOPIA_ADMIN_PASSWORD="forbidden", SOPHON_PROXMOX_PASSWORD="forbidden",
                        SOPHON_ACME_PAYLOAD="forbidden",
-                       SOPHON_DEPLOYMENT_PHASE="bootstrap", CONTAINER_HOST="ssh://forbidden")
+                       SOPHON_DEPLOYMENT_STEP="provision", CONTAINER_HOST="ssh://forbidden")
             for args in ([], ["--dashboard", "--port", "41327"], ["--run", "--state-dir", "/workspace/artifacts/deployment/services"],
                          ["--help"], ["--", "--tags", "gitea"]):
                 result = subprocess.run(["bash", str(script), *args], env=env, text=True, capture_output=True)
                 self.assert_success(result)
                 command = calls(directory, "podman")[-1]
-                boundary = command.index("sophon-nix-runner:latest")
-                self.assertEqual(command[boundary + 1:], ["python3", "console.py", *args])
-                self.assertIn("SOPHON_DEPLOYMENT_PHASE=services", command[:boundary])
+                boundary = command.index("sophon:latest")
+                self.assertEqual(command[boundary + 1:], ["python3", "src/console.py", *args])
+                self.assertIn("SOPHON_DEPLOYMENT_STEP=configure", command[:boundary])
                 self.assertIn("SOPHON_CF_TOKEN", command[:boundary])
                 self.assertIn("SOPHON_INFRAVM_IP", command[:boundary])
                 self.assertNotIn("secret with spaces", " ".join(command))

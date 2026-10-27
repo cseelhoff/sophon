@@ -1,6 +1,0 @@
----
-proxmox_username: root
-proxmox_user: "{{ proxmox_username }}@pam"
-# Set true when the Proxmox API presents a trusted certificate.
-proxmox_validate_certs: false
-proxmox_cpu_type: "x86-64-v2-AES"

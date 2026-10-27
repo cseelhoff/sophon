@@ -1,6 +1,6 @@
-secrets.yml
-.ansible
-*.qcow2
 artifacts/
-.tailscale/
 __pycache__/
+.ansible/
+.bundle-test-*/
+.prepare-test-*/
+.installer-fixture-*/

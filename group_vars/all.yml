@@ -1,24 +1,11 @@
 ---
-# =============================================================================
-# Sophon — Global Variables
-# =============================================================================
+# Every site setting is read from a SOPHON_* environment variable, so a run is
+# just `ansible-playbook <playbook>`. `-e` still overrides. Credentials have no
+# generated fallback; 4-configure.yml checks them before deploying anything.
 
-# -----------------------------------------------------------------------------
-# Site settings, sourced from the environment
-# -----------------------------------------------------------------------------
-# Every value a deployment must be told about is read from an environment
-# variable here so the run itself is just `ansible-playbook site.yml` — a long
-# -e command line is easy to paste with one flag missing, and a missing vnet
-# flag silently retargets the deployment at a different subnet.
-#
-# `-e` still wins over anything below, so one-off overrides keep working. The
-# non-secret settings have defaults. Required credentials have no generated
-# fallback and are checked before deployment starts.
-#
-# Cloudflare needs only the token: the zone and account ids are read back from
-# the API by the coredns role, which keeps them from going stale when a zone is
-# recreated.
+# --- Steps 1-2: hypervisor (laptop only) -------------------------------------
 hypervisor_provider: "{{ lookup('env', 'SOPHON_HYPERVISOR') | default('proxmox', true) }}"
+
 vcenter_url: "{{ lookup('env', 'SOPHON_VCENTER_URL') }}"
 vcenter_username: "{{ lookup('env', 'SOPHON_VCENTER_USERNAME') | default('administrator@vsphere.local', true) }}"
 vcenter_password: "{{ lookup('env', 'SOPHON_VCENTER_PASSWORD') }}"
@@ -35,24 +22,24 @@ proxmox_node: "{{ lookup('env', 'SOPHON_PROXMOX_NODE') | default('proxmox', true
 proxmox_password: "{{ lookup('env', 'SOPHON_PROXMOX_PASSWORD') | default('', true) }}"
 proxmox_iso_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_ISO_STORAGE') | default('local', true) }}"
 proxmox_disk_storage_id: "{{ lookup('env', 'SOPHON_PROXMOX_DISK_STORAGE') | default('local-lvm', true) }}"
+vnet_interface: "{{ lookup('env', 'SOPHON_VNET_INTERFACE') | default('vmbr0', true) }}"
+vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
 
+infravm_vm_name: "{{ lookup('env', 'SOPHON_INFRAVM_NAME') | default('sophon-infravm', true) }}"
+infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
+infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(8192, true) | int }}"
+infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(100, true) | int }}"
+# Written into the VM so a rerun can tell this workflow's VM from anyone else's.
+infravm_marker: "sophon-infravm-two-iso-v1"
+
+# --- Step 4: services (InfraVM only) -----------------------------------------
+infravm_ip: "{{ lookup('env', 'SOPHON_INFRAVM_IP') | default('', true) }}"
+vnet_dns: "{{ lookup('env', 'SOPHON_VNET_DNS') | default('', true) }}"
 domain_name: "{{ lookup('env', 'SOPHON_DOMAIN') | default('', true) }}"
 traefik_acme_email: "{{ lookup('env', 'SOPHON_ACME_EMAIL') | default('admin@example.com', true) }}"
 coredns_cf_token: "{{ lookup('env', 'SOPHON_CF_TOKEN') | default('', true) }}"
 
-# Phase 1 needs only bridge/VLAN. The live-console installer collects guest
-# networking; the installed runner receives the resulting IP and upstream DNS.
-vnet_interface: "{{ lookup('env', 'SOPHON_VNET_INTERFACE') | default('vmbr0', true) }}"
-vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
-vnet_gateway: "{{ lookup('env', 'SOPHON_VNET_GATEWAY') | default('', true) }}"
-vnet_cidr: "{{ lookup('env', 'SOPHON_VNET_CIDR') | default('', true) }}"
-vnet_dns: "{{ lookup('env', 'SOPHON_VNET_DNS') | default('', true) }}"
-nfs_ip: "{{ lookup('env', 'SOPHON_NFS_IP') | default('', true) }}"
-infravm_ip: "{{ lookup('env', 'SOPHON_INFRAVM_IP') | default('', true) }}"
-
 keycloak_realm: "{{ lookup('env', 'SOPHON_KEYCLOAK_REALM') | default('sophon', true) }}"
-# Shown on the Keycloak login page. Tracks the realm name so renaming the realm
-# cannot leave "Sophon" greeting users of a site that is not called that.
 keycloak_realm_display_name: >-
   {{ lookup('env', 'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME') | default(keycloak_realm, true) }}
 keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') }}"
@@ -65,77 +52,24 @@ openldap_example_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_ADMI
 openldap_example_user_uid: "john.doe"
 openldap_example_admin_uid: "john.doe.admin"
 
-# -----------------------------------------------------------------------------
-# Portainer image / edition
-# -----------------------------------------------------------------------------
-# Business Edition. Needs portainer_license_key to run unrestricted.
 portainer_image_repo: "docker.io/portainer/portainer-ee"
 portainer_image_tag: "2.41.0"
 portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
-
-# Portainer Business Edition license key. Required when running EE images.
-# Obtain a free 5-node Business Starter license from portainer.io.
+# Business Edition; a free 5-node Starter licence is available from portainer.io.
 portainer_license_key: "{{ lookup('env', 'SOPHON_PORTAINER_LICENSE_KEY') | default('', true) }}"
-
 portainer_admin_password: "{{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD') }}"
-
-# Preserve the existing shared-password defaults without generating credentials.
-# Existing installations must supply the same values on every run.
+# Existing deployments must keep supplying the same database password.
 gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(portainer_admin_password, true) }}"
-kopia_admin_password: "{{ lookup('env', 'SOPHON_KOPIA_ADMIN_PASSWORD') | default(portainer_admin_password, true) }}"
-kopia_repository_password: "{{ lookup('env', 'SOPHON_KOPIA_REPOSITORY_PASSWORD') | default(portainer_admin_password, true) }}"
 
-# Tarball filename for prestage and InfraVM's offline host bootstrap.
-# Mirrors the naming convention in prestage.yml:
-#   <vendor>-<image>_<tag>.tar  e.g. portainer-portainer-ee_2.41.0.tar
+# --- Shared paths --------------------------------------------------------------
+artifacts_dir: "{{ playbook_dir }}/artifacts"
+coreos_iso_path: "{{ artifacts_dir }}/coreos/fedora-coreos-live.iso"
+bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
+# <vendor>-<image>_<tag>.tar, e.g. portainer-portainer-ee_2.41.0.tar
+sophon_containers_dir: "{{ artifacts_dir }}/containers"
 portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
 
-# Where prestage.yml writes container image tars. Roles name the tars they
-# need relative to this and hand them to portainer_stack, which loads them
-# into the endpoint before deploying the stack.
-sophon_containers_dir: "{{ playbook_dir }}/artifacts/containers"
-
-# -----------------------------------------------------------------------------
-# Portainer URL (used by infravm, coredns, portainer_stack, keycloak roles)
-# -----------------------------------------------------------------------------
-# Addressed by IP: the Controller runs locally on InfraVM (ADR-0013), and at this
-# point in the run no DNS, Traefik or sync sidecar exists to resolve a name.
-# End users still reach portainer.<domain> via Traefik once it is up.
+# Addressed by IP: the runner is local to InfraVM and no DNS exists yet when it
+# first talks to Portainer. Users reach portainer.<domain> through Traefik.
 infravm_portainer_port: 9443
-infravm_portainer_url: "https://{{ infravm_ip | default('') }}:{{ infravm_portainer_port }}"
-
-# -----------------------------------------------------------------------------
-# Kopia / SFTP backend integration contract
-# -----------------------------------------------------------------------------
-# These vars are the loose-coupling interface between whatever role
-# provisions the SFTP backend (the bundled `nfs` role for the Alpine NFS VM,
-# or your own role for a real SAN/NAS) and the `kopia` role that consumes
-# it. They live here — not in either role's defaults — so both roles see
-# the SAME values regardless of include order.
-#
-# Provisioning side (nfs role, by default) MUST ensure:
-#   on the controller:
-#     {{ kopia_ssh_keyfile }}      = kopia's SFTP private key (mode 0600)
-#     {{ kopia_known_hosts_file }} = single-line known_hosts entry for
-#                                    {{ kopia_sftp_host }}
-#   on the SFTP host:
-#     user {{ kopia_sftp_username }} exists with the matching public key
-#       in ~/.ssh/authorized_keys
-#     directory {{ kopia_sftp_path }} exists, owned by that user, mode 0700
-#
-# Consumer side (kopia role): reads the two artifact files, injects them
-# into the compose template, deploys via Portainer. Has no knowledge of
-# how the SFTP backend was provisioned.
-#
-# To swap in a real SAN/NAS:
-#   - set nfs_provision_kopia_user: false  (skips the bundled provisioning)
-#   - populate kopia_ssh_keyfile + kopia_known_hosts_file out-of-band
-#   - override kopia_sftp_host / kopia_sftp_path / kopia_sftp_username
-kopia_enabled: false
-kopia_sftp_host: "{{ nfs_ip }}"
-kopia_sftp_port: 22
-kopia_sftp_username: "kopia"
-kopia_sftp_path: "/export/kopia/repo"
-kopia_ssh_keydir: "{{ playbook_dir }}/artifacts/kopia"
-kopia_ssh_keyfile: "{{ kopia_ssh_keydir }}/id_ed25519"
-kopia_known_hosts_file: "{{ kopia_ssh_keydir }}/known_hosts"
+infravm_portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"

@@ -2,6 +2,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import socket
 import subprocess
@@ -18,8 +19,8 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from deployment import STAGES, FIELDS, CELLS, PHASE_STAGES, DashboardServer, application, field_provider, load_diagram, new_control, phase_fields, phase_stages, shell_command, trace_environment
+sys.path.insert(0, str(ROOT / 'src'))
+from deployment import STAGES, FIELDS, CELLS, STEP_STAGES, DashboardServer, application, field_provider, load_diagram, new_control, step_fields, step_stages, shell_command
 
 
 def test_diagram():
@@ -30,22 +31,21 @@ def test_diagram():
   assert 'color-scheme: dark !important' in style.text
   assert 'background-color: transparent !important' in style.text
   rendered.remove(style)
-  assert ET.tostring(rendered) == ET.tostring(ET.parse(ROOT / 'sophon.svg').getroot())
+  assert ET.tostring(rendered) == ET.tostring(ET.parse(ROOT / 'src/dashboard/sophon.svg').getroot())
   assert CELLS.keys() == STAGES.keys()
   mapped = [cell for cells in CELLS.values() for cell in cells]
   assert len(mapped) == len(set(mapped))
   assert all(cell in labels for cell in mapped)
-  assert {labels[cell] for cell in CELLS['prestage']} == {
+  assert {labels[cell] for cell in CELLS['prepare']} == {
     'portainer.tar', 'coredns.tar', 'openldap.tar',
     'traefik.tar', 'keycloak.tar', 'gitea.tar', 'postgres.tar',
   }
   assert [labels[cell] for cell in CELLS['proxmox']] == ['2. Proxmox Prod Cluster']
   assert [labels[cell] for cell in CELLS['infravm']] == ['4. InfraVM', '5. Portainer']
-  assert [labels[cell] for cell in CELLS['kopia']] == ['11. Kopia']
   untracked = {label for cell, label in labels.items() if cell not in mapped}
   assert {'gitea.sql', 'coredns.yml', 'cloudflared.tar', 'LDAP Backup'} <= untracked
   assert '0' not in labels and '1' not in labels
-  with patch.dict(CELLS, {'prestage': ['missing-cell']}):
+  with patch.dict(CELLS, {'prepare': ['missing-cell']}):
     try:
       load_diagram()
     except ValueError as error:
@@ -179,12 +179,12 @@ def test_outcomes_and_reset():
         result, report = run_fixture(directory, '''
     - ansible.builtin.include_role:
         name: broken
-      tags: [sophon_stage_nfs]
+      tags: [sophon_stage_traefik]
 ''', {'broken': '- ansible.builtin.fail:\n    msg: SECRET_FAILURE_DETAILS\n  no_log: true\n'})
         assert result.returncode != 0
         assert report['run_id'] != previous_run
         assert report['state'] == 'failed', report
-        assert report['stages']['nfs']['state'] == 'failed', report
+        assert report['stages']['traefik']['state'] == 'failed', report
         assert report['stages']['keycloak']['state'] == 'pending', report
         assert 'SECRET_FAILURE_DETAILS' not in json.dumps(report)
 
@@ -216,12 +216,12 @@ def test_launcher():
     }]))
     state = directory / 'state'
     server_process = subprocess.Popen(
-      [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', str(state), '--serve'],
+      [sys.executable, str(ROOT / 'src/deployment.py'), '--state-dir', str(state), '--serve'],
       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
       server = {'url': server_process.stdout.readline().strip(), 'pid': server_process.pid}
       result = subprocess.run(
-        [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', str(state),
+        [sys.executable, str(ROOT / 'src/deployment.py'), '--state-dir', str(state),
          '--', str(playbook), '-i', 'localhost,', '-c', 'local'],
         cwd=ROOT, capture_output=True, text=True, timeout=30)
       assert result.returncode == 2, result.stdout + result.stderr
@@ -248,7 +248,7 @@ def test_launcher():
       binary.write_text(f'#!{sys.executable}\nimport os, signal\nos.kill(os.getpid(), signal.SIGTERM)\n')
       binary.chmod(0o700)
       result = subprocess.run(
-        [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', str(state), '--', 'fixture.yml'],
+        [sys.executable, str(ROOT / 'src/deployment.py'), '--state-dir', str(state), '--', 'fixture.yml'],
         env=dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH']),
         cwd=ROOT, capture_output=True, text=True, timeout=30)
       assert result.returncode == 143, result.stdout + result.stderr
@@ -278,7 +278,7 @@ def test_startup_failure():
   with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     result = subprocess.run(
-      [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', temporary, '--', 'bootstrap.yml'],
+      [sys.executable, str(ROOT / 'src/deployment.py'), '--state-dir', temporary, '--', '2-provision.yml'],
       env=dict(os.environ, PATH=temporary, SOPHON_PROXMOX_PASSWORD='PRIVATE_STARTUP_PASSWORD'),
       cwd=ROOT, capture_output=True, text=True, timeout=10)
     assert result.returncode == 127
@@ -287,31 +287,29 @@ def test_startup_failure():
     assert report['current'] is None
     assert all(stage['state'] == 'pending' for stage in report['stages'].values())
     assert 'Could not start ansible-playbook' in report['error']
-    assert 'nix develop' in report['error']
+    assert './sophon dashboard' in report['error']
     assert 'PRIVATE_STARTUP_PASSWORD' not in json.dumps(report)
 
 
 def test_vm_network_config():
+  remaining = list(yaml.safe_load((ROOT / 'roles/proxmox/tasks/vm.yml').read_text()))
+  networks = []
+  while remaining:
+    task = remaining.pop()
+    for section in ('block', 'rescue', 'always'):
+      remaining.extend(task.get(section, []))
+    network = task.get('community.proxmox.proxmox_kvm', {}).get('net', {}).get('net0')
+    if network:
+      networks.append(network)
+  assert len(networks) == 1, networks
   tasks = []
-  for role in ('nfs', 'infravm'):
-    filename = 'proxmox_bootstrap.yml' if role == 'infravm' else 'main.yml'
-    remaining = list(yaml.safe_load((ROOT / f'roles/{role}/tasks/{filename}').read_text()))
-    networks = []
-    while remaining:
-      task = remaining.pop()
-      for section in ('block', 'rescue', 'always'):
-        remaining.extend(task.get(section, []))
-      network = task.get('community.proxmox.proxmox_kvm', {}).get('net', {}).get('net0')
-      if network:
-        networks.append(network)
-    assert len(networks) == 1, (role, networks)
-    for vlan in ('', '300', 300, 1, 4094):
-      expected = 'model=virtio,bridge=vmbr0' + (f',tag={vlan}' if vlan else '')
-      tasks.extend([
-        {'ansible.builtin.set_fact': {'vnet_interface': 'vmbr0', 'vnet_vlan': vlan}},
-        {'name': f'Render {role} network device', 'ansible.builtin.set_fact': {'rendered_network': networks[0]}},
-        {'ansible.builtin.assert': {'that': [f'rendered_network == {expected!r}']}},
-      ])
+  for vlan in ('', '300', 300, 1, 4094):
+    expected = 'model=virtio,bridge=vmbr0' + (f',tag={vlan}' if vlan else '')
+    tasks.extend([
+      {'ansible.builtin.set_fact': {'vnet_interface': 'vmbr0', 'vnet_vlan': vlan}},
+      {'name': 'Render InfraVM network device', 'ansible.builtin.set_fact': {'rendered_network': networks[0]}},
+      {'ansible.builtin.assert': {'that': [f'rendered_network == {expected!r}']}},
+    ])
   with tempfile.TemporaryDirectory() as temporary:
     result, _ = run_fixture(Path(temporary), tasks)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -322,15 +320,15 @@ def test_gui_settings():
     environment = {name: value for name, value in os.environ.items() if not name.startswith('SOPHON_')}
     environment.update(SOPHON_PROXMOX_HOST='192.0.2.10', SOPHON_PROXMOX_PASSWORD='PRIVATE_TEST_PASSWORD')
     server = subprocess.Popen(
-      [sys.executable, str(ROOT / 'deployment.py'), '--state-dir', temporary, '--serve'],
+      [sys.executable, str(ROOT / 'src/deployment.py'), '--state-dir', temporary, '--serve'],
       env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
       url = server.stdout.readline().strip()
       with urlopen(url + 'config.json', timeout=5) as response:
         config = json.load(response)
       token = config['token']
-      assert config['phase'] == 'bootstrap'
-      assert config['cells'] == {key: CELLS[key] for key in PHASE_STAGES['bootstrap']}
+      assert config['step'] == 'provision'
+      assert config['cells'] == {key: CELLS[key] for key in STEP_STAGES['provision']}
       assert config['labels'] == load_diagram()[1]
       with urlopen(url + 'diagram.svg', timeout=5) as response:
         assert response.headers['Content-Type'] == 'image/svg+xml'
@@ -346,8 +344,8 @@ def test_gui_settings():
         assert response.headers['Cache-Control'] == 'no-store'
         settings = json.load(response)
       fields = {field['name']: field for field in settings['fields']}
-      assert fields.keys() == phase_fields('bootstrap').keys()
-      for name, definition in phase_fields('bootstrap').items():
+      assert fields.keys() == step_fields('provision').keys()
+      for name, definition in step_fields('provision').items():
         assert fields[name]['required'] == definition[4]
         if definition[2] == 'password' and name != 'SOPHON_PROXMOX_PASSWORD':
           assert fields[name]['value'] == ''
@@ -414,8 +412,8 @@ def test_gui_deploy():
         assert request(endpoint, {'SOPHON_NFS_IP': 'invalid'})[0] == 400
         assert request(endpoint, {'SOPHON_NFS_IP': '192.0.2.3'})[0] == 400
         assert request(endpoint, {'SOPHON_PROXMOX_PASSWORD': ''})[0] == 400
-        assert request(endpoint, CONTENT_LENGTH='999999')[0] == 413
-        for name, field in phase_fields('bootstrap').items():
+        assert request(endpoint, CONTENT_LENGTH='99999999')[0] == 413
+        for name, field in step_fields('provision').items():
           if field[2] == 'password' and field[4] and field_provider(field[1]) in (None, 'proxmox'):
             for value in ('', '   '):
               status, body = request(endpoint, {name: value})
@@ -436,7 +434,7 @@ def test_gui_deploy():
                      if 'PASSWORD' in name or 'SECRET' in name}
       credentials['SOPHON_PROXMOX_PASSWORD'] = 'FORM_PRIVATE_PASSWORD'
       assert received == {'host': '192.0.2.20', 'password_matches': True,
-                          'credentials': credentials, 'args': ['bootstrap.yml']}, received
+                          'credentials': credentials, 'args': ['2-provision.yml']}, received
       status, body = request('/status.json')
       assert status == 200
       assert b'PRIVATE_PASSWORD' not in body and b'PRIVATE_ANSIBLE_OUTPUT' not in body
@@ -453,14 +451,25 @@ def test_gui_deploy():
           worker.wait(timeout=5)
 
 
+def playbook_tasks(name):
+  tasks = []
+  for play in yaml.safe_load((ROOT / name).read_text()):
+    imported = play.get('import_playbook') or play.get('ansible.builtin.import_playbook')
+    if imported:
+      tasks += playbook_tasks(imported)
+    else:
+      tasks += play.get('tasks', [])
+  return tasks
+
+
 def test_site_markers():
-  for phase, filename in (('services', 'site.yml'), ('bootstrap', 'bootstrap.yml')):
-    tasks = yaml.safe_load((ROOT / filename).read_text())[0]['tasks']
+  for step, filename in (('configure', '4-configure.yml'), ('provision', '2-provision.yml')):
+    tasks = playbook_tasks(filename)
     markers = [tag.removeprefix('sophon_stage_') for task in tasks
                for tag in task.get('tags', []) if tag.startswith('sophon_stage_')]
     for provider in ('proxmox', 'vcenter'):
       selected = [marker for marker in markers if marker not in ('proxmox', 'vcenter') or marker == provider]
-      assert selected == [*phase_stages(phase, provider), 'end'], markers
+      assert selected == [*step_stages(step, provider), 'end'], markers
 
 
 def test_credential_inputs():
@@ -471,12 +480,12 @@ def test_credential_inputs():
   ]
   shared = ['gitea_db_password']
   inputs = required + shared
-  preflight = yaml.safe_load((ROOT / 'site.yml').read_text())[0]['pre_tasks']
+  preflight = yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['pre_tasks']
   assert preflight[1]['loop'] == inputs
   preflight = preflight[:3]
-  assert {name for name, field in phase_fields('services').items() if field[2] == 'password' and field[4]} == {
+  assert {name for name, field in step_fields('configure').items() if field[2] == 'password' and field[4]} == {
     'SOPHON_' + name.upper() for name in required}
-  sources = [ROOT / 'site.yml', ROOT / 'group_vars/all.yml', ROOT / 'tests/test.yml',
+  sources = [ROOT / '4-configure.yml', ROOT / 'group_vars/all.yml',
              *sorted((ROOT / 'roles').rglob('*.yml'))]
   for source in sources:
     text = source.read_text()
@@ -508,7 +517,7 @@ def test_credential_inputs():
     }]))
     environment = {name: value for name, value in os.environ.items()
                    if not name.startswith(('SOPHON_', 'ANSIBLE_'))}
-    environment.update(ANSIBLE_CONFIG=str(config), SOPHON_DEPLOYMENT_PHASE='services')
+    environment.update(ANSIBLE_CONFIG=str(config), SOPHON_DEPLOYMENT_STEP='configure')
     supplied = {name: 'PRIVATE_TEST_' + name for name in required}
     expected = supplied | {name: supplied['portainer_admin_password'] for name in shared}
     exported = {'SOPHON_' + name.upper(): value for name, value in supplied.items()}
@@ -566,35 +575,29 @@ def test_shell_command():
     directory = Path(temporary)
     state = directory / 'trace'
     marker = directory / 'must-not-exist'
-    values = new_control({}, 'bootstrap')['values']
+    values = new_control({}, 'provision')['values']
     values['SOPHON_PROXMOX_PASSWORD'] = f"apostrophe' spaces $HOME $(touch {marker}) `id` ; & \\"
-    environment = dict(os.environ, ANSIBLE_RUN_TAGS='wrong', ANSIBLE_SKIP_TAGS='all',
-                       SOPHON_CONTROLLER_SSH_PUBLIC_KEY='stale')
-    binary = directory / 'ansible-playbook'
-    binary.write_text('\n'.join([
+    wrapper = directory / 'sophon'
+    wrapper.write_text('\n'.join([
       f'#!{sys.executable}', 'import json, os, sys',
       f'with open({str(directory / "received.json")!r}, "w") as output:',
       '    json.dump({"environment": dict(os.environ), "args": sys.argv[1:]}, output)',
     ]))
-    binary.chmod(0o700)
-    environment['PATH'] = str(directory) + os.pathsep + os.environ['PATH']
-    command = shell_command(state, values, environment, 'bootstrap')
-    assert 'ansible-playbook bootstrap.yml' in command
+    wrapper.chmod(0o700)
+    environment = dict(os.environ, SOPHON_CONTROLLER_SSH_PUBLIC_KEY='stale')
+    with patch.dict(os.environ, SOPHON_PROJECT_DIR=str(directory)):
+      command = shell_command(state, values, environment, 'provision')
+    assert command.rstrip().endswith('./sophon provision')
     assert not state.exists(), 'Generating a command must not create files or launch a process'
-    for shell in ('sh', 'bash', 'zsh'):
+    for shell in filter(shutil.which, ('sh', 'bash', 'zsh')):
       result = subprocess.run([shell], input=command, env=environment, capture_output=True, text=True, timeout=10)
       assert result.returncode == 0, result.stderr
       received = json.loads((directory / 'received.json').read_text())
-      assert received['args'] == ['bootstrap.yml']
-      assert received['environment']['SOPHON_DEPLOYMENT_PHASE'] == 'bootstrap'
+      assert received['args'] == ['provision']
+      assert received['environment']['SOPHON_DEPLOYMENT_STEP'] == 'provision'
       assert {name: received['environment'][name] for name in values} == values
-      traced = trace_environment(state, environment)
-      for name in ('ANSIBLE_CALLBACK_PLUGINS', 'ANSIBLE_CALLBACKS_ENABLED', 'SOPHON_PROGRESS_FILE', 'ANSIBLE_LOG_PATH'):
-        assert received['environment'][name] == traced[name]
-      assert 'ANSIBLE_RUN_TAGS' not in received['environment']
-      assert 'ANSIBLE_SKIP_TAGS' not in received['environment']
+      assert 'SOPHON_ACME_PAYLOAD' not in received['environment']
       assert not marker.exists()
-      assert (state / 'ansible.log').stat().st_mode & 0o777 == 0o600
 
 
 def test_service_shell_command():
@@ -602,7 +605,7 @@ def test_service_shell_command():
     directory = Path(temporary)
     marker = directory / 'must-not-exist'
     state = directory / 'container-only-state'
-    values = new_control({}, 'services')['values']
+    values = new_control({}, 'configure')['values']
     values['SOPHON_PORTAINER_ADMIN_PASSWORD'] = f"quote' $(touch {marker}) $HOME `id` ; & \\"
     binary = directory / 'sophon-controller'
     binary.write_text('\n'.join([
@@ -613,14 +616,16 @@ def test_service_shell_command():
     binary.chmod(0o700)
     environment = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH'],
                        SOPHON_PROXMOX_PASSWORD='DO_NOT_FORWARD')
-    command = shell_command(state, values, environment, 'services')
+    command = shell_command(state, values, environment, 'configure')
     assert 'cd ' not in command and 'ansible-playbook' not in command
-    for shell in ('sh', 'bash', 'zsh'):
+    for shell in filter(shutil.which, ('sh', 'bash', 'zsh')):
       result = subprocess.run([shell], input=command, env=environment, capture_output=True, text=True, timeout=10)
       assert result.returncode == 0, result.stderr
       received = json.loads((directory / 'received.json').read_text())
       assert received['args'] == ['--run', '--state-dir', str(state)]
-      assert {name: received['environment'][name] for name in values} == values
+      assert {name: received['environment'][name] for name in values if name != 'SOPHON_ACME_PAYLOAD'} == {
+        name: value for name, value in values.items() if name != 'SOPHON_ACME_PAYLOAD'}
+      assert 'SOPHON_ACME_PAYLOAD' not in received['environment']
       assert 'SOPHON_PROXMOX_PASSWORD' not in received['environment']
       assert not state.exists() and not marker.exists()
 
@@ -629,15 +634,21 @@ def test_shell_trace():
   with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     (directory / 'callback_plugins').symlink_to(ROOT / 'callback_plugins', target_is_directory=True)
+    (directory / 'src').mkdir()
+    shutil.copyfile(ROOT / 'src/deployment.py', directory / 'src/deployment.py')
     role = directory / 'roles' / 'fixture' / 'tasks'
     role.mkdir(parents=True)
     (role / 'main.yml').write_text('- ansible.builtin.debug:\n    msg: Local fixture only\n')
-    (directory / 'bootstrap.yml').write_text(json.dumps([{
+    (directory / '2-provision.yml').write_text(json.dumps([{
       'hosts': 'localhost', 'gather_facts': False,
       'tasks': [{'ansible.builtin.include_role': {'name': 'fixture'}, 'tags': ['sophon_stage_gitea']}],
     }]))
-    state = directory / 'trace'
-    with patch('deployment.ROOT', directory):
+    # The wrapper's in-container command, run without a container.
+    wrapper = directory / 'sophon'
+    wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} src/deployment.py --step provision -- 2-provision.yml\n')
+    wrapper.chmod(0o700)
+    state = directory / 'artifacts/deployment/provision'
+    with patch.dict(os.environ, SOPHON_PROJECT_DIR=str(directory)):
       command = shell_command(state, new_control({})['values'], {})
     previous_run = None
     for expected in ('completed', 'failed'):
@@ -702,40 +713,6 @@ def test_idle_browser_connection():
         worker.join(timeout=2)
 
 
-def test_nfs_recovery():
-  role = yaml.safe_load((ROOT / 'roles/nfs/tasks/main.yml').read_text())
-  named = {task['name']: task for task in role}
-  provision = named['Continue deployment if NFS is not already reachable']
-  registration = next(task for task in provision['block']
-            if task['name'] == 'Add NFS storage to Proxmox (retries until NFS is online)')
-  tasks = []
-  for registered, active, existing in [(False, False, False), (True, False, False),
-                     (True, True, False), (True, False, True),
-                     (True, True, True)]:
-    tasks.append({'ansible.builtin.set_fact': {
-      'nfs_storage_name': 'sophon-nfs', 'nfs_vm_name': 'sophon-nfs',
-      'nfs_storage_check': {'json': {'data': [{'storage': 'sophon-nfs'}] if registered else []}},
-      'nfs_storage_status': {'json': {'data': [{'storage': 'sophon-nfs', 'active': int(active)}]
-                          if registered else []}},
-      'proxmox_existing_vms': {'json': {'data': [{'name': 'sophon-nfs', 'vmid': 100}]
-                          if existing else []}},
-    }})
-    tasks.extend(named[name] for name in ['Set NFS storage registration fact',
-                        'Set NFS reachable fact', 'Discover NFS VM in Proxmox'])
-    tasks.append({'ansible.builtin.assert': {'that': [
-      f'nfs_storage_registered == {registered}',
-      f'nfs_already_reachable == {active}',
-      f"({provision['when']}) == {not active or not existing}",
-      f"({registration['when']}) == {not registered}",
-    ]}})
-  with tempfile.TemporaryDirectory() as temporary:
-    result, report = run_fixture(Path(temporary), [
-      {'ansible.builtin.include_role': {'name': 'nfs_recovery'}, 'tags': ['sophon_stage_nfs']},
-    ], {'nfs_recovery': json.dumps(tasks)})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert report['stages']['nfs']['state'] == 'completed', report
-
-
 if __name__ == '__main__':
   test_vm_network_config()
   test_startup_failure()
@@ -745,7 +722,6 @@ if __name__ == '__main__':
   test_service_shell_command()
   test_shell_trace()
   test_idle_browser_connection()
-  test_nfs_recovery()
   test_nested_stage()
   test_task_details()
   test_outcomes_and_reset()

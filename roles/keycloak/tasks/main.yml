@@ -41,77 +41,74 @@
 # =========================================================================
 # Configure Portainer OAuth via Portainer API
 # =========================================================================
-- name: Configure Portainer OAuth with Keycloak
-  when: keycloak_configure_portainer_oauth | default(true)
-  block:
-    - name: Authenticate with Portainer for OAuth configuration
-      ansible.builtin.uri:
-        url: "{{ infravm_portainer_url }}/api/auth"
-        method: POST
-        body_format: json
-        body:
-          Username: "admin"
-          Password: "{{ portainer_admin_password }}"
-        validate_certs: false
-        status_code: 200
-      register: keycloak_portainer_auth
-      changed_when: false
+- name: Authenticate with Portainer for OAuth configuration
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      Username: "admin"
+      Password: "{{ portainer_admin_password }}"
+    validate_certs: false
+    status_code: 200
+  register: keycloak_portainer_auth
+  changed_when: false
 
-    - name: Get current Portainer settings
-      ansible.builtin.uri:
-        url: "{{ infravm_portainer_url }}/api/settings"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ keycloak_portainer_auth.json.jwt }}"
-        validate_certs: false
-        status_code: 200
-      register: keycloak_portainer_settings
-      changed_when: false
+- name: Get current Portainer settings
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/settings"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_portainer_auth.json.jwt }}"
+    validate_certs: false
+    status_code: 200
+  register: keycloak_portainer_settings
+  changed_when: false
 
-    - name: Configure Portainer OAuth settings
-      ansible.builtin.uri:
-        url: "{{ infravm_portainer_url }}/api/settings"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ keycloak_portainer_auth.json.jwt }}"
-        body_format: json
-        # NOTE: send only the fields we want to change. Echoing back the full
-        # GET response triggers Portainer 2.41+ validation errors on unrelated
-        # fields (e.g. "Invalid auto-patch cron expression" when an empty
-        # EdgeAutoUpdate cron is round-tripped). PUT /api/settings accepts
-        # partial updates.
-        body: "{{ keycloak_portainer_oauth_settings }}"
-        validate_certs: false
-        status_code: 200
-      vars:
-        keycloak_portainer_oauth_settings:
-          AuthenticationMethod: 3
-          OAuthSettings:
-            ClientID: "portainer"
-            ClientSecret: "{{ keycloak_portainer_client_secret }}"
-            AccessTokenURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/token"
-            AuthorizationURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/auth"
-            ResourceURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/userinfo"
-            RedirectURI: "https://portainer.{{ keycloak_domain }}"
-            LogoutURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/logout"
-            UserIdentifier: "preferred_username"
-            Scopes: "openid profile email groups"
-            OAuthAutoCreateUsers: true
-            DefaultTeamID: 0
-            SSO: true
-            AuthStyle: 0
-            # ----- Portainer Business Edition: auto-promote LDAP group members to admin
-            # Members of the 'portainer-admins' LDAP group flow into Keycloak via the
-            # LDAP user federation + group mapper, then into the OIDC token's 'groups'
-            # claim. Portainer EE matches that claim against AdminGroupClaimsRegexList
-            # and assigns admin role on each login. Ignored by CE.
-            OAuthAutoMapTeamMemberships: true
-            TeamMemberships:
-              OAuthClaimName: "groups"
-              AdminAutoPopulate: true
-              AdminGroupClaimsRegexList:
-                - "portainer-admins"
+- name: Configure Portainer OAuth settings
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/settings"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ keycloak_portainer_auth.json.jwt }}"
+    body_format: json
+    # NOTE: send only the fields we want to change. Echoing back the full
+    # GET response triggers Portainer 2.41+ validation errors on unrelated
+    # fields (e.g. "Invalid auto-patch cron expression" when an empty
+    # EdgeAutoUpdate cron is round-tripped). PUT /api/settings accepts
+    # partial updates.
+    body: "{{ keycloak_portainer_oauth_settings }}"
+    validate_certs: false
+    status_code: 200
+  vars:
+    keycloak_portainer_oauth_settings:
+      AuthenticationMethod: 3
+      OAuthSettings:
+        ClientID: "portainer"
+        ClientSecret: "{{ keycloak_portainer_client_secret }}"
+        AccessTokenURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/token"
+        AuthorizationURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/auth"
+        ResourceURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/userinfo"
+        RedirectURI: "https://portainer.{{ keycloak_domain }}"
+        LogoutURI: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/protocol/openid-connect/logout"
+        UserIdentifier: "preferred_username"
+        Scopes: "openid profile email groups"
+        OAuthAutoCreateUsers: true
+        DefaultTeamID: 0
+        SSO: true
+        AuthStyle: 0
+        # ----- Portainer Business Edition: auto-promote LDAP group members to admin
+        # Members of the 'portainer-admins' LDAP group flow into Keycloak via the
+        # LDAP user federation + group mapper, then into the OIDC token's 'groups'
+        # claim. Portainer EE matches that claim against AdminGroupClaimsRegexList
+        # and assigns admin role on each login. Ignored by CE.
+        OAuthAutoMapTeamMemberships: true
+        TeamMemberships:
+          OAuthClaimName: "groups"
+          AdminAutoPopulate: true
+          AdminGroupClaimsRegexList:
+            - "portainer-admins"
 
-    - name: Display Portainer OAuth status
-      ansible.builtin.debug:
-        msg: "Portainer OAuth configured with Keycloak (realm: {{ keycloak_realm }}, client: portainer)"
+- name: Display Portainer OAuth status
+  ansible.builtin.debug:
+    msg: "Portainer OAuth configured with Keycloak (realm: {{ keycloak_realm }}, client: portainer)"

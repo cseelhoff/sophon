@@ -1,3 +1,0 @@
----
-- name: Provision InfraVM on the selected hypervisor
-  ansible.builtin.include_tasks: "{{ hypervisor_provider }}_bootstrap.yml"

@@ -1,10 +1,7 @@
 ---
 # Snapshot the live /data/acme.json from the running traefik container to
-# {{ traefik_acme_backup_path }} on the controller. Uses the Portainer-proxied
-# Docker Engine archive API. Idempotent; safe to run on every deploy.
-#
-# Run on demand:
-#   ansible-playbook site.yml --tags traefik-backup-acme
+# {{ traefik_acme_backup_path }}. Uses the Portainer-proxied Docker Engine
+# archive API. Idempotent; safe to run on every deploy.
 #
 # A 404 from the archive endpoint means traefik has not written acme.json
 # yet (no cert has been issued / renewed). Treated as a no-op.

@@ -1,9 +1,0 @@
----
-infravm_vm_name: "{{ lookup('env', 'SOPHON_INFRAVM_NAME') | default('sophon-infravm', true) }}"
-infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
-infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(8192, true) | int }}"
-infravm_cpu_type: "x86-64-v2-AES"
-infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(100, true) | int }}"
-infravm_coreos_iso_path: "{{ playbook_dir }}/artifacts/coreos/fedora-coreos-live.iso"
-infravm_bundle_iso_path: "{{ playbook_dir }}/artifacts/bootstrap/sophon-deployment.iso"
-infravm_bootstrap_marker: "sophon-infravm-two-iso-v1"

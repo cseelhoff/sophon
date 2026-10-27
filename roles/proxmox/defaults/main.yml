@@ -1,24 +1,6 @@
 ---
-# =============================================================================
-# Proxmox Connection Settings
-# =============================================================================
-# These are fallback defaults - override via inventory group_vars or -e flags
-
-proxmox_host: ""
-proxmox_username: "root"
+proxmox_username: root
 proxmox_user: "{{ proxmox_username }}@pam"
-proxmox_password: ""
-proxmox_node: "proxmox"
-proxmox_port: 8006
-proxmox_disk_storage_id: "local-lvm"
-proxmox_airgapped: false
-
-# Certificate validation (set to true in production with valid certs)
+# Set true when the Proxmox API presents a trusted certificate.
 proxmox_validate_certs: false
-
-# Proxmox storage for the CoreOS image.
-# `proxmox_iso_storage_path` (the on-disk ISO directory) is auto-discovered
-# at runtime from the Proxmox API for the given storage ID. The value below
-# is only a last-resort fallback matching the built-in `local` storage.
-proxmox_iso_storage_id: "local"
-proxmox_iso_storage_path: "/var/lib/vz/template/iso"
+proxmox_cpu_type: "x86-64-v2-AES"

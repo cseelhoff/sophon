@@ -1,30 +1,12 @@
 ---
-# Deploy OpenLDAP Directory Service via Portainer Stack
+- name: Deploy OpenLDAP stack via Portainer
+  ansible.builtin.include_role:
+    name: portainer_stack
+  vars:
+    portainer_stack_name: "openldap"
+    portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    portainer_stack_image_tars: "{{ openldap_image_tars }}"
 
-- name: Deploy OpenLDAP
-  when: openldap_enabled | default(false)
-  block:
-    - name: Deploy OpenLDAP stack via Portainer
-      ansible.builtin.include_role:
-        name: portainer_stack
-      vars:
-        portainer_stack_name: "openldap"
-        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
-        portainer_stack_image_tars: "{{ openldap_image_tars }}"
-    # - name: Wait for OpenLDAP to be ready
-    #   ansible.builtin.raw: |
-    #     timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{{ openldap_port_ldap }}'
-    #   delegate_to: "{{ infravm_ansible_host }}"
-    #   vars:
-    #     ansible_connection: ssh
-    #     ansible_user: "{{ infravm_username }}"
-    #     ansible_ssh_private_key_file: "{{ infravm_ssh_private_key }}"
-    #   register: openldap_health
-    #   until: openldap_health.rc == 0
-    #   retries: 30
-    #   delay: 5
-    #   changed_when: false
-
-    - name: Display OpenLDAP status
-      ansible.builtin.debug:
-        msg: "OpenLDAP ready - phpLDAPadmin at http://{{ infravm_ip }}:{{ openldap_port_admin }}, LDAP at {{ infravm_ip }}:{{ openldap_port_ldap }}"
+- name: Display OpenLDAP status
+  ansible.builtin.debug:
+    msg: "OpenLDAP ready - LDAP at {{ infravm_ip }}:{{ openldap_port_ldap }}"

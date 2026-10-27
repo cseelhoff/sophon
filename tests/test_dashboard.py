@@ -4,9 +4,13 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import unittest
 from urllib.request import urlopen
 
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    raise unittest.SkipTest('Playwright and Chromium are required for the browser test')
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,11 +37,11 @@ def check_zoom(page):
     page.get_by_role('button', name='Fit', exact=True).click()
 
 
-def check_hide_tasks(page, report_path, phase):
+def check_hide_tasks(page, report_path, step):
     diagram = page.locator('#diagram-pane')
     original_height = diagram.bounding_box()['height']
-    first, second = ('InfraVM', 'Proxmox authentication') if phase == 'bootstrap' else ('Portainer', 'CoreDNS')
-    second_key = 'proxmox' if phase == 'bootstrap' else 'coredns'
+    first, second = ('InfraVM', 'Proxmox authentication') if step == 'provision' else ('Portainer', 'CoreDNS')
+    second_key = 'proxmox' if step == 'provision' else 'coredns'
     stage = page.get_by_role('button', name=first, exact=False)
     stage.click()
     panel = page.locator('#task-panel')
@@ -100,7 +104,7 @@ def check_cloudflare_help(page):
     page.get_by_role('button', name='Close', exact=True).click()
 
 
-def check_run_confirmation(page, phase):
+def check_run_confirmation(page, step):
     page.get_by_role('button', name='Configure', exact=True).click()
     page.locator('#deploy-button:not([disabled])').wait_for()
     for field in page.locator('#settings-fields input[required]:enabled').all():
@@ -115,7 +119,7 @@ def check_run_confirmation(page, phase):
     page.once('dialog', cancel)
     page.get_by_role('button', name='Run', exact=True).click()
     assert len(messages) == 1 and 'undefined' not in messages[0], messages
-    assert ('No hypervisor access is used.' in messages[0]) == (phase == 'services')
+    assert ('No hypervisor access is used.' in messages[0]) == (step == 'configure')
     page.get_by_role('button', name='Close', exact=True).click()
 
 
@@ -161,7 +165,7 @@ def check_vcenter_settings(page, report_path):
     page.get_by_role('button', name='Proxmox authentication', exact=False).wait_for()
 
 
-def check_startup_error(page, report_path, phase):
+def check_startup_error(page, report_path, step):
     report = json.loads(report_path.read_text())
     report.update(state='failed', current=None, exit_code=127)
     for stage in report['stages'].values():
@@ -172,10 +176,10 @@ def check_startup_error(page, report_path, phase):
     error.get_by_text('Deployment failed before any stage started.', exact=False).wait_for()
     assert 'Exit code: 127' in error.inner_text()
     assert str(report_path.parent / 'deploy.log') in error.inner_text()
-    page.get_by_role('button', name='Prestage' if phase == 'bootstrap' else 'Portainer', exact=False).click()
+    page.get_by_role('button', name='Prepare media' if step == 'provision' else 'Portainer', exact=False).click()
     assert error.is_visible()
     assert page.locator('#task-results').inner_text() == ''
-    report['error'] = 'Could not start ansible-playbook. Restart the viewer from nix develop.'
+    report['error'] = 'Could not start ansible-playbook. Restart the viewer with ./sophon dashboard.'
     report_path.write_text(json.dumps(report))
     error.get_by_text(report['error'], exact=False).wait_for()
     page.wait_for_timeout(1200)
@@ -186,13 +190,13 @@ def check_startup_error(page, report_path, phase):
     error.wait_for(state='hidden')
 
 
-def test_dashboard(phase):
+def test_dashboard(step):
     with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
         environment = {name: value for name, value in os.environ.items() if not name.startswith('SOPHON_')}
-        if phase == 'services':
-            environment['SOPHON_DEPLOYMENT_PHASE'] = 'services'
+        if step == 'configure':
+            environment['SOPHON_DEPLOYMENT_STEP'] = 'configure'
         server = subprocess.Popen(
-            [sys.executable, str(ROOT / 'deployment.py'), '--phase', phase, '--serve', '--state-dir', temporary],
+            [sys.executable, str(ROOT / 'src/deployment.py'), '--step', step, '--serve', '--state-dir', temporary],
             env=environment, stdout=subprocess.PIPE, text=True)
         try:
             url = server.stdout.readline().strip()
@@ -218,12 +222,12 @@ def test_dashboard(phase):
                     page.locator('#configure:not([disabled])').wait_for()
                     assert page.get_by_role('separator', include_hidden=True).count() == 0
                     check_zoom(page)
-                    if phase == 'bootstrap':
-                        assert 'sudo bash /mnt/sophon/install.sh' in page.locator('#phase-note').inner_text()
+                    if step == 'provision':
+                        assert 'sudo bash /mnt/sophon/install.sh' in page.locator('#step-note').inner_text()
                     else:
-                        assert 'No hypervisor credentials' in page.locator('#phase-note').inner_text()
-                    check_hide_tasks(page, report_path, phase)
-                    if phase == 'services':
+                        assert 'No hypervisor credentials' in page.locator('#step-note').inner_text()
+                    check_hide_tasks(page, report_path, step)
+                    if step == 'configure':
                         check_cloudflare_help(page)
                     else:
                         page.get_by_role('button', name='Configure', exact=True).click()
@@ -233,10 +237,10 @@ def test_dashboard(phase):
                         assert page.locator('input[name="SOPHON_CF_TOKEN"]').count() == 0
                         assert page.locator('input[name="SOPHON_DOMAIN"]').count() == 0
                         page.get_by_role('button', name='Close', exact=True).click()
-                    check_run_confirmation(page, phase)
-                    if phase == 'bootstrap':
+                    check_run_confirmation(page, step)
+                    if step == 'provision':
                         check_vcenter_settings(page, report_path)
-                    check_startup_error(page, report_path, phase)
+                    check_startup_error(page, report_path, step)
                     assert not errors, errors
                     page.close()
             finally:
@@ -248,6 +252,6 @@ def test_dashboard(phase):
 
 
 if __name__ == '__main__':
-    for phase in ('bootstrap', 'services'):
-        test_dashboard(phase)
+    for step in ('provision', 'configure'):
+        test_dashboard(step)
     print('Dashboard browser checks passed')

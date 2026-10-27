@@ -1,4 +1,0 @@
----
-- name: Require a phase-specific InfraVM entry point
-  ansible.builtin.fail:
-    msg: "Use bootstrap.yml to provision InfraVM, or site.yml on the Controller VM to configure services."

@@ -1,26 +1,6 @@
 ---
-# =============================================================================
-# Proxmox Role - Authentication and API Helpers
-# =============================================================================
-# Provides: proxmox_ticket, proxmox_csrf (set as facts for other roles to use)
-
-- name: Prompt for missing Proxmox host
-  ansible.builtin.pause:
-    prompt: "Proxmox API host (IP or hostname)"
-  register: _proxmox_host_input
-  when: proxmox_host == ""
-
-- name: Prompt for missing password
-  ansible.builtin.pause:
-    prompt: "Proxmox password"
-    echo: false
-  register: _proxmox_password
-  when: proxmox_password == ""
-
-- name: Set updated variable values
-  ansible.builtin.set_fact:
-    proxmox_host: "{{ _proxmox_host_input.user_input | default(proxmox_host) }}"
-    proxmox_password: "{{ _proxmox_password.user_input | default(proxmox_password) }}"
+# Authenticate and snapshot what vm.yml needs to decide. Sets proxmox_ticket,
+# proxmox_csrf, proxmox_api, proxmox_vms and proxmox_iso_content.
 
 - name: Set Proxmox API URL
   ansible.builtin.set_fact:
@@ -36,79 +16,25 @@
       password: "{{ proxmox_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
   register: proxmox_auth
-  when: proxmox_ticket is not defined
 
-- name: Set Proxmox auth facts
+- name: Remember the session
   ansible.builtin.set_fact:
     proxmox_ticket: "{{ proxmox_auth.json.data.ticket }}"
     proxmox_csrf: "{{ proxmox_auth.json.data.CSRFPreventionToken }}"
-  when: proxmox_ticket is not defined
 
-- name: Get existing VMs from Proxmox
+# Templates are listed alongside VMs; vm.yml refuses to adopt one.
+- name: List guests
   ansible.builtin.uri:
     url: "{{ proxmox_api }}/cluster/resources?type=vm"
-    method: GET
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-  register: _proxmox_existing_vms
+  register: proxmox_vms
 
-# /cluster/resources lists templates alongside real VMs, and roles find their VM
-# by name. A template sharing that name is picked up as if it were the VM, and
-# the run dies much later at "you can't start a vm if it's a template".
-# Older Proxmox omits the key entirely rather than sending 0, and selecting on
-# an absent attribute is an error, so those entries are kept separately.
-#
-# Re-queried on every include: a VM created earlier in the run must be visible
-# to later roles, or they create a second one.
-- name: Set existing VMs fact
-  ansible.builtin.set_fact:
-    proxmox_existing_vms: >-
-      {{ _proxmox_existing_vms | combine({'json': {'data':
-         (_proxmox_existing_vms.json.data | rejectattr('template', 'defined') | list)
-         + (_proxmox_existing_vms.json.data | selectattr('template', 'defined')
-            | rejectattr('template', 'eq', 1) | list)}}, recursive=true) }}
-
-- name: Check if image already exists on Proxmox
+- name: List ISO storage content
   ansible.builtin.uri:
     url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/storage/{{ proxmox_iso_storage_id }}/content?content=iso"
-    method: GET
     headers:
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-  register: _proxmox_iso_content
-  when: proxmox_iso_content is not defined
-
-- name: Set ISO content fact
-  ansible.builtin.set_fact:
-    proxmox_iso_content: "{{ _proxmox_iso_content }}"
-  when: proxmox_iso_content is not defined
-
-# Auto-discover the on-disk ISO directory for the configured storage. Dir
-# storage exposes `path` directly; PVE auto-mounts NFS/CIFS storages at
-# /mnt/pve/<id>. The ISO subdir is always <path>/template/iso per Proxmox
-# convention. Falls back to the role default if neither is available.
-- name: Look up Proxmox ISO storage configuration
-  ansible.builtin.uri:
-    url: "{{ proxmox_api }}/storage/{{ proxmox_iso_storage_id }}"
-    method: GET
-    headers:
-      Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
-    validate_certs: "{{ proxmox_validate_certs }}"
-  register: _proxmox_iso_storage_cfg
-  when: proxmox_iso_storage_path_resolved is not defined
-
-- name: Resolve ISO storage on-disk path
-  ansible.builtin.set_fact:
-    proxmox_iso_storage_path: >-
-      {{
-        (_proxmox_iso_storage_cfg.json.data.path ~ '/template/iso')
-        if _proxmox_iso_storage_cfg.json.data.path is defined
-        else (
-          ('/mnt/pve/' ~ proxmox_iso_storage_id ~ '/template/iso')
-          if _proxmox_iso_storage_cfg.json.data.type in ['nfs', 'cifs']
-          else proxmox_iso_storage_path
-        )
-      }}
-    proxmox_iso_storage_path_resolved: true
-  when: proxmox_iso_storage_path_resolved is not defined
+  register: proxmox_iso_content

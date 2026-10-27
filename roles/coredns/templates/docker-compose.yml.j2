@@ -32,7 +32,7 @@ services:
       - CF_ZONE_DOMAIN={{ coredns_domain_name }}
       - CF_TUNNEL_TARGET=https://traefik.{{ coredns_domain_name }}
       - INVENTORY_ADDR=:8081
-      - FORWARD_DNS=9.9.9.9 1.1.1.1
+      - FORWARD_DNS={{ coredns_forward_dns }}
       - CACHE_TTL=30
     labels:
       - traefik.enable=true

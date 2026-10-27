@@ -1,6 +1,5 @@
 ---
-# Deploy Stack to Portainer via REST API
-# Uses ansible.builtin.uri to call Portainer directly from controller (no SSH)
+# Deploy a stack to Portainer through its REST API (no SSH).
 
 - name: Authenticate with Portainer
   ansible.builtin.uri:

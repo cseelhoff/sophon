@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import stat
-import subprocess
 import sys
 import tempfile
 import tarfile
@@ -21,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'src'))
 import certificates
 
 
@@ -117,7 +116,7 @@ class CertificateTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as progress:
             self.assertEqual(certificates.main([
-                'issue', '--engine', 'traefik', '--state-dir', str(self.directory / 'issued'), '--timeout', '10']), 0)
+                'issue', '--state-dir', str(self.directory / 'issued'), '--timeout', '10']), 0)
         invocation = json.loads(received.read_text())
         self.assertNotIn('FAKE_CLOUDFLARE_TOKEN', ' '.join(invocation['args']) + output.getvalue() + progress.getvalue())
         self.assertEqual(invocation['token'], 'FAKE_CLOUDFLARE_TOKEN')
@@ -147,7 +146,7 @@ class CertificateTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit) as stopped:
             certificates.main(['issue', '--domain', 'fixture.example', '--email', 'admin@fixture.example',
-                               '--engine', 'traefik', '--state-dir', str(self.directory / 'failed')])
+                               '--state-dir', str(self.directory / 'failed')])
         self.assertEqual(stopped.exception.code, 1)
         self.assertEqual(output.getvalue(), '')
         self.assertIn('issuer exited', error.getvalue())
@@ -174,15 +173,15 @@ class CertificateTests(unittest.TestCase):
         from test_console import service_values
         encoded = base64.b64encode(self.source.read_bytes()).decode()
         settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example', 'SOPHON_ACME_PAYLOAD': encoded}
-        current = deployment.new_control(settings, 'services')
+        current = deployment.new_control(settings, 'configure')
         self.assertNotIn('SOPHON_ACME_PAYLOAD', current['environment'])
         self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.SITE_FIELDS)
-        self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.phase_fields('bootstrap'))
-        values, error = deployment.validate_settings(current['values'], {}, 'services')
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', deployment.step_fields('provision'))
+        values, error = deployment.validate_settings(current['values'], {}, 'configure')
         self.assertIsNone(error)
         with patch('deployment.ROOT', self.directory):
             staged = deployment.stage_certificates(values)
-            command = deployment.shell_command(self.directory, staged, current['environment'], 'services')
+            command = deployment.shell_command(self.directory, staged, current['environment'], 'configure')
         self.assertNotIn(encoded, command)
         self.assertNotIn('SOPHON_ACME_PAYLOAD', staged)
         self.assertEqual(json.loads((self.directory / 'artifacts/traefik/acme.json').read_bytes()), self.payload)
@@ -194,7 +193,7 @@ class CertificateTests(unittest.TestCase):
         changes = {'SOPHON_ACME_PAYLOAD': encoded, 'SOPHON_DOMAIN': 'fixture.example'}
         data = json.dumps(changes).encode()
         self.assertGreater(len(data), 32768)
-        control = deployment.new_control(service_values(), 'services')
+        control = deployment.new_control(service_values(), 'configure')
         environment = {
             'SERVER_PORT': '12345', 'HTTP_ORIGIN': 'http://127.0.0.1:12345',
             'HTTP_X_SOPHON_TOKEN': control['token'], 'CONTENT_TYPE': 'application/json',
@@ -271,23 +270,14 @@ class CertificateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             certificates.validate(self.source, 'fixture.example')
 
-    def test_private_iso_contains_only_identity_handoff_and_is_not_reusable_bundle(self):
-        output = self.directory / 'certificates.iso'
-        self.assertEqual(certificates.main(['--source', str(self.source), '--domain', 'fixture.example',
-                                            '--output', str(output)]), 0)
-        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
-        extracted = self.directory / 'extracted'
-        subprocess.run(['xorriso', '-osirrox', 'on', '-indev', str(output), '-extract', '/', str(extracted)],
-                       check=True, capture_output=True)
-        self.assertEqual({path.name for path in extracted.iterdir()}, {'acme.json', 'import.sh'})
-        self.assertEqual(json.loads((extracted / 'acme.json').read_bytes()), self.payload)
-        script = (extracted / 'import.sh').read_text()
-        self.assertNotIn('CF_TOKEN', script)
-        self.assertIn('/var/lib/sophon/project', script)
-        self.assertIn('--refresh-certificates', script)
-        subprocess.run(['bash', '-n', str(extracted / 'import.sh')], check=True)
-        with self.assertRaises(ValueError):
-            certificates.build_iso(self.source, self.source)
+    def test_check_command_validates_a_file_and_rejects_a_bad_one(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(certificates.main(['check', '--source', str(self.source), '--domain', 'fixture.example']), 0)
+        self.assertEqual(set(json.loads(output.getvalue())['certificate_expiries']),
+                         {f'{service}.fixture.example' for service in certificates.SERVICES})
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+            certificates.main(['check', '--source', str(self.source), '--domain', 'other.example'])
+        self.assertEqual(stopped.exception.code, 1)
 
 
 class AcmeRestoreTests(unittest.TestCase):
