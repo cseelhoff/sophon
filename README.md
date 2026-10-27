@@ -115,6 +115,18 @@ docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/dock
 docker run --rm --init -it -p 127.0.0.1:41327:41327 -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state sophon-tools dashboard
 ```
 
+### Another hypervisor (for example Hyper-V or VMware Workstation)
+
+Only Proxmox and vCenter are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
+
+1. Run the step 1 command and copy `artifacts/coreos/fedora-coreos-live.iso` and
+   `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
+2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
+   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged).
+3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
+4. Power on and continue with steps 3 and 4 above. If it boots the live ISO again after install,
+   move the disk above the CDs or eject the ISOs.
+
 Notes:
 - **Rootful Docker on Linux** creates `artifacts/` as root; add `--user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)"` after `docker run`.
 - The container reaches the hypervisor through the engine's normal NAT (no host networking). If the hypervisor is only
@@ -136,18 +148,6 @@ sophon-controller
 ```
 
 Both ISOs can then be detached.
-
-### Another hypervisor (for example Hyper-V or VMware Workstation)
-
-Only Proxmox and vCenter are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
-
-1. Run the step 1 command and copy `artifacts/coreos/fedora-coreos-live.iso` and
-   `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
-2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
-   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged).
-3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
-4. Power on and continue with steps 3 and 4 above. If it boots the live ISO again after install,
-   move the disk above the CDs or eject the ISOs.
 
 ### Certificates without internet
 
