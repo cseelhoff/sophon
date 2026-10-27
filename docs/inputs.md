@@ -14,7 +14,7 @@ use only the hypervisor's management network.
 
 ## Step 2 - provision
 
-Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, or `vcenter`) or in the dashboard.
+Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or `hyperv`) or in the dashboard.
 
 | Proxmox | Meaning |
 |---|---|
@@ -32,12 +32,20 @@ Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, or `vcenter`)
 | `SOPHON_VCENTER_NETWORK` | existing port group already carrying the guest VLAN |
 | `SOPHON_VCENTER_FOLDER` | optional existing folder |
 
-Both: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
+| Hyper-V | Meaning |
+|---|---|
+| `SOPHON_HYPERV_HOST`, `_PORT` | host reachable over WinRM; port 5985 (HTTP, NTLM message encryption) or 5986 (HTTPS) |
+| `SOPHON_HYPERV_USERNAME`, `_PASSWORD` | an account in the host's Administrators group (`Administrator` by default); needs `Enable-PSRemoting` on the host once |
+| `SOPHON_HYPERV_CA_FILE` | optional CA PEM that verifies the HTTPS listener (port 5986); TLS verification is never disabled |
+| `SOPHON_HYPERV_SWITCH` | existing virtual switch already carrying the guest VLAN |
+| `SOPHON_HYPERV_PATH` | optional folder on the host for the VM, disk and ISOs (default: the host's VM path) |
+
+All providers: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
 A VM that already exists is only started if this workflow created it; anything else is left alone.
 
 ## Step 3 - install (console)
 
-`install.sh` asks for: the blank target disk (`/dev/vda` on Proxmox, `/dev/sda` on VMware),
+`install.sh` asks for: the blank target disk (`/dev/vda` on Proxmox, `/dev/sda` on VMware and Hyper-V),
 a static IPv4 address and prefix, the gateway, an upstream DNS server, and a new password for the
 `core` console user. It refuses non-blank disks and requires typing `INSTALL <disk>`.
 The blank-disk check reads the whole disk and can take many minutes.

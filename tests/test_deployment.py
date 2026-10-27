@@ -467,8 +467,9 @@ def test_site_markers():
     tasks = playbook_tasks(filename)
     markers = [tag.removeprefix('sophon_stage_') for task in tasks
                for tag in task.get('tags', []) if tag.startswith('sophon_stage_')]
-    for provider in ('proxmox', 'vcenter'):
-      selected = [marker for marker in markers if marker not in ('proxmox', 'vcenter') or marker == provider]
+    providers = ('proxmox', 'vcenter', 'hyperv')
+    for provider in providers:
+      selected = [marker for marker in markers if marker not in providers or marker == provider]
       assert selected == [*step_stages(step, provider), 'end'], markers
 
 

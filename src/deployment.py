@@ -25,6 +25,7 @@ STAGES = {
     'prepare': 'Prepare media',
     'proxmox': 'Proxmox authentication',
     'vcenter': 'vCenter authentication',
+    'hyperv': 'Hyper-V authentication',
     'infravm': 'InfraVM',
     'coredns': 'CoreDNS',
     'traefik': 'Traefik',
@@ -41,6 +42,7 @@ CELLS = {
     ],
     'proxmox': ['_SmIZJivoSQWszKZv9Yz-3'],
     'vcenter': [],
+    'hyperv': [],
     'infravm': ['_SmIZJivoSQWszKZv9Yz-2', 'Ht_PiSHEylvQ-5aMCYDO-5'],
     'coredns': ['497KWN3HuOLj0ZWtI1qn-3'],
     'traefik': ['BveltJdI-pWs-qTDEDWz-51'],
@@ -65,6 +67,13 @@ FIELDS = {
     'SOPHON_VCENTER_DATASTORE': ('Shared datastore', 'vCenter', 'text', '', True),
     'SOPHON_VCENTER_NETWORK': ('Port group (already configured for its VLAN)', 'vCenter', 'text', '', True),
     'SOPHON_VCENTER_FOLDER': ('VM folder (empty uses datacenter VM root)', 'vCenter', 'text', '', False),
+    'SOPHON_HYPERV_HOST': ('Host (WinRM)', 'Hyper-V', 'host', '', True),
+    'SOPHON_HYPERV_PORT': ('WinRM port (5985 HTTP, 5986 HTTPS)', 'Hyper-V', 'number', '5985', True),
+    'SOPHON_HYPERV_USERNAME': ('Username', 'Hyper-V', 'text', 'Administrator', True),
+    'SOPHON_HYPERV_PASSWORD': ('Password', 'Hyper-V', 'password', '', True),
+    'SOPHON_HYPERV_CA_FILE': ('CA PEM file for HTTPS (on provisioning laptop)', 'Hyper-V', 'text', '', False),
+    'SOPHON_HYPERV_SWITCH': ('Virtual switch (already configured for its VLAN)', 'Hyper-V', 'text', '', True),
+    'SOPHON_HYPERV_PATH': ('VM folder on the host (empty uses the host default)', 'Hyper-V', 'text', '', False),
     'SOPHON_VNET_INTERFACE': ('Bridge', 'Network', 'text', 'vmbr0', True),
     'SOPHON_VNET_VLAN': ('VLAN', 'Network', 'number', '', False),
     'SOPHON_INFRAVM_CORES': ('CPU cores', 'VM', 'number', '8', True),
@@ -92,21 +101,24 @@ FIELDS = {
     'SOPHON_PORTAINER_ADMIN_PASSWORD': ('Portainer admin password', 'Access', 'password', '', True),
     'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password', 'Access', 'password', '', False),
 }
-LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
+LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
           'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),
           'SOPHON_INFRAVM_DISK_GB': (40, 1048576)}
 STEP_STAGES = {
     'provision': ('prepare', 'proxmox', 'infravm'),
     'configure': ('infravm', 'coredns', 'traefik', 'openldap', 'keycloak', 'gitea'),
 }
-CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter')}
-PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Network', 'VM')
+CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv')}
+PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Hyper-V', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
                     if field[2] not in ('password', 'certificate') and field[1] not in PROVISION_GROUPS and name != 'SOPHON_DOMAIN')
 
 
+PROVIDER_GROUPS = {'Proxmox': 'proxmox', 'Network': 'proxmox', 'vCenter': 'vcenter', 'Hyper-V': 'hyperv'}
+
+
 def field_provider(group):
-    return 'proxmox' if group in ('Proxmox', 'Network') else 'vcenter' if group == 'vCenter' else None
+    return PROVIDER_GROUPS.get(group)
 
 
 def step_stages(step, provider='proxmox'):
@@ -155,7 +167,7 @@ def validate_settings(current, changes, step='provision'):
     values = current | changes
     provider = values.get('SOPHON_HYPERVISOR', 'proxmox').strip()
     if provider not in CHOICES['SOPHON_HYPERVISOR']:
-        return None, 'Hypervisor must be proxmox or vcenter.'
+        return None, 'Hypervisor must be proxmox, vcenter or hyperv.'
     for name, (label, group, kind, default, required) in definitions.items():
         if field_provider(group) not in (None, provider):
             continue
@@ -523,7 +535,7 @@ def main(argv=None):
         if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
             parser.error('Start step 4 using sophon-controller on installed InfraVM.')
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
-        parser.error('SOPHON_HYPERVISOR must be proxmox or vcenter.')
+        parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
     state_root = Path(os.environ.get('SOPHON_STATE_DIR') or ROOT / 'artifacts')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in step_fields(options.step):

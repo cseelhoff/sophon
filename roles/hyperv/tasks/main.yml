@@ -1,0 +1,10 @@
+---
+- name: Authenticate with the Hyper-V host over WinRM
+  hyperv_vm:
+    action: authenticate
+    host: "{{ hyperv_host }}"
+    port: "{{ hyperv_port }}"
+    username: "{{ hyperv_username }}"
+    password: "{{ hyperv_password }}"
+    ca_file: "{{ hyperv_ca_file }}"
+    switch: "{{ hyperv_switch }}"

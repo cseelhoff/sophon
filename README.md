@@ -1,7 +1,7 @@
 # Sophon
 
 Offline-capable deployment of DNS, reverse proxy, directory, SSO and Git services onto one
-Fedora CoreOS VM (**InfraVM**), on Proxmox or VMware vCenter. Services run as rootless Podman
+Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft Hyper-V. Services run as rootless Podman
 containers managed through Portainer; the Ansible runner is a container on InfraVM itself.
 
 ## The four steps
@@ -90,11 +90,11 @@ Set the password first:
 
 ```bash
 # bash
-read -rsp 'Password: ' SOPHON_PROXMOX_PASSWORD; export SOPHON_PROXMOX_PASSWORD     # vCenter: SOPHON_VCENTER_PASSWORD
+read -rsp 'Password: ' SOPHON_PROXMOX_PASSWORD; export SOPHON_PROXMOX_PASSWORD     # vCenter: SOPHON_VCENTER_PASSWORD, Hyper-V: SOPHON_HYPERV_PASSWORD
 ```
 ```powershell
 # PowerShell
-$env:SOPHON_PROXMOX_PASSWORD = Read-Host 'Password' -MaskInput                     # vCenter: SOPHON_VCENTER_PASSWORD
+$env:SOPHON_PROXMOX_PASSWORD = Read-Host 'Password' -MaskInput                     # vCenter: SOPHON_VCENTER_PASSWORD, Hyper-V: SOPHON_HYPERV_PASSWORD
 ```
 
 **Proxmox:**
@@ -109,15 +109,44 @@ docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/dock
 docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_HYPERVISOR=vcenter -e SOPHON_VCENTER_URL=https://vcenter.example.com -e SOPHON_VCENTER_USERNAME=administrator@vsphere.local -e SOPHON_VCENTER_DATACENTER=DC1 -e SOPHON_VCENTER_CLUSTER=Cluster1 -e SOPHON_VCENTER_DATASTORE=datastore1 -e SOPHON_VCENTER_NETWORK="VM Network" -e SOPHON_VCENTER_PASSWORD sophon-tools provision
 ```
 
+**Hyper-V** (drives the host over WinRM/PowerShell from the container; nothing is installed on the host).
+Once per Hyper-V host, in an **elevated** PowerShell on that host:
+
+```powershell
+Enable-PSRemoting -Force
+```
+
+Only if needed (each is a security trade-off; keep the scope narrow):
+- The laptop reaches the host over a **Public** network profile, from another subnet, or through WSL/Docker NAT, and the
+  connection times out: `Set-NetFirewallRule -Name 'WINRM-HTTP-In-TCP' -RemoteAddress <laptop address or subnet>`.
+- You use a **local** account that is not the built-in `Administrator`: set the registry value
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\LocalAccountTokenFilterPolicy` to `1`.
+
+The account must be in the host's **Administrators** group. Create the virtual switch first (Hyper-V Manager >
+Virtual Switch Manager); InfraVM connects to it and needs a static IP on that network. Then run, with the password set
+as above but as `SOPHON_HYPERV_PASSWORD`:
+
+```bash
+docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_HYPERVISOR=hyperv -e SOPHON_HYPERV_HOST=hv.example.com -e SOPHON_HYPERV_USERNAME=Administrator -e SOPHON_HYPERV_SWITCH="External" -e SOPHON_HYPERV_PASSWORD sophon-tools provision
+```
+
+It creates a Generation 2 VM (Secure Boot off, static memory, no checkpoints) with one blank dynamic disk and both ISOs
+as DVD drives, disk first in the boot order, uploads each ISO once (hash-named, verified, skipped on reruns; allow a
+while on the first run, since they travel over WinRM), and starts it. Open the console with Hyper-V Manager >
+Connect, then continue at step 3 (the installer's disk is `/dev/sda`). Optional settings: `SOPHON_HYPERV_PORT`
+(5985 HTTP with NTLM message encryption, or 5986 HTTPS with a verified certificate, plus `SOPHON_HYPERV_CA_FILE`) and
+`SOPHON_HYPERV_PATH` (a folder on the host such as `D:\Hyper-V`, default is the host's VM path). The Hyper-V provider
+has been checked against the Hyper-V cmdlet definitions and with stubbed PowerShell, but **not yet against a real host**.
+
 **Dashboard** (a form for the same settings and a live progress diagram; open http://127.0.0.1:41327/):
 
 ```bash
 docker run --rm --init -it -p 127.0.0.1:41327:41327 -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state sophon-tools dashboard
 ```
 
-### Another hypervisor (for example Hyper-V or VMware Workstation)
+### Another hypervisor (for example VMware Workstation)
 
-Only Proxmox and vCenter are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
+Proxmox, vCenter and Hyper-V are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
 
 1. Run the step 1 command and copy `artifacts/coreos/fedora-coreos-live.iso` and
    `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
@@ -197,11 +226,12 @@ group_vars/all.yml                                 every SOPHON_* setting, in on
 
 roles/
   prepare/          step 1   cache downloads, build runner + deployment ISO
-  proxmox/ vcenter/ step 2   authenticate and create the blank VM
+  proxmox/ vcenter/ hyperv/ step 2   authenticate and create the blank VM
   portainer/        step 4   first-run Portainer setup and licence
   portainer_stack/  step 4   deploy one compose stack through Portainer's API
   coredns/ traefik/ openldap/ keycloak/ gitea/   step 4   the services
 library/vcenter_vm.py                              vCenter module (wraps govc)
+library/hyperv_vm.py                               Hyper-V module (PowerShell over WinRM, pypsrp)
 
 guest/              files that run inside InfraVM
   install.sh          step 3, from the live ISO

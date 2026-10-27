@@ -19,6 +19,7 @@ def test_step_settings():
         'SOPHON_PROXMOX_PASSWORD': 'MANAGEMENT_SECRET',
         'SOPHON_VCENTER_PASSWORD': 'VCENTER_SECRET',
         'SOPHON_VCENTER_URL': 'https://management.example',
+        'SOPHON_HYPERV_PASSWORD': 'HYPERV_SECRET',
         'SOPHON_CONTROLLER_PASSWORD': 'LOGIN_SECRET',
         'SOPHON_CF_TOKEN': 'SERVICE_SECRET',
         'SOPHON_DOMAIN': 'configure.example',
@@ -28,6 +29,7 @@ def test_step_settings():
     assert 'SERVICE_SECRET' not in json.dumps(settings_payload(provision))
     assert 'MANAGEMENT_SECRET' not in json.dumps(configure)
     assert 'VCENTER_SECRET' not in json.dumps(configure)
+    assert 'HYPERV_SECRET' not in json.dumps(configure)
     assert 'management.example' not in json.dumps(configure)
     assert 'LOGIN_SECRET' not in json.dumps(configure)
     assert 'SOPHON_PROXMOX_HOST' not in step_fields('configure')
@@ -62,7 +64,7 @@ def test_service_task_graph():
             assert 'proxmox' not in module.lower(), (task, module)
             if module in ('ansible.builtin.include_role', 'ansible.builtin.import_role'):
                 role = value['name']
-                assert role not in ('proxmox', 'vcenter', 'prepare'), role
+                assert role not in ('proxmox', 'vcenter', 'hyperv', 'prepare'), role
                 metadata = ROOT / 'roles' / role / 'meta/main.yml'
                 if metadata.exists():
                     walk(metadata)

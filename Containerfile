@@ -12,7 +12,7 @@ FROM runner AS tools
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl jq xorriso gdisk busybox-static \
  && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir proxmoxer==2.2.0 \
+RUN pip install --no-cache-dir proxmoxer==2.2.0 pypsrp==0.9.1 \
  && ansible-galaxy collection install community.proxmox:==1.6.0 -p /usr/share/ansible/collections
 # docker drives the host engine through its socket; traefik issues certificates offline-capable.
 COPY --from=docker.io/library/docker:cli /usr/local/bin/docker /usr/local/bin/docker

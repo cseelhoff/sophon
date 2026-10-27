@@ -19,7 +19,8 @@ service credentials are entered at the consoles. See [decisions.md](decisions.md
 Three surfaces do all the work; knowing which one is in play explains most failures:
 
 1. **The hypervisor API** (steps 1-2 only). Proxmox: REST ticket + `community.proxmox`. vCenter: `govc`
-   with verified HTTPS and environment-only credentials. Existing VMs are only started, and only if this
+   with verified HTTPS and environment-only credentials. Hyper-V: PowerShell over WinRM (`pypsrp`); every value
+   reaches the host as base64 JSON, never inside PowerShell source. Existing VMs are only started, and only if this
    workflow marked them; anything else is left untouched.
 2. **The live console** (step 3). `guest/install.sh` verifies the media checksums, requires a zero-filled
    disk, renders Ignition locally and runs `coreos-installer --offline`.
