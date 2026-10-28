@@ -64,6 +64,10 @@ class BundleTests(unittest.TestCase):
                                     self.containers if containers is None else containers)
 
     def test_vm_gets_only_the_service_project_and_checksums(self):
+        self.stage_locations = []
+        original_encode = self.encode_iso
+        self.encode_iso = lambda command, **kw: (self.stage_locations.append(Path(command[-1])),
+                                                  original_encode(command, **kw))[1]
         self.write('roles/proxmox/tasks/main.yml', 'HYPERVISOR_ONLY')
         self.write('roles/prepare/tasks/main.yml', 'LAPTOP_ONLY')
         self.write('2-provision.yml', 'LAPTOP_ONLY')
@@ -89,6 +93,9 @@ class BundleTests(unittest.TestCase):
         for name, digest in checksums.items():
             self.assertEqual(digest, hashlib.sha256(self.captured[name]).hexdigest())
         self.assertFalse(list(self.output.parent.glob('.sophon-bundle-*')))
+        # Staging happens on the local temp disk, not beside the (possibly slow, mounted) output.
+        self.assertTrue(self.stage_locations)
+        self.assertFalse(any(self.output.parent in location.parents for location in self.stage_locations))
 
     def test_secrets_and_unallowlisted_artifacts_never_copied(self):
         for name in (

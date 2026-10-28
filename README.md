@@ -13,7 +13,7 @@ else (Ansible, xorriso, govc, Traefik) lives in one container image that the scr
 |---|---|---|
 | 1. Prepare | connected laptop | Download and cache the stock CoreOS live ISO and container images; build the runner image and `artifacts/bootstrap/sophon-deployment.iso`. |
 | 2. Provision | laptop with hypervisor access | Runs step 1 if needed, then creates a blank InfraVM with both ISOs attached and starts it. |
-| 3. Install | InfraVM console | Installs CoreOS offline to the only blank disk, keeping the current network settings as a static IP; the only prompt is a new `core` console password. Then reboots. |
+| 3. Install | InfraVM console | Installs CoreOS offline to the only blank disk. Asks for the static IP, prefix, gateway and DNS (current values are the defaults; Enter accepts) and a new `core` console password. Then reboots. |
 | 4. Configure | InfraVM console | Asks for the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. |
 
 ### Steps 1 and 2: one command
@@ -93,7 +93,7 @@ Steps 1 to 3 are the same; only step 4 and a recurring renewal differ. Read this
 | Before 4 | On a connected machine, make the certificate payload (below). Carry the file to the site. |
 | 2 | None, if the laptop can reach the hypervisor's management network. The laptop itself may be offline once steps 1 and the tools image exist. |
 | 3 | None. It was always offline. |
-| 4 | Paste the payload at the *Pre-issued certificates* prompt (or `@/workspace/path/payload.txt`) and leave the **Cloudflare token empty**. With no token the payload is **required**; step 4 stops if it is missing or does not cover all six names. |
+| 4 | Answer **y** to "air-gapped" and paste the payload at the *Pre-issued certificates* prompt (or `@/workspace/path/payload.txt`). The payload is **required**; step 4 stops if it does not cover all six names. |
 
 Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
 point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
@@ -116,7 +116,7 @@ between day 60 and day 90.
    ```bash
    sophon-controller --refresh-certificates
    ```
-   Paste the new payload, leave the Cloudflare token empty, and re-enter the existing service credentials (a refresh
+   Answer **y** to "air-gapped", paste the new payload, and re-enter the existing service credentials (a refresh
    currently reruns the full service deployment). If the certificates have already expired, the same steps recover the site.
 
 See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.

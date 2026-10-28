@@ -274,16 +274,14 @@ main() {
     required=$(required_bytes "$media")
     (( $(blockdev --getsize64 "$disk") >= required )) ||
         die "Disk is too small; need at least $required bytes for OS, artifacts and image extraction."
-    # The live system's current network settings become the installed static configuration.
+    # The live system's current network settings are offered as defaults; Enter accepts, typing overrides.
     detect_network
-    ip=$detected_ip prefix=$detected_prefix gateway=$detected_gateway dns=$detected_dns
-    [[ -n $ip ]] || ask ip 'Installed IPv4 address' ''
-    [[ -n $prefix ]] || ask prefix 'IPv4 prefix length (1-30)' ''
-    [[ -n $gateway ]] || ask gateway 'IPv4 gateway' ''
-    [[ -n $dns ]] || ask dns 'DNS server IPv4 address' ''
-    validate_network "$ip" "$prefix" "$gateway" "$dns"
-    printf 'Network (current values of this system): %s/%s, gateway %s, DNS %s\n' "$ip" "$prefix" "$gateway" "$dns"
-    read -r -s -p 'New core console password: ' password; printf '\n'
+    printf '%s\n' 'Network for the installed system. Press Enter to accept the [current value].'
+    ask ip 'Installed IPv4 address' "$detected_ip"
+    ask prefix 'IPv4 prefix length (1-30)' "$detected_prefix"
+    ask gateway 'IPv4 gateway' "$detected_gateway"
+    ask dns 'DNS server IPv4 address' "$detected_dns"
+    validate_network "$ip" "$prefix" "$gateway" "$dns"    read -r -s -p 'New core console password: ' password; printf '\n'
     read -r -s -p 'Confirm core console password: ' confirmation; printf '\n'
     [[ -n $password && $password == "$confirmation" ]] || die "Passwords are empty or do not match."
     # BusyBox -P 0 reads stdin; omitting -P would prompt/read /dev/tty.

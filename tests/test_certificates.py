@@ -203,7 +203,8 @@ class CertificateTests(unittest.TestCase):
                     patch('console.getpass.getpass', side_effect=lambda prompt:
                           encoded if prompt.startswith('Pre-issued certificates') else ''), \
                     patch('builtins.input', side_effect=lambda prompt:
-                          'y' if confirmed and prompt.endswith('[y/N] ') else ''), \
+                          'y' if prompt.startswith('Is this site air-gapped')
+                          or (confirmed and prompt.startswith('Deploy')) else ''), \
                     contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(console.main([]), 0)
                 self.assertNotIn(encoded, output.getvalue())

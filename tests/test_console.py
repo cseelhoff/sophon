@@ -67,13 +67,13 @@ class ConsoleTests(unittest.TestCase):
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main', return_value=19) as run, \
                 patch('console.sys.stdin.isatty', return_value=True), \
-                patch('builtins.input', side_effect=lambda prompt: 'y' if prompt.endswith('[y/N] ') else ''), \
-                patch('console.getpass.getpass', return_value='') as hidden, \
+                patch('builtins.input', side_effect=lambda prompt: 'y' if prompt.startswith('Deploy') else ''), \
+                patch('console.getpass.getpass', return_value='token') as hidden, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main([]), 19)
             run.assert_called_once_with(['--step', 'configure', '--', '4-configure.yml'])
-            self.assertEqual(hidden.call_count, sum(field[2] in ('password', 'certificate')
-                                                   for field in deployment.step_fields('configure').values()))
+            # Supplied secrets are not asked again; only the Cloudflare token, licence key and Gitea DB password are.
+            self.assertEqual(hidden.call_count, 3)
             self.assertNotIn('FIXTURE_SECRET_VALUE', output.getvalue())
 
     def test_invalid_run_does_not_launch_or_expose_secret(self):
@@ -107,25 +107,120 @@ class ConsoleTests(unittest.TestCase):
 
         def answer(prompt):
             prompts.append(prompt)
-            return 'y' if prompt.endswith('[y/N] ') else ''
+            return 'y' if prompt.startswith('Deploy') else ''
 
         with patch.dict(os.environ, service_values() | site, clear=True), \
                 patch('console.deployment.load_site_settings', return_value=site), \
                 patch('console.deployment.main', return_value=0), \
                 patch('console.sys.stdin.isatty', return_value=True), \
-                patch('builtins.input', side_effect=answer), patch('console.getpass.getpass', return_value=''), \
+                patch('builtins.input', side_effect=answer), patch('console.getpass.getpass', return_value='token'), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main([]), 0)
         self.assertFalse([prompt for prompt in prompts if 'SOPHON_INFRAVM_IP' in prompt or 'SOPHON_VNET_DNS' in prompt])
         self.assertTrue([prompt for prompt in prompts if 'SOPHON_DOMAIN' in prompt])
         self.assertIn('192.0.2.53 (from installation)', output.getvalue())
 
+    def wizard(self, environment, answers, secrets=()):
+        """Run the interactive wizard with scripted answers; returns (exit code, prompts, secret prompts, output)."""
+        prompts, hidden = [], []
+        answers, secrets = iter(answers), iter(secrets)
+
+        def ask(prompt):
+            prompts.append(prompt)
+            return next(answers)
+
+        def secret(prompt):
+            hidden.append(prompt)
+            return next(secrets)
+
+        with patch.dict(os.environ, environment, clear=True), \
+                patch('console.deployment.load_site_settings', return_value={}), \
+                patch('console.deployment.main', return_value=0), \
+                patch('console.sys.stdin.isatty', return_value=True), \
+                patch('builtins.input', side_effect=ask), patch('console.getpass.getpass', side_effect=secret), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            code = console.main([])
+        return code, prompts, hidden, output.getvalue()
+
+    def test_connected_site_asks_for_email_and_token_but_not_certificates(self):
+        values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': '', 'SOPHON_ACME_EMAIL': ''}
+        # Inputs: air-gapped?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name, deploy?
+        code, prompts, hidden, _ = self.wizard(
+            values, ['n', '', '', '', '', 'me@example.test', '', '', '', 'y'],
+            ['token', 'long-enough-password', '', ''])
+        self.assertEqual(code, 0)
+        text = ' '.join(prompts + hidden)
+        self.assertIn('SOPHON_ACME_EMAIL', text)
+        self.assertIn('SOPHON_CF_TOKEN', text)
+        self.assertIn('SOPHON_CF_TUNNEL_NAME', text)
+        self.assertNotIn('SOPHON_ACME_PAYLOAD', text)
+        self.assertTrue([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt])
+
+    def test_air_gapped_site_asks_only_for_the_certificate_payload(self):
+        values = service_values() | {'SOPHON_CF_TOKEN': 'WOULD_LEAK'}
+        # Inputs: air-gapped?, then DNS, IP, domain, realm, realm name (no email, token or tunnel name).
+        code, prompts, hidden, _ = self.wizard(values, ['y', '', '', '', '', ''], ['not-a-payload', '', ''])
+        text = ' '.join(prompts + hidden)
+        self.assertNotIn('SOPHON_ACME_EMAIL', text)
+        self.assertNotIn('SOPHON_CF_TOKEN', text)
+        self.assertNotIn('SOPHON_CF_TUNNEL_NAME', text)
+        self.assertEqual(code, 2)  # the payload is asked for, validated and rejected before any deployment
+        self.assertTrue([prompt for prompt in hidden if 'Pre-issued certificates' in prompt])
+
+    def test_required_values_are_asked_again_and_portainer_password_has_a_minimum(self):
+        values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': ''}
+        code, prompts, hidden, output = self.wizard(
+            values, ['n', '', '', '', '', 'me@example.test', '', '', '', 'y'],
+            ['token', '', 'short', 'long-enough-password', '', ''])
+        self.assertEqual(code, 0)
+        self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt]), 3)
+        self.assertIn('at least 12 characters', output)
+
+    def test_same_password_for_all_accounts(self):
+        values = service_values() | {name: '' for name, field in deployment.step_fields('configure').items()
+                                      if field[2] == 'password'}
+        code, prompts, hidden, output = self.wizard(
+            values, ['n', 'y'] + [''] * 7 + ['y'],
+            ['same-password-123', 'same-password-123', 'token', '', ''])
+        self.assertEqual(code, 0, output)
+        asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]
+        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_GITEA_DB_PASSWORD'])
+
+    def test_secret_prompt_shows_asterisks_and_handles_backspace(self):
+        pid, terminal = pty.fork()
+        if pid == 0:
+            os.execv(sys.executable, [sys.executable, '-c',
+                f'import sys; sys.path.insert(0,{str(ROOT / "src")!r}); import console; '
+                'value=console.read_secret("PW: "); print("GOT=" + value, flush=True)'])
+        try:
+            output = b''
+            deadline = time.monotonic() + 15
+            while b'PW: ' not in output:
+                self.assertLess(time.monotonic(), deadline)
+                if select.select([terminal], [], [], 1)[0]:
+                    output += os.read(terminal, 4096)
+            os.write(terminal, b'abcx\x7fd\r')
+            while b'GOT=' not in output:
+                self.assertLess(time.monotonic(), deadline)
+                if select.select([terminal], [], [], 1)[0]:
+                    output += os.read(terminal, 4096)
+            os.waitpid(pid, 0)
+            pid = None
+            self.assertIn(b'GOT=abcd', output)
+            self.assertIn(b'****', output)
+            self.assertNotIn(b'abc', output.replace(b'GOT=abcd', b''))
+        finally:
+            os.close(terminal)
+            if pid is not None:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+
     def test_decline_does_not_deploy(self):
         with patch.dict(os.environ, service_values(), clear=True), \
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main') as run, \
                 patch('console.sys.stdin.isatty', return_value=True), \
-                patch('builtins.input', return_value=''), patch('console.getpass.getpass', return_value=''), \
+                patch('builtins.input', return_value=''), patch('console.getpass.getpass', return_value='token'), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main([]), 0)
             run.assert_not_called()

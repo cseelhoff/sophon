@@ -49,29 +49,32 @@ A VM that already exists is only started if this workflow created it; anything e
 
 ## Step 3 - install (console)
 
-`install.sh` asks for nothing about the machine: it installs to the only blank disk (`/dev/vda` on Proxmox,
-`/dev/sda` on VMware and Hyper-V, found automatically) and keeps the live system's current address, prefix, gateway and
-DNS server as the installed static configuration. The one prompt is a new password for the `core` console user. If no
-single blank disk is found (zero or several) or no network is detected, it asks for that value. It refuses disks with
+`install.sh` installs to the only blank disk (`/dev/vda` on Proxmox, `/dev/sda` on VMware and Hyper-V), found
+automatically; if there is none or several it asks which. It then asks for the static IPv4 address, prefix length,
+gateway and DNS server, each showing the live system's current value in square brackets: press Enter to accept it or
+type a different one. Finally it asks for a new password for the `core` console user. It refuses disks with
 partitions or filesystem signatures, rechecks that right before writing, and waits 10 seconds (Ctrl-C aborts).
-Those address and DNS values are saved, so `sophon-controller` (step 4) does not ask for them again. The address
-shown is usually a DHCP lease: reserve it on your DHCP server, or install from a network with a static address, because
-it is the address every service name resolves to.
+The address and DNS values are saved, so `sophon-controller` (step 4) does not ask for them again. The default address
+is usually a DHCP lease: reserve it on your DHCP server or type a static address, because it is the address every
+service name resolves to.
 
 ## Step 4 - configure (console)
 
-`sophon-controller` asks for:
+`sophon-controller` first asks **whether the site is air-gapped** (default no) and whether to **use one password for all
+service accounts** (default no), then asks for:
 
 | Input | Notes |
 |---|---|
-| Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01). |
-| ACME email | A real address. |
-| Cloudflare token | Optional offline. Zone:Read, DNS:Edit (+ Tunnel:Edit if you use tunnels), scoped to one zone. |
-| Pre-issued certificates | Optional pasted payload for sites without internet; see [certificates.md](certificates.md). |
-| Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. |
+| Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
+| ACME email | Connected sites only. A real address. |
+| Cloudflare token | Connected sites only, required. Zone:Read, DNS:Edit (+ Tunnel:Edit if you use tunnels), scoped to one zone. |
+| Cloudflare tunnel name | Connected sites only (default `sophon`). |
+| Pre-issued certificates | Air-gapped sites only, required: the pasted payload (or `@/workspace/path/payload.txt`); see [certificates.md](certificates.md). |
+| Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) fills every one of these except the Cloudflare token, licence key and Gitea database password. |
 | Portainer licence | Business Edition key (a free 5-node starter licence works). |
 
-`sophon-controller --run` does the same non-interactively from exported `SOPHON_*` variables.
+Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
+(passwords are skipped silently). `sophon-controller --run` does the same non-interactively.
 
 Service names (`traefik`, `portainer`, `dns`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.

@@ -160,8 +160,9 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
     if output in (runner, tools) or output in containers:
         raise ValueError('ISO output must not overwrite an input')
     output.parent.mkdir(parents=True, exist_ok=True)
-    # All scratch data stays alongside the output, never in a system temp directory.
-    with tempfile.TemporaryDirectory(prefix='.sophon-bundle-', dir=output.parent) as temporary:
+    # Build on the local temp disk: xorriso reads files in small pieces, which is about 5x slower than a plain copy
+    # over a Windows bind mount (WSL, Docker Desktop). Honour TMPDIR if it needs more room.
+    with tempfile.TemporaryDirectory(prefix='sophon-bundle-') as temporary:
         work = Path(temporary)
         stage = work / 'contents'
         project = stage / 'project'
@@ -208,7 +209,15 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
         ], check=True)
         if not image.is_file() or not image.stat().st_size:
             raise ValueError('xorriso did not produce a nonempty ISO')
-        os.replace(image, output)
+        # The ISO is moved next to the output under a temporary name, then renamed, so a failure never leaves a partial ISO.
+        partial = tempfile.NamedTemporaryFile(prefix='.sophon-bundle-', suffix='.iso', dir=output.parent, delete=False)
+        partial.close()
+        try:
+            shutil.copyfile(image, partial.name)
+            os.replace(partial.name, output)
+        finally:
+            if os.path.exists(partial.name):
+                os.unlink(partial.name)
     return output
 
 
