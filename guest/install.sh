@@ -281,7 +281,8 @@ main() {
     ask prefix 'IPv4 prefix length (1-30)' "$detected_prefix"
     ask gateway 'IPv4 gateway' "$detected_gateway"
     ask dns 'DNS server IPv4 address' "$detected_dns"
-    validate_network "$ip" "$prefix" "$gateway" "$dns"    read -r -s -p 'New core console password: ' password; printf '\n'
+    validate_network "$ip" "$prefix" "$gateway" "$dns"
+    read -r -s -p 'New core console password: ' password; printf '\n'
     read -r -s -p 'Confirm core console password: ' confirmation; printf '\n'
     [[ -n $password && $password == "$confirmation" ]] || die "Passwords are empty or do not match."
     # BusyBox -P 0 reads stdin; omitting -P would prompt/read /dev/tty.

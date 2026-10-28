@@ -67,7 +67,7 @@ class ConsoleTests(unittest.TestCase):
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main', return_value=19) as run, \
                 patch('console.sys.stdin.isatty', return_value=True), \
-                patch('builtins.input', side_effect=lambda prompt: 'y' if prompt.startswith('Deploy') else ''), \
+                patch('builtins.input', side_effect=lambda prompt: ''), \
                 patch('console.getpass.getpass', return_value='token') as hidden, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main([]), 19)
@@ -107,7 +107,7 @@ class ConsoleTests(unittest.TestCase):
 
         def answer(prompt):
             prompts.append(prompt)
-            return 'y' if prompt.startswith('Deploy') else ''
+            return ''
 
         with patch.dict(os.environ, service_values() | site, clear=True), \
                 patch('console.deployment.load_site_settings', return_value=site), \
@@ -144,9 +144,9 @@ class ConsoleTests(unittest.TestCase):
 
     def test_connected_site_asks_for_email_and_token_but_not_certificates(self):
         values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': '', 'SOPHON_ACME_EMAIL': ''}
-        # Inputs: air-gapped?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name, deploy?
+        # Inputs: air-gapped?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name.
         code, prompts, hidden, _ = self.wizard(
-            values, ['n', '', '', '', '', 'me@example.test', '', '', '', 'y'],
+            values, ['n', '', '', '', '', 'me@example.test', '', '', ''],
             ['token', 'long-enough-password', '', ''])
         self.assertEqual(code, 0)
         text = ' '.join(prompts + hidden)
@@ -170,7 +170,7 @@ class ConsoleTests(unittest.TestCase):
     def test_required_values_are_asked_again_and_portainer_password_has_a_minimum(self):
         values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': ''}
         code, prompts, hidden, output = self.wizard(
-            values, ['n', '', '', '', '', 'me@example.test', '', '', '', 'y'],
+            values, ['n', '', '', '', '', 'me@example.test', '', '', ''],
             ['token', '', 'short', 'long-enough-password', '', ''])
         self.assertEqual(code, 0)
         self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt]), 3)
@@ -180,11 +180,11 @@ class ConsoleTests(unittest.TestCase):
         values = service_values() | {name: '' for name, field in deployment.step_fields('configure').items()
                                       if field[2] == 'password'}
         code, prompts, hidden, output = self.wizard(
-            values, ['n', 'y'] + [''] * 7 + ['y'],
-            ['same-password-123', 'same-password-123', 'token', '', ''])
+            values, ['n', 'y'] + [''] * 7,
+            ['same-password-123', 'same-password-123', 'token', ''])
         self.assertEqual(code, 0, output)
         asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]
-        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_GITEA_DB_PASSWORD'])
+        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY'])
 
     def test_secret_prompt_shows_asterisks_and_handles_backspace(self):
         pid, terminal = pty.fork()
@@ -215,16 +215,16 @@ class ConsoleTests(unittest.TestCase):
                 os.kill(pid, signal.SIGKILL)
                 os.waitpid(pid, 0)
 
-    def test_decline_does_not_deploy(self):
+    def test_ctrl_c_during_the_questions_does_not_deploy(self):
         with patch.dict(os.environ, service_values(), clear=True), \
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main') as run, \
                 patch('console.sys.stdin.isatty', return_value=True), \
-                patch('builtins.input', return_value=''), patch('console.getpass.getpass', return_value='token'), \
-                contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(console.main([]), 0)
+                patch('builtins.input', side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(console.main([]), 130)
             run.assert_not_called()
-            self.assertIn('cancelled', output.getvalue())
+            self.assertIn('cancelled', error.getvalue())
 
     def test_real_runner_filters_environment_and_reports_playbook_exit(self):
         with tempfile.TemporaryDirectory() as temporary:

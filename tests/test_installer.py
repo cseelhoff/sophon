@@ -258,6 +258,13 @@ printf '%s|%s|%s\n' "$one" "$two" "$three"
         self.assert_success(result)
         self.assertEqual(result.stdout.splitlines()[-1], '1.1.1.1|9.9.9.9|')
 
+    def test_each_prompt_is_its_own_statement(self):
+        # A joined line once turned the password prompt into extra arguments of the previous command.
+        for line in INSTALL.read_text().splitlines():
+            if "read -r" in line:
+                self.assertTrue(line.lstrip().startswith(("read -r", "while IFS= read", "IFS=. read", "if ")), line)
+        self.assertRegex(INSTALL.read_text(), r'validate_network "\$ip" "\$prefix" "\$gateway" "\$dns"\n\s+read -r -s -p')
+
     def test_nothing_detectable_gives_no_defaults(self):
         result = shell(r'''
 ip() { return 1; }

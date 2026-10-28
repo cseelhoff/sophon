@@ -10,7 +10,7 @@ import termios
 
 import deployment
 
-NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_GITEA_DB_PASSWORD'}
+NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY'}
 INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_NAME'}
 
 
@@ -106,7 +106,8 @@ def prompt_shared_password(values, fields):
     """Offer one password for every service account; returns the names it was applied to."""
     shared = [name for name, field in fields.items()
               if field[2] == 'password' and name not in NOT_SHARED and not values[name]]
-    if not shared or not ask_yes_no('Use the same password for all service accounts?'):
+    # Only offer this when a required password is still missing; the optional Gitea one just follows the answer.
+    if not any(fields[name][4] for name in shared) or not ask_yes_no('Use the same password for all service accounts?'):
         return []
     while True:
         password = read_secret('Password for all accounts (12+ characters): ')
@@ -171,9 +172,6 @@ def main(argv=None):
             if error:
                 print(f'Configuration rejected: {error}', file=sys.stderr)
                 return 2
-            if input(f'Deploy services through Portainer at {values["SOPHON_INFRAVM_IP"]}:9443? [y/N] ').strip().lower() != 'y':
-                print('Deployment cancelled; no service changes were made.')
-                return 0
         except (EOFError, KeyboardInterrupt):
             print('\nDeployment cancelled; no service changes were made.', file=sys.stderr)
             return 130

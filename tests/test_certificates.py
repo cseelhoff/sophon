@@ -188,32 +188,33 @@ class CertificateTests(unittest.TestCase):
             self.assertEqual(deployment.launch(['4-configure.yml']), 0)
         self.assertNotIn('SOPHON_ACME_PAYLOAD', run.call_args.kwargs['env'])
 
-    def test_console_wizard_imports_only_after_confirmation_and_never_exports_the_payload(self):
+    def test_wizard_imports_the_payload_and_deploys_without_a_final_confirmation(self):
         import console
         from test_console import service_values
         encoded = base64.b64encode(self.source.read_bytes()).decode()
-        for confirmed in (False, True):
-            root = self.directory / ('confirmed' if confirmed else 'cancelled')
-            settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example'}
-            with self.subTest(confirmed=confirmed), patch.dict(os.environ, settings, clear=False), \
-                    patch('console.deployment.ROOT', root), \
-                    patch('console.deployment.load_site_settings', return_value={}), \
-                    patch('console.deployment.main', return_value=0) as run, \
-                    patch('console.sys.stdin.isatty', return_value=True), \
-                    patch('console.getpass.getpass', side_effect=lambda prompt:
-                          encoded if prompt.startswith('Pre-issued certificates') else ''), \
-                    patch('builtins.input', side_effect=lambda prompt:
-                          'y' if prompt.startswith('Is this site air-gapped')
-                          or (confirmed and prompt.startswith('Deploy')) else ''), \
-                    contextlib.redirect_stdout(io.StringIO()) as output:
-                self.assertEqual(console.main([]), 0)
-                self.assertNotIn(encoded, output.getvalue())
-                self.assertFalse(os.environ.get('SOPHON_ACME_PAYLOAD'), 'Wizard forwarded the certificate payload')
-            target = root / 'artifacts/traefik/acme.json'
-            self.assertEqual(target.exists(), confirmed)
-            self.assertEqual(run.call_count, int(confirmed))
-            if confirmed:
-                self.assertEqual(json.loads(target.read_bytes()), self.payload)
+        root = self.directory / 'deployed'
+        settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example'}
+        prompts = []
+
+        def answer(prompt):
+            prompts.append(prompt)
+            return 'y' if prompt.startswith('Is this site air-gapped') else ''
+
+        with patch.dict(os.environ, settings, clear=False), \
+                patch('console.deployment.ROOT', root), \
+                patch('console.deployment.load_site_settings', return_value={}), \
+                patch('console.deployment.main', return_value=0) as run, \
+                patch('console.sys.stdin.isatty', return_value=True), \
+                patch('console.getpass.getpass', side_effect=lambda prompt:
+                      encoded if prompt.startswith('Pre-issued certificates') else ''), \
+                patch('builtins.input', side_effect=answer), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(console.main([]), 0)
+            self.assertNotIn(encoded, output.getvalue())
+            self.assertFalse(os.environ.get('SOPHON_ACME_PAYLOAD'), 'Wizard forwarded the certificate payload')
+        self.assertFalse([prompt for prompt in prompts if prompt.startswith('Deploy')])
+        run.assert_called_once()
+        self.assertEqual(json.loads((root / 'artifacts/traefik/acme.json').read_bytes()), self.payload)
 
     def test_missing_expired_wrong_host_and_wrong_private_key_fail(self):
         entries = self.payload['letsencrypt']['Certificates']
