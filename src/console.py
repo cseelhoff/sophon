@@ -14,23 +14,6 @@ NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY'}
 INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_NAME'}
 
 
-def read_certificate(prompt):
-    if not os.isatty(sys.stdin.fileno()):
-        return getpass.getpass(prompt)
-    descriptor = sys.stdin.fileno()
-    original = termios.tcgetattr(descriptor)
-    settings = termios.tcgetattr(descriptor)
-    settings[3] &= ~termios.ICANON
-    settings[6][termios.VMIN] = 1
-    settings[6][termios.VTIME] = 0
-    try:
-        # Canonical TTY input truncates lines at about 4 KiB; certificate stores are much larger.
-        termios.tcsetattr(descriptor, termios.TCSANOW, settings)
-        return getpass.getpass(prompt)
-    finally:
-        termios.tcsetattr(descriptor, termios.TCSANOW, original)
-
-
 def read_secret(prompt):
     """Read a secret from the terminal, echoing one * per character."""
     descriptor = sys.stdin.fileno()
@@ -85,11 +68,7 @@ def ask_yes_no(question, default=False):
 def prompt_field(name, label, kind, current, required):
     """Ask until a required field has a value; Enter keeps the current value or default."""
     while True:
-        if kind == 'certificate':
-            answer = read_certificate(f'{label} (or @/workspace/path/to/payload.txt): ')
-            if answer.startswith('@'):
-                answer = Path(answer[1:]).read_text()
-        elif kind == 'password':
+        if kind == 'password':
             answer = read_secret(f'{label} ({name})' + (' [configured]' if current else '') + ': ')
         else:
             answer = input(f'{label} ({name})' + (f' [{current}]' if current else '') + ': ')
@@ -98,6 +77,8 @@ def prompt_field(name, label, kind, current, required):
             print('This value is required.')
         elif name == 'SOPHON_PORTAINER_ADMIN_PASSWORD' and len(value) < 12:
             print('The Portainer admin password needs at least 12 characters.')
+        elif kind == 'path' and value and not Path(value).is_file():
+            print(f'File not found on this VM: {value}')
         else:
             return value
 
@@ -145,14 +126,17 @@ def main(argv=None):
         print('Settings already exported in the environment are used; Enter keeps a displayed default.')
         fields = deployment.step_fields('configure')
         try:
-            # Offline sites supply a pre-issued certificate payload instead of Let's Encrypt access.
+            # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
             air_gapped = ask_yes_no('Is this site air-gapped (no internet access)?',
-                                    default=bool(values['SOPHON_ACME_PAYLOAD'] and not values['SOPHON_CF_TOKEN']))
-            skipped = INTERNET_ONLY if air_gapped else {'SOPHON_ACME_PAYLOAD'}
+                                    default=bool(values['SOPHON_ACME_FILE'] and not values['SOPHON_CF_TOKEN']))
+            skipped = INTERNET_ONLY if air_gapped else {'SOPHON_ACME_FILE'}
             if air_gapped:
                 values['SOPHON_CF_TOKEN'] = ''
+                if not values['SOPHON_ACME_FILE']:
+                    print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
+                          'run sophon-controller again, or give the path of an acme.json already under /workspace.')
             else:
-                values['SOPHON_ACME_PAYLOAD'] = ''
+                values['SOPHON_ACME_FILE'] = ''
             prompt_shared_password(values, {name: field for name, field in fields.items() if name not in skipped})
             for name, (label, group, kind, default, required) in fields.items():
                 value = values[name]
@@ -165,7 +149,7 @@ def main(argv=None):
                 if kind == 'password' and value:
                     # Supplied by the environment or the shared password; keep it without asking again.
                     continue
-                needed = required or (name == 'SOPHON_ACME_PAYLOAD' and air_gapped) or (
+                needed = required or (name == 'SOPHON_ACME_FILE' and air_gapped) or (
                     name == 'SOPHON_CF_TOKEN' and not air_gapped)
                 values[name] = prompt_field(name, label, kind, value, needed)
             values, error = deployment.validate_settings(values, {}, 'configure')
@@ -188,7 +172,7 @@ def main(argv=None):
     except (OSError, ValueError) as error:
         print(f'Certificate import failed: {error}', file=sys.stderr)
         return 2
-    os.environ.pop('SOPHON_ACME_PAYLOAD', None)
+    os.environ.pop('SOPHON_ACME_FILE', None)
     os.environ.update(values)
     extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
     return deployment.main(arguments + ['--', '4-configure.yml', *extra])

@@ -7,6 +7,10 @@
   DVD drives, disk first. Needs an elevated PowerShell or Hyper-V Administrators membership.
 .EXAMPLE
   .\2-provision-hyperv-local.ps1 -Switch 'Default Switch'
+.EXAMPLE
+  .\2-provision-hyperv-local.ps1 -AttachCertificates   # insert the secret certificate ISO into the existing InfraVM
+.EXAMPLE
+  .\2-provision-hyperv-local.ps1 -DetachCertificates   # eject it again once sophon-controller has used it
 #>
 param(
     [string]$Switch = $env:SOPHON_HYPERV_SWITCH,
@@ -16,7 +20,10 @@ param(
     [int]$MemoryMB = $(if ($env:SOPHON_INFRAVM_MEMORY) { $env:SOPHON_INFRAVM_MEMORY } else { 8192 }),
     [int]$DiskGB = $(if ($env:SOPHON_INFRAVM_DISK_GB) { $env:SOPHON_INFRAVM_DISK_GB } else { 100 }),
     [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\fedora-coreos-live.iso'),
-    [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-deployment.iso')
+    [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-deployment.iso'),
+    [string]$CertificatesIso = (Join-Path $PSScriptRoot 'artifacts\secrets\sophon-certificates.iso'),
+    [switch]$AttachCertificates,
+    [switch]$DetachCertificates
 )
 $ErrorActionPreference = 'Stop'
 $marker = 'sophon-infravm-two-iso-v1'
@@ -28,16 +35,41 @@ $allowed = ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.P
 if (-not $allowed) {
     Write-Host 'Hyper-V needs administrator rights; requesting elevation (UAC)...'
     $arguments = @('-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
-    foreach ($key in $PSBoundParameters.Keys) { $arguments += "-$key", "`"$($PSBoundParameters[$key])`"" }
+    foreach ($key in $PSBoundParameters.Keys) {
+        if ($PSBoundParameters[$key] -is [switch]) { $arguments += "-$key" } else { $arguments += "-$key", "`"$($PSBoundParameters[$key])`"" }
+    }
     Start-Process -FilePath (Get-Process -Id $PID).Path -Verb RunAs -ArgumentList $arguments
     return
 }
 
+$manageCertificates = $AttachCertificates -or $DetachCertificates
+if ($AttachCertificates -and $DetachCertificates) { throw 'Use either -AttachCertificates or -DetachCertificates, not both.' }
 if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') { throw 'VM name must contain 1-80 letters, digits, dots, underscores or hyphens.' }
-if ($Cores -lt 1 -or $MemoryMB -lt 1024 -or $DiskGB -lt 40) { throw 'Provide valid CPU/memory and at least 40 GiB of disk space.' }
-foreach ($iso in $CoreOsIso, $BundleIso) { if (-not (Test-Path -LiteralPath $iso -PathType Leaf)) { throw "Missing installation ISO: $iso (run step 1 first)." } }
+if (-not $manageCertificates) {
+    if ($Cores -lt 1 -or $MemoryMB -lt 1024 -or $DiskGB -lt 40) { throw 'Provide valid CPU/memory and at least 40 GiB of disk space.' }
+    foreach ($iso in $CoreOsIso, $BundleIso) { if (-not (Test-Path -LiteralPath $iso -PathType Leaf)) { throw "Missing installation ISO: $iso (run step 1 first)." } }
+}
 
 try { $vmHost = Get-VMHost } catch { throw "Cannot use Hyper-V as this user ($($_.Exception.Message)). Run from an elevated PowerShell or join Hyper-V Administrators." }
+
+if ($manageCertificates) {
+    $vm = @(Get-VM | Where-Object { $_.Name -eq $Name -and $_.Notes -eq $marker })
+    if ($vm.Count -ne 1) { throw "No managed InfraVM named '$Name' was found; create it first." }
+    $vm = $vm[0]
+    $full = if (Test-Path -LiteralPath $CertificatesIso) { (Resolve-Path -LiteralPath $CertificatesIso).Path } else { $CertificatesIso }
+    $drives = @(Get-VMDvdDrive -VM $vm)
+    if ($DetachCertificates) {
+        foreach ($drive in $drives | Where-Object { $_.Path -eq $full }) { Set-VMDvdDrive -VMDvdDrive $drive -Path $null }
+        Write-Host 'Certificate disk ejected. Delete the ISO from this PC when you no longer need it.'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing certificate ISO: $CertificatesIso (run: .\sophon-provision.ps1 certificates issue)." }
+    $empty = $drives | Where-Object { -not $_.Path } | Select-Object -First 1
+    if ($empty) { Set-VMDvdDrive -VMDvdDrive $empty -Path $full } else { $null = Add-VMDvdDrive -VM $vm -Path $full }
+    Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-controller and answer y to air-gapped."
+    return
+}
+
 if (-not $Switch) {
     $names = @(Get-VMSwitch | ForEach-Object Name)
     if (-not $names) { throw 'This host has no virtual switches; create one in Hyper-V Manager > Virtual Switch Manager.' }
@@ -91,6 +123,9 @@ Set-VMProcessor -VM $vm -Count $Cores
 Set-VMFirmware -VM $vm -EnableSecureBoot Off
 $null = Add-VMDvdDrive -VM $vm -Path $coreos
 $null = Add-VMDvdDrive -VM $vm -Path $bundle
+# A third drive for the secret certificate ISO (air-gapped sites): inserted now if it exists, or later with -AttachCertificates.
+if (Test-Path -LiteralPath $CertificatesIso -PathType Leaf) { $null = Add-VMDvdDrive -VM $vm -Path (Resolve-Path -LiteralPath $CertificatesIso).Path }
+else { $null = Add-VMDvdDrive -VM $vm }
 $disk = Get-VMHardDiskDrive -VM $vm
 $installer = Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $coreos }
 Set-VMFirmware -VM $vm -BootOrder $disk, $installer

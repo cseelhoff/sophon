@@ -23,7 +23,7 @@
 
 **Zone**: `<domain>` itself, public on Cloudflare for DNS-01 and served authoritatively on site by CoreDNS.
 
-**Certificate payload**: the base64 of Traefik's `acme.json` (ACME account + certificates + keys), the one thing carried into a site without internet.
+**Certificate disk**: a small ISO (label `SOPHON_CERTS`) holding the `acme.json` of one wildcard certificate (`<domain>` and `*.<domain>`) with its full chain and private key, no ACME account. The one secret thing carried into a site without internet.
 
 **Site egress**: internet access available to services at runtime. Expected normally; its absence is a supported, degraded mode (no tunnel publishing, no self-renewal).
 

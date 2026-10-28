@@ -1,5 +1,6 @@
 artifacts/
 .env
+payload*.txt
 .tailscale/
 __pycache__/
 .ansible/

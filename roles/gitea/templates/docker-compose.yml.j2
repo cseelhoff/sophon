@@ -59,6 +59,8 @@ services:
       - "traefik.http.routers.gitea.rule=Host(`{{ gitea_hostname }}.{{ gitea_domain }}`)"
       - "traefik.http.routers.gitea.tls=true"
       - "traefik.http.routers.gitea.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gitea.tls.domains[0].main={{ gitea_domain | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.routers.gitea.tls.domains[0].sans=*.{{ gitea_domain | lower | regex_replace('\\.$', '') }}"
       - "traefik.http.services.gitea.loadbalancer.server.port=3000"
 
   # Bundled PostgreSQL on the shared `proxy` network. Postgres binds no host

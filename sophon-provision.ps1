@@ -4,6 +4,8 @@
 .EXAMPLE
   .\sophon-provision.ps1                 # steps 1+2 (default command: provision)
   .\sophon-provision.ps1 prepare         # step 1 only
+  .\sophon-provision.ps1 certificates issue --domain example.com   # connected laptop: write the secret certificate ISO
+  .\sophon-provision.ps1 attach-certificates   # local Hyper-V: insert that ISO into the InfraVM (detach-certificates ejects it)
 .NOTES
   With no SOPHON_HYPERVISOR set it asks where InfraVM should run (or to only download and build, then exit), and
   asks for any missing required setting. Every SOPHON_* variable (and CF_DNS_API_TOKEN) is passed by name.
@@ -97,6 +99,12 @@ if ($command -eq 'provision' -and $interactive -and -not $localHyperV) {
 $names = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^(SOPHON_|CF_DNS_API_TOKEN$)' } | ForEach-Object Name)
 
 $engine = @('docker', 'podman') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+if ($command -in 'attach-certificates', 'detach-certificates') {
+    # Insert or eject the secret certificate ISO (from `certificates issue`) on the local Hyper-V InfraVM.
+    if ($command -eq 'attach-certificates') { & "$PSScriptRoot\2-provision-hyperv-local.ps1" -AttachCertificates }
+    else { & "$PSScriptRoot\2-provision-hyperv-local.ps1" -DetachCertificates }
+    return
+}
 if ($localHyperV -and $command -eq 'provision') {
     & $PSCommandPath prepare
     if ($LASTEXITCODE) { exit $LASTEXITCODE }

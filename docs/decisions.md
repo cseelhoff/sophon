@@ -14,8 +14,9 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    archive fails by name. Internet at the site is normal but optional.
 5. **Egress is a degraded mode, not a different product.** Without it Cloudflare tunnel publishing and
    automatic renewal stop; nothing blocks deployment. Only Traefik ever talks to Let's Encrypt.
-6. **Certificates cross an air gap as one payload.** The whole `acme.json`, issued and renewed on a connected
-   machine, pasted into step 4. The Cloudflare token never leaves that machine. See [certificates.md](certificates.md).
+6. **Certificates cross an air gap on a secret disk.** The wildcard `acme.json`, issued and renewed on a connected
+   machine, is written to a small ISO that is attached to the InfraVM for step 4. The Cloudflare token never leaves
+   that machine. See [certificates.md](certificates.md).
 7. **Passwords are never generated or stored.** The operator supplies each and keeps it in a password
    manager; reruns need the same values. Generated identity state (`acme.json`, ACME account) lives under
    `artifacts/` and is irreplaceable.

@@ -8,10 +8,18 @@ FROM docker.io/library/python:3.13-slim AS runner
 RUN pip install --no-cache-dir ansible-core==2.20.0 cryptography==46.0.3 requests==2.32.5
 WORKDIR /workspace
 
+# Builds the official CoreOS installer so `prepare` can bake the unattended installer into the live ISO.
+FROM docker.io/library/rust:1-slim AS coreos-installer
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config libssl-dev libzstd-dev libudev-dev ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN cargo install coreos-installer --version 0.27.0 --locked --root /out
+
 FROM runner AS tools
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl jq xorriso gdisk busybox-static \
+ && apt-get install -y --no-install-recommends git curl jq xorriso gdisk busybox-static libudev1 libzstd1 \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=coreos-installer /out/bin/coreos-installer /usr/local/bin/coreos-installer
 RUN pip install --no-cache-dir proxmoxer==2.2.0 pypsrp==0.9.1 \
  && ansible-galaxy collection install community.proxmox:==1.6.0 -p /usr/share/ansible/collections
 # docker drives the host engine through its socket; traefik issues certificates offline-capable.

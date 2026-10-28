@@ -37,6 +37,8 @@ services:
       - "traefik.http.routers.keycloak.rule=Host(`{{ keycloak_hostname }}.{{ keycloak_domain }}`)"
       - "traefik.http.routers.keycloak.tls=true"
       - "traefik.http.routers.keycloak.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.keycloak.tls.domains[0].main={{ keycloak_domain | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.routers.keycloak.tls.domains[0].sans=*.{{ keycloak_domain | lower | regex_replace('\\.$', '') }}"
       - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
 
   keycloak-db:

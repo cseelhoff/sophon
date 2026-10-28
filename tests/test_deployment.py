@@ -178,11 +178,11 @@ def test_launcher_passes_only_the_steps_settings():
 
   result, received = run_launcher(['--step', 'configure', '--', '4-configure.yml'], {
     'SOPHON_DEPLOYMENT_STEP': 'configure', 'SOPHON_PROXMOX_PASSWORD': 'DO_NOT_FORWARD',
-    'SOPHON_ACME_PAYLOAD': 'PRIVATE_PAYLOAD', 'SOPHON_DOMAIN': 'example.test'})
+    'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_DOMAIN': 'example.test'})
   assert result.returncode == 0, result.stderr
   environment = received['environment']
   assert environment['SOPHON_DOMAIN'] == 'example.test'
-  assert 'SOPHON_PROXMOX_PASSWORD' not in environment and 'SOPHON_ACME_PAYLOAD' not in environment
+  assert 'SOPHON_PROXMOX_PASSWORD' not in environment and 'SOPHON_ACME_FILE' not in environment
 
 
 def test_launcher_rejects_wrong_step_and_hypervisor():

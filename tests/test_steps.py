@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -372,6 +373,11 @@ def test_portainer_routing_configured_with_traefik():
                 "'traefik.http.routers.portainer.tls.certresolver=letsencrypt' in compose.services.traefik.labels",
                 "'--providers.file.directory=/etc/traefik' in compose.services.traefik.command",
                 "'--certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53' in compose.services.traefik.command",
+                "'--certificatesresolvers.letsencrypt.acme.keyType=EC256' in compose.services.traefik.command",
+                "'traefik.http.routers.portainer.tls.domains[0].main=step4.example' in compose.services.traefik.labels",
+                "'traefik.http.routers.portainer.tls.domains[0].sans=*.step4.example' in compose.services.traefik.labels",
+                "'traefik.http.routers.dashboard.tls.domains[0].main=step4.example' in compose.services.traefik.labels",
+                "'traefik.http.routers.dashboard.tls.domains[0].sans=*.step4.example' in compose.services.traefik.labels",
                 "compose.services.traefik.entrypoint is not defined",
                 "'resolv.conf' not in compose.services['traefik-init'].entrypoint[2]",
                 "'proxy' in compose.services.traefik.networks",
@@ -384,7 +390,38 @@ def test_portainer_routing_configured_with_traefik():
             {'url': 'http://portainer:9000'}]
 
 
+def test_wildcard_certificate_labels_cover_every_certresolver_router():
+    # Traefik does not apply an entrypoint-level `domains` to routers that set their own tls options, so every router
+    # that asks the resolver for a certificate must name the wildcard itself or it would request a per-name certificate.
+    seen = set()
+    for template in sorted((ROOT / 'roles').rglob('*.j2')):
+        text = template.read_text()
+        for router in re.findall(r'traefik\.http\.routers\.([\w-]+)\.tls\.certresolver=letsencrypt', text):
+            seen.add(router)
+            assert f'traefik.http.routers.{router}.tls.domains[0].main={{{{' in text, (template.name, router)
+            assert f'traefik.http.routers.{router}.tls.domains[0].sans=*.{{{{' in text, (template.name, router)
+    assert seen == {'dashboard', 'portainer', 'keycloak', 'gitea', 'coredns', 'ldap-certs'}, seen
+
+
+def test_ldaps_reads_the_wildcard_certificate_by_its_main_domain():
+    # The certs dumper names files after the certificate's main domain, which is now the domain itself.
+    text = (ROOT / 'roles/openldap/templates/docker-compose.yml.j2').read_text()
+    assert 'openldap_tls_domain }}.crt' not in text and 'openldap_tls_domain }}.key' not in text
+    assert text.count('{{ openldap_tls_cert_name }}.crt') == 3 and text.count('{{ openldap_tls_cert_name }}.key') == 1
+    defaults = yaml.safe_load((ROOT / 'roles/openldap/defaults/main.yml').read_text())
+    with tempfile.TemporaryDirectory() as temporary:
+        result, _ = run_fixture(Path(temporary), [
+            {'ansible.builtin.set_fact': {'openldap_domain': 'Slow.Jedi.'}},
+            {'ansible.builtin.set_fact': {'cert_name': defaults['openldap_tls_cert_name'],
+                                          'dns_name': defaults['openldap_tls_domain']}},
+            {'ansible.builtin.assert': {'that': ["cert_name == 'slow.jedi'", "dns_name == 'ldap.Slow.Jedi.'"]}},
+        ])
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 if __name__ == '__main__':
+    test_wildcard_certificate_labels_cover_every_certresolver_router()
+    test_ldaps_reads_the_wildcard_certificate_by_its_main_domain()
     test_step_settings()
     test_service_task_graph()
     test_site_configuration_and_secret_boundary()

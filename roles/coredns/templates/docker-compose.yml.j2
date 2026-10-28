@@ -40,6 +40,8 @@ services:
       - traefik.http.routers.coredns.entrypoints=websecure
       - traefik.http.routers.coredns.tls=true
       - traefik.http.routers.coredns.tls.certresolver=letsencrypt
+      - "traefik.http.routers.coredns.tls.domains[0].main={{ coredns_domain_name | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.routers.coredns.tls.domains[0].sans=*.{{ coredns_domain_name | lower | regex_replace('\\.$', '') }}"
       - traefik.http.routers.coredns.service=coredns
       - traefik.http.services.coredns.loadbalancer.server.port=8081
 networks:

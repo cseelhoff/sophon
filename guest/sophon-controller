@@ -22,8 +22,28 @@ args=(
 if [[ -t 0 && -t 1 ]]; then
     args+=(-it)
 fi
+# A secret disk (label SOPHON_CERTS) carries the pre-issued certificate file for air-gapped sites.
+# It is copied into the project's imports folder (removed again once it is staged) and then left alone.
+certs_device=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
+if [[ -e $certs_device ]]; then
+    mount_point=$(mktemp -d)
+    if sudo mount -o ro "$certs_device" "$mount_point" 2>/dev/null; then
+        if [[ -f $mount_point/acme.json ]]; then
+            install -d -m 700 /var/lib/sophon/project/imports
+            install -m 600 "$mount_point/acme.json" /var/lib/sophon/project/imports/acme.json
+            export SOPHON_ACME_FILE=/workspace/imports/acme.json
+            echo "Found the certificate disk; using its acme.json."
+        else
+            echo "Warning: the certificate disk has no acme.json." >&2
+        fi
+        sudo umount "$mount_point" || true
+    else
+        echo "Warning: the certificate disk could not be mounted; no certificate file was loaded." >&2
+    fi
+    rmdir "$mount_point" 2>/dev/null || true
+fi
 for name in \
-    SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
+    SOPHON_ACME_FILE SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
     SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_NAME SOPHON_KEYCLOAK_REALM \
     SOPHON_KEYCLOAK_REALM_DISPLAY_NAME SOPHON_KEYCLOAK_ADMIN_PASSWORD \
     SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET \

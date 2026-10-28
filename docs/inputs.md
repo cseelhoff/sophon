@@ -69,7 +69,7 @@ service accounts** (default no), then asks for:
 | ACME email | Connected sites only. A real address. |
 | Cloudflare token | Connected sites only, required. Zone:Read, DNS:Edit (+ Tunnel:Edit if you use tunnels), scoped to one zone. |
 | Cloudflare tunnel name | Connected sites only (default `sophon`). |
-| Pre-issued certificates | Air-gapped sites only, required: the pasted payload (or `@/workspace/path/payload.txt`); see [certificates.md](certificates.md). |
+| Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
 | Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) fills every one of these except the Cloudflare token and licence key. |
 | Portainer licence | Business Edition key (a free 5-node starter licence works). |
 

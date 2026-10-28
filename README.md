@@ -90,34 +90,39 @@ Steps 1 to 3 are the same; only step 4 and a recurring renewal differ. Read this
 | Step | Air-gapped difference |
 |---|---|
 | Setup and 1 | Do these on a **connected** laptop. Step 1 caches every image the services need, and the deployment never pulls anything later. |
-| Before 4 | On a connected machine, make the certificate payload (below). Carry the file to the site. |
+| Before 4 | On a connected machine, make the secret certificate ISO (below). Carry it to the site and attach it to the InfraVM. |
 | 2 | None, if the laptop can reach the hypervisor's management network. The laptop itself may be offline once steps 1 and the tools image exist. |
 | 3 | None. It was always offline. |
-| 4 | Answer **y** to "air-gapped" and paste the payload at the *Pre-issued certificates* prompt (or `@/workspace/path/payload.txt`). The payload is **required**; step 4 stops if it does not cover all six names. |
+| 4 | Attach the certificate ISO, run `sophon-controller` and answer **y** to "air-gapped". It finds the disk by itself and offers its file as the default at the *Pre-issued certificates file* prompt (press Enter). The file is **required**; step 4 stops if it does not hold a trusted certificate for the domain and `*.<domain>`. |
 
 Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
 point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
 
 **Renewals (recurring, every 30 days or so).** Certificates last 90 days and nothing on an air-gapped InfraVM can
-renew them, so carry in a fresh payload on a schedule. Run the generator on the connected machine about once a month:
-it reuses certificates that still have more than 30 days left and issues new ones only after that, so an early run
-just returns the same payload. Import it before the day-90 expiry; a monthly cadence always lands in the window
-between day 60 and day 90.
+renew them, so carry in a fresh certificate disk on a schedule. Run the generator on the connected machine about once
+a month: it reuses certificates that still have more than 30 days left and issues new ones only after that, so an
+early run just writes the same disk again. Import it before the day-90 expiry; a monthly cadence always lands in the
+window between day 60 and day 90.
 
 1. **On the connected machine**, for the first time and every renewal:
    ```bash
-   bash sophon-provision.sh certificates issue --domain example.com --output payload.txt
+   bash sophon-provision.sh certificates issue --domain example.com
    ```
    (PowerShell: `.\sophon-provision.ps1 certificates issue ...`.) It prompts for an ACME email and a Cloudflare token
-   (or reads `CF_DNS_API_TOKEN` from your environment) and writes one base64 line, the whole `acme.json`, never the
-   token. `--output` avoids PowerShell's `>` re-encoding the text. Carry the file to the site; it holds private keys.
-   Run it on the same machine each time (it keeps the ACME account in the `sophon-state` volume).
-2. **On the InfraVM console**, the first time paste it during step 4 as above. For a renewal run:
+   (or reads `CF_DNS_API_TOKEN` from your environment) and writes `artifacts/secrets/sophon-certificates.iso`
+   (volume label `SOPHON_CERTS`): one `acme.json` with your wildcard certificate for the domain and `*.<domain>`, its
+   full chain and its private key, never the token or the ACME account. The ISO holds a private key: carry it to the
+   site, and delete it afterwards. Run the command on the same machine each time (it keeps the ACME account in the
+   `sophon-state` volume).
+2. **Attach it to the InfraVM.** On this PC's Hyper-V: `.\sophon-provision.ps1 attach-certificates` (a new VM gets it
+   automatically if the ISO already exists). Elsewhere, attach the ISO as a CD/DVD in your hypervisor.
+3. **On the InfraVM console**, run `sophon-controller` the first time. For a renewal run:
    ```bash
    sophon-controller --refresh-certificates
    ```
-   Answer **y** to "air-gapped", paste the new payload, and re-enter the existing service credentials (a refresh
-   currently reruns the full service deployment). If the certificates have already expired, the same steps recover the site.
+   Answer **y** to "air-gapped" and press Enter at the certificate prompt, and re-enter the existing service credentials
+   (a refresh currently reruns the full service deployment). If the certificates have already expired, the same
+   steps recover the site. Afterwards eject the disk (`.\sophon-provision.ps1 detach-certificates` on local Hyper-V).
 
 See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.
 

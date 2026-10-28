@@ -46,8 +46,8 @@ FIELDS = {
     'SOPHON_DOMAIN': ('Domain', 'Site', 'host', '', True),
     'SOPHON_ACME_EMAIL': ('ACME email', 'Site', 'email', 'admin@example.com', False),
     'SOPHON_CF_TOKEN': ('Cloudflare API token', 'Site', 'password', '', False),
-    'SOPHON_ACME_PAYLOAD': ('Pre-issued certificates: base64 acme.json (optional; contains private keys)',
-                            'Site', 'certificate', '', False),
+    'SOPHON_ACME_FILE': ('Pre-issued certificates file on this VM (air-gapped sites; the secret disk is read automatically)',
+                         'Site', 'path', '', False),
     'SOPHON_CF_TUNNEL_NAME': ('Cloudflare tunnel name', 'Site', 'text', 'sophon', False),
     'SOPHON_PORTAINER_ADMIN_PASSWORD': ('Portainer admin password (12+ characters)', 'Access', 'password', '', True),
     'SOPHON_PORTAINER_LICENSE_KEY': ('Portainer licence key', 'Access', 'password', '', False),
@@ -69,7 +69,7 @@ STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv')}
 PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Hyper-V', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
-                    if field[2] not in ('password', 'certificate') and field[1] not in PROVISION_GROUPS and name != 'SOPHON_DOMAIN')
+                    if field[2] not in ('password', 'path') and field[1] not in PROVISION_GROUPS and name != 'SOPHON_DOMAIN')
 
 
 PROVIDER_GROUPS = {'Proxmox': 'proxmox', 'Network': 'proxmox', 'vCenter': 'vcenter', 'Hyper-V': 'hyperv'}
@@ -95,11 +95,9 @@ def validate_settings(current, changes, step='provision'):
     definitions = step_fields(step)
     if not isinstance(changes, dict) or not changes.keys() <= definitions.keys():
         return None, 'Unexpected deployment setting.'
-    if any(not isinstance(value, str)
-           or len(value) > (2 * 1024 * 1024 if name == 'SOPHON_ACME_PAYLOAD' else 4096)
-           or (name != 'SOPHON_ACME_PAYLOAD' and any(ord(character) < 32 for character in value))
-           for name, value in changes.items()):
-        return None, 'Settings must be bounded strings: 4096 characters per single-line setting, or 2 MiB for certificates.'
+    if any(not isinstance(value, str) or len(value) > 4096 or any(ord(character) < 32 for character in value)
+           for value in changes.values()):
+        return None, 'Settings must be single-line strings of at most 4096 characters.'
     values = current | changes
     provider = values.get('SOPHON_HYPERVISOR', 'proxmox').strip()
     if provider not in CHOICES['SOPHON_HYPERVISOR']:
@@ -107,7 +105,7 @@ def validate_settings(current, changes, step='provision'):
     for name, (label, group, kind, default, required) in definitions.items():
         if field_provider(group) not in (None, provider):
             continue
-        value = values[name] if kind in ('password', 'certificate') else values[name].strip()
+        value = values[name] if kind == 'password' else values[name].strip()
         values[name] = value
         if required and not value.strip():
             return None, f'{group}: {label} ({name}) is required.'
@@ -139,21 +137,25 @@ def validate_settings(current, changes, step='provision'):
                 return None, 'VM name must contain 1-80 letters, digits, dots, underscores or hyphens.'
         except ValueError:
             return None, f'{label} is not a valid {kind} value.'
-    if values.get('SOPHON_ACME_PAYLOAD'):
+    if values.get('SOPHON_ACME_FILE'):
         import certificates
         try:
-            certificates.decode_payload(values['SOPHON_ACME_PAYLOAD'], values['SOPHON_DOMAIN'])
-        except (ValueError, OSError) as error:
-            return None, str(error)
+            certificates.validate(values['SOPHON_ACME_FILE'], values['SOPHON_DOMAIN'])
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            return None, f'Certificate file {values["SOPHON_ACME_FILE"]} is not usable: {error}'
     return values, None
 
 
 def stage_certificates(values):
+    """Move a pre-issued certificate file into Traefik's seed location, then remove the copy it came from."""
     values = dict(values)
-    encoded = values.pop('SOPHON_ACME_PAYLOAD', '')
-    if encoded:
+    source = values.pop('SOPHON_ACME_FILE', '')
+    if source:
         import certificates
-        certificates.import_payload(encoded, values['SOPHON_DOMAIN'], ROOT / 'artifacts/traefik/acme.json')
+        certificates.import_file(source, values['SOPHON_DOMAIN'], ROOT / 'artifacts/traefik/acme.json')
+        # The secret disk's file was copied under the project's imports folder for this run; do not leave it behind.
+        if Path(source).parent == ROOT / 'imports':
+            Path(source).unlink(missing_ok=True)
     return values
 
 
@@ -171,8 +173,8 @@ def load_site_settings():
 
 def launch(arguments):
     environment = dict(os.environ)
-    # The certificate payload is staged to a file; the playbook never needs it in its environment.
-    environment.pop('SOPHON_ACME_PAYLOAD', None)
+    # The certificate file is staged to Traefik's seed location; the playbook never needs its path.
+    environment.pop('SOPHON_ACME_FILE', None)
     try:
         return subprocess.run(['ansible-playbook', *arguments], env=environment).returncode
     except OSError:

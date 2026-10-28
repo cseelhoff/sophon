@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import unittest
@@ -517,8 +518,7 @@ udevadm() { [[ $1 == settle ]]; }
     def test_wrapper_argument_and_environment_boundary(self):
         source = (SCRIPTS / "sophon-controller").read_text()
         allowed = source.split("for name in", 1)[1].split("\ndo", 1)[0].replace("\\", "").split()
-        self.assertEqual(set(allowed), {name for name, field in step_fields("configure").items()
-                                       if field[2] != "certificate"})
+        self.assertEqual(set(allowed), set(step_fields("configure")))
         with fixture() as directory:
             ready = directory / "ready"
             ready.touch()
@@ -530,7 +530,6 @@ udevadm() { [[ $1 == settle ]]; }
                        SOPHON_INFRAVM_IP="10.0.60.2", SOPHON_VNET_DNS="1.1.1.1",
                        SOPHON_NFS_IP="forbidden", SOPHON_VNET_GATEWAY="forbidden",
                        SOPHON_KOPIA_ADMIN_PASSWORD="forbidden", SOPHON_PROXMOX_PASSWORD="forbidden",
-                       SOPHON_ACME_PAYLOAD="forbidden",
                        SOPHON_DEPLOYMENT_STEP="provision", CONTAINER_HOST="ssh://forbidden")
             for args in ([], ["--dashboard", "--port", "41327"], ["--run", "--state-dir", "/workspace/artifacts/deployment/services"],
                          ["--help"], ["--", "--tags", "gitea"]):
@@ -550,6 +549,51 @@ udevadm() { [[ $1 == settle ]]; }
                 self.assertNotIn("-it", command)
                 self.assertNotIn("--privileged", command)
                 self.assertFalse(any("podman.sock" in arg or arg.startswith("/:/") for arg in command))
+
+    def test_certificate_disk_is_copied_into_the_project_and_unmounted(self):
+        with fixture() as directory:
+            ready = directory / "ready"
+            ready.touch()
+            data = directory / "persistent"
+            disk = directory / "disk"
+            disk.mkdir()
+            (disk / "acme.json").write_text('{"letsencrypt":{}}')
+            script = directory / "controller"
+            script.write_text((SCRIPTS / "sophon-controller").read_text()
+                              .replace("/run/user/1000/sophon-ready", str(ready))
+                              .replace("/var/lib/sophon", str(data)))
+            env = tools(directory)
+            sudo = directory / "bin/sudo"
+            sudo.write_text('#!/usr/bin/env bash\n'
+                            'echo "sudo $*" >> "$STUB_ROOT/sudo-calls"\n'
+                            '[[ $1 != mount ]] || cp -r "${@: -2:1}"/. "${@: -1}"\n')
+            sudo.chmod(0o755)
+            env["SOPHON_CERTS_DEVICE"] = str(disk)
+            result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
+            self.assert_success(result)
+            staged = data / "project/imports/acme.json"
+            self.assertEqual(staged.read_text(), '{"letsencrypt":{}}')
+            self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o600)
+            command = calls(directory, "podman")[-1]
+            self.assertIn("SOPHON_ACME_FILE", command[:command.index("sophon:latest")])
+            self.assertNotIn("/workspace/imports/acme.json", " ".join(command))
+            commands = (directory / "sudo-calls").read_text().splitlines()
+            self.assertTrue(commands[0].startswith("sudo mount -o ro "))
+            self.assertTrue(commands[1].startswith("sudo umount "))
+
+    def test_without_a_certificate_disk_no_file_is_offered(self):
+        with fixture() as directory:
+            ready = directory / "ready"
+            ready.touch()
+            script = directory / "controller"
+            script.write_text((SCRIPTS / "sophon-controller").read_text()
+                              .replace("/run/user/1000/sophon-ready", str(ready)))
+            env = tools(directory)
+            env["SOPHON_CERTS_DEVICE"] = str(directory / "absent")
+            result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
+            self.assert_success(result)
+            command = calls(directory, "podman")[-1]
+            self.assertNotIn("SOPHON_ACME_FILE", command[:command.index("sophon:latest")])
 
     def test_wrapper_refuses_root_or_not_ready(self):
         with fixture() as directory:

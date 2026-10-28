@@ -63,10 +63,11 @@ resolver and other clients are never changed.
 
 ## Certificates
 
-Traefik issues one single-name certificate per service through Let's Encrypt DNS-01 (Cloudflare), so no
-inbound reachability is needed. Without egress, the whole `acme.json` is carried in as one payload
-([certificates.md](certificates.md)).
-The certs-dumper container extracts the LDAP certificate from it.
+Traefik uses one wildcard certificate (`<domain>` and `*.<domain>`, an ECDSA P-256 key) from Let's Encrypt DNS-01
+(Cloudflare) for every service, so no inbound reachability is needed. Each router names the wildcard itself, so Traefik
+never requests per-service certificates. Without egress, a small `acme.json` holding just that certificate and key is
+carried in on a small secret ISO ([certificates.md](certificates.md)). The certs-dumper container extracts it for LDAPS and
+names the files after the certificate's main domain (`<domain>.crt`, `<domain>.key`).
 
 ## State
 

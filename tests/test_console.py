@@ -29,38 +29,6 @@ def service_values():
 
 
 class ConsoleTests(unittest.TestCase):
-    def test_large_certificate_paste_is_not_echoed_or_truncated_in_a_real_terminal(self):
-        pid, terminal = pty.fork()
-        if pid == 0:
-            os.execv(sys.executable, [sys.executable, '-c',
-                f'import sys,termios; sys.path.insert(0,{str(ROOT / "src")!r}); import console; '
-                'before=termios.tcgetattr(0); value=console.read_certificate("CERTIFICATE: "); '
-                'assert termios.tcgetattr(0)==before; '
-                'assert value=="X"*120000; print("COMPLETE_PRIVATE_PASTE",flush=True)'])
-        try:
-            output = b''
-            deadline = time.monotonic() + 15
-            while b'CERTIFICATE: ' not in output:
-                self.assertLess(time.monotonic(), deadline, 'Certificate prompt did not start')
-                if select.select([terminal], [], [], 1)[0]:
-                    output += os.read(terminal, 4096)
-            data = b'X' * 120000 + b'\n'
-            while data:
-                data = data[os.write(terminal, data):]
-            while b'COMPLETE_PRIVATE_PASTE' not in output:
-                self.assertLess(time.monotonic(), deadline, 'Large certificate input was truncated or blocked')
-                if select.select([terminal], [], [], 1)[0]:
-                    output += os.read(terminal, 4096)
-            self.assertNotIn(b'XXXX', output)
-            _, status = os.waitpid(pid, 0)
-            pid = None
-            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
-        finally:
-            os.close(terminal)
-            if pid is not None:
-                os.kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
-
     def test_run_dispatch_and_hidden_input(self):
         environment = service_values()
         with patch.dict(os.environ, environment, clear=True), \
@@ -153,19 +121,26 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('SOPHON_ACME_EMAIL', text)
         self.assertIn('SOPHON_CF_TOKEN', text)
         self.assertIn('SOPHON_CF_TUNNEL_NAME', text)
-        self.assertNotIn('SOPHON_ACME_PAYLOAD', text)
+        self.assertNotIn('SOPHON_ACME_FILE', text)
         self.assertTrue([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt])
 
-    def test_air_gapped_site_asks_only_for_the_certificate_payload(self):
+    def test_air_gapped_site_asks_only_for_the_certificate_file(self):
         values = service_values() | {'SOPHON_CF_TOKEN': 'WOULD_LEAK'}
-        # Inputs: air-gapped?, then DNS, IP, domain, realm, realm name (no email, token or tunnel name).
-        code, prompts, hidden, _ = self.wizard(values, ['y', '', '', '', '', ''], ['not-a-payload', '', ''])
+        with tempfile.TemporaryDirectory() as directory:
+            bad = Path(directory) / 'acme.json'
+            bad.write_text('{"letsencrypt":{"Account":{}}}')
+            # Inputs: air-gapped?, then DNS, IP, domain, a missing path, the real path, realm, realm name
+            # (no email, token or tunnel name).
+            code, prompts, hidden, output = self.wizard(
+                values, ['y', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], ['', ''])
         text = ' '.join(prompts + hidden)
         self.assertNotIn('SOPHON_ACME_EMAIL', text)
         self.assertNotIn('SOPHON_CF_TOKEN', text)
         self.assertNotIn('SOPHON_CF_TUNNEL_NAME', text)
-        self.assertEqual(code, 2)  # the payload is asked for, validated and rejected before any deployment
-        self.assertTrue([prompt for prompt in hidden if 'Pre-issued certificates' in prompt])
+        self.assertIn('File not found', output)
+        self.assertIn('SOPHON_CERTS', output)
+        self.assertEqual(code, 2)  # the file is asked for, validated and rejected before any deployment
+        self.assertEqual(len([prompt for prompt in prompts if 'SOPHON_ACME_FILE' in prompt]), 2)
 
     def test_required_values_are_asked_again_and_portainer_password_has_a_minimum(self):
         values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': ''}

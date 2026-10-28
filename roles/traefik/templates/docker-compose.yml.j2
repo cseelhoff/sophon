@@ -43,6 +43,7 @@ services:
       - --entrypoints.websecure.http.tls.certResolver=letsencrypt
       - --certificatesresolvers.letsencrypt.acme.email={{ traefik_acme_email }}
       - --certificatesresolvers.letsencrypt.acme.storage=/data/acme.json
+      - --certificatesresolvers.letsencrypt.acme.keyType=EC256
       - --certificatesresolvers.letsencrypt.acme.caserver={{ traefik_acme_server }}
       - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
       - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
@@ -62,10 +63,14 @@ services:
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.tls.domains[0].main={{ domain_name | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.routers.dashboard.tls.domains[0].sans=*.{{ domain_name | lower | regex_replace('\\.$', '') }}"
       - "traefik.http.routers.portainer.rule=Host(`portainer.{{ domain_name | lower | regex_replace('\\.$', '') }}`)"
       - "traefik.http.routers.portainer.entrypoints=websecure"
       - "traefik.http.routers.portainer.tls=true"
       - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portainer.tls.domains[0].main={{ domain_name | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.routers.portainer.tls.domains[0].sans=*.{{ domain_name | lower | regex_replace('\\.$', '') }}"
       - "traefik.http.routers.portainer.service=portainer@file"
 
 volumes:

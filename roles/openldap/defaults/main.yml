@@ -39,6 +39,9 @@ openldap_example_admin_password: ""
 openldap_tls_enabled: true
 openldap_tls_enforce: true
 openldap_tls_domain: "ldap.{{ openldap_domain }}"
+# The certs dumper names its files after the certificate's main domain. The one wildcard
+# certificate is issued for the domain itself (plus *.domain), so LDAPS reads <domain>.crt.
+openldap_tls_cert_name: "{{ openldap_domain | lower | regex_replace('\\.$', '') }}"
 
 # Certs dumper (extracts ACME certs from Traefik for LDAPS)
 openldap_certs_dumper_image_name: "ldez/traefik-certs-dumper"
