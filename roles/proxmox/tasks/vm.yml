@@ -1,5 +1,5 @@
 ---
-# Create the blank InfraVM with two ISOs, or start the one this workflow already
+# Create the blank InfraVM with the installer and deployment ISOs, or start the one this workflow already
 # made. Needs main.yml first. Existing disks and media are never rewritten.
 
 - name: Find guests that already use the InfraVM name

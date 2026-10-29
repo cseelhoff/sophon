@@ -19,9 +19,10 @@ COMMANDS = {
 HELP = """usage: docker run --rm -it -v <project>:/workspace -v <engine socket>:/var/run/docker.sock \\
            -v sophon-state:/state sophon-tools <command> [args]
 
-  prepare                 step 1: cache downloads, build runner image and deployment ISO
+  prepare                 step 1: cache downloads, build the runner image, the installer ISO and the deployment ISO
   provision               steps 1-2: create the blank InfraVM (settings via -e SOPHON_*)
-  certificates issue ...  make the base64 certificate payload (--output FILE)
+  certificates issue ...  air-gapped sites: issue the wildcard certificate and write the secret certificate ISO
+                          (artifacts/secrets/sophon-certificates.iso; --output-iso, --output-file)
   test | shell            development helpers
 Anything else runs as a command in the container."""
 

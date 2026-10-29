@@ -67,7 +67,7 @@ options:
     type: int
     default: 100
   coreos_iso:
-    description: Path of the unchanged stock CoreOS live ISO on this machine.
+    description: Path of the Sophon installer ISO (the stock CoreOS live ISO with the unattended installer baked in) on this machine.
     type: path
   bundle_iso:
     description: Path of the Sophon deployment ISO on this machine.

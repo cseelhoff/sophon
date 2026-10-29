@@ -23,14 +23,17 @@ install media, then creates and starts a blank VM with the media attached.
 
 1. CoreOS installs itself and reboots. Nothing to type.
 2. When asked, choose a password for `core`, then log in as `core`.
-3. Run `sophon-deploy`. Confirm the network, then enter your domain and credentials. It deploys CoreDNS, Traefik,
+3. Run `sophon-deploy`. It first asks for the network (the VM starts on a DHCP lease; address, prefix and gateway
+   default to it, so Enter keeps them as a static address, and DNS defaults to `1.1.1.1`). Then answer **N** to
+   "air-gapped" unless the site has no internet, and enter your domain and credentials. It deploys CoreDNS, Traefik,
    OpenLDAP, Keycloak and Gitea.
 
 **No internet at the VM's site?** Also follow [Air-gapped sites](#air-gapped-sites).
 
 ### Laptop settings
 
-The script builds a tools image the first time (about 560 MB), then asks for anything it doesn't know. Passwords are
+The script builds a tools image the first time (about 560 MB; allow several minutes, because it compiles
+`coreos-installer`), then asks for anything it doesn't know. Passwords are
 prompted for and never put on a command line. To skip the questions, copy [.env.example](.env.example) to `.env`
 and fill it in (git-ignored; the scripts read it automatically).
 
@@ -44,6 +47,23 @@ cp .env.example .env              # PowerShell: Copy-Item .env.example .env
 | vCenter | `SOPHON_VCENTER_URL`, `_USERNAME`, `_DATACENTER`, `_CLUSTER`, `_DATASTORE`, `_NETWORK`, password |
 | Hyper-V on **this** Windows PC (PowerShell script only) | nothing up front: runs as you, one UAC prompt, asks which virtual switch |
 | Hyper-V on another host | `SOPHON_HYPERV_HOST`, `_USERNAME`, `_SWITCH`, password; WinRM enabled on the host (see [docs/manual-commands.md](docs/manual-commands.md)) |
+
+### Cloudflare API token
+
+Needed at `sophon-deploy` (connected sites) for Let's Encrypt DNS-01 and tunnel publishing. Your domain's DNS must be on Cloudflare.
+
+1. Go to <https://dash.cloudflare.com/profile/api-tokens> > **Create Token** > **Create Custom Token**.
+2. Add these three permissions:
+
+   | Resource | Scope | Permission | Used for |
+   |---|---|---|---|
+   | Zone | Zone | Read | find the zone (Let's Encrypt) |
+   | Zone | DNS | Edit | DNS-01 challenge records and tunnel CNAMEs |
+   | Account | Cloudflare Tunnel | Edit | tunnel routes (skip if you don't use tunnels) |
+
+3. **Zone Resources:** Include > Specific zone > your domain. **Account Resources:** Include > your account.
+4. **Continue to summary** > **Create Token**, and copy it now (it is shown once). Paste it at the *Cloudflare token*
+   prompt, or set `CF_DNS_API_TOKEN` for `certificates issue` (that needs only the two Zone permissions).
 
 ### Another hypervisor (for example VMware Workstation)
 
@@ -60,52 +80,50 @@ Run `prepare`, then do the VM part by hand:
 
 ### If the install stops
 
-If the installer cannot find exactly one blank disk or the deployment ISO, it says so on the console and stops. Run it
-yourself (this also lets you choose the disk):
-`sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon && sudo bash /mnt/sophon/install.sh`.
+If the installer can't find exactly one blank disk or the deployment ISO, it says why and stops. Run it by hand (this
+also lets you pick the disk):
+`sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon && sudo bash /mnt/sophon/install.sh`
 
-`sophon-deploy --network` asks for the network again later. Both ISOs can be detached once `sophon-deploy` finishes.
+Later, `sophon-deploy --network` asks for the network again. Detach both ISOs once `sophon-deploy` finishes.
+
+### Using the services
+
+Portainer is at `https://portainer.<domain>` (also `traefik`, `dns`, `ldap`, `auth`, `git`). `https://<VM address>:9443`
+is Portainer's own self-signed bootstrap port (certificate for `localhost`): ignore it.
+
+Point clients at CoreDNS on the VM for your domain only. On Windows, in an elevated PowerShell:
+
+```powershell
+Add-DnsClientNrptRule -Namespace '.example.com' -NameServers '<VM address>'; Clear-DnsClientCache
+# undo: Get-DnsClientNrptRule | Where-Object Namespace -eq '.example.com' | Remove-DnsClientNrptRule -Force
+```
+
+Test with `Resolve-DnsName` (`nslookup` ignores these rules). Don't point a machine's whole DNS at the VM if the VM's
+upstream forwards back to it (for example the Hyper-V Default Switch address): lookups loop.
 
 ### Air-gapped sites
 
-Do part 1 on a **connected** laptop: it caches every image, and nothing is pulled later. The laptop can then be offline
-if it can still reach the hypervisor. The VM installs offline; a secret certificate disk replaces Let's Encrypt. Add
-these to the install above:
+Run the laptop step while connected (it caches every image). The VM installs offline; a secret certificate disk
+replaces Let's Encrypt.
 
-1. **On the connected machine**, make the certificate disk (first time and every renewal):
-   ```bash
-   bash sophon-provision.sh certificates issue --domain example.com
-   ```
-   (PowerShell: `.\sophon-provision.ps1 certificates issue ...`.) It prompts for an ACME email and a Cloudflare token
-   (or reads `CF_DNS_API_TOKEN` from your environment) and writes `artifacts/secrets/sophon-certificates.iso`
-   (volume label `SOPHON_CERTS`): one `acme.json` with your wildcard certificate for the domain and `*.<domain>`, its
-   full chain and its private key, never the token or the ACME account. It holds a private key: carry it to the
-   site and delete it afterwards. Run the command on the same machine each time (it keeps the ACME account in the
-   `sophon-state` volume).
-2. **Attach it to the VM** as a CD/DVD (on this PC's Hyper-V: `.\sophon-provision.ps1 attach-certificates`; a new VM
-   gets it automatically if the ISO already exists).
-3. **On the console**, run `sophon-deploy` and answer **y** to "air-gapped". It finds the disk and offers its file at the
-   *Pre-issued certificates file* prompt (press Enter). The file is **required**; `sophon-deploy` stops if it does not
-   hold a trusted certificate for the domain and `*.<domain>`.
+1. **Connected machine:** `bash sophon-provision.sh certificates issue --domain example.com`
+   (PowerShell: `.\sophon-provision.ps1 certificates issue ...`). It asks for an ACME email and a Cloudflare token
+   (the two Zone permissions above) and writes `artifacts/secrets/sophon-certificates.iso` (label `SOPHON_CERTS`):
+   your wildcard certificate, chain and private key, no token or ACME account. It is a secret: delete it after use.
+   Run it on the same machine each time.
+2. **Attach it to the VM** as a CD/DVD (local Hyper-V: `.\sophon-provision.ps1 attach-certificates`; a new VM gets it
+   automatically if the ISO exists).
+3. **On the console:** run `sophon-deploy`, answer **y** to "air-gapped", and press Enter at the certificate prompt.
 
-Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
-point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
+Without a token there is no tunnel publishing. Keep the VM's clock accurate.
 
-**Renewals (every 30 days or so).** Certificates last 90 days and nothing on an air-gapped InfraVM can renew them.
-Repeat step 1 monthly: it reuses certificates with more than 30 days left, so an early run just writes the same disk
-again, and a monthly cadence always lands between day 60 and day 90. Attach the new disk and run on the console:
+**Renewals (monthly).** The certificate lasts 90 days and an air-gapped VM can't renew it. Repeat steps 1-2, then run
+`sophon-deploy --refresh-certificates` (answer **y**, press Enter, re-enter your existing credentials; it reruns the
+full deployment). Eject the disk afterwards (`.\sophon-provision.ps1 detach-certificates`). Details:
+[docs/certificates.md](docs/certificates.md).
 
-```bash
-sophon-deploy --refresh-certificates
-```
+### Upgrading
 
-Answer **y** to "air-gapped", press Enter at the certificate prompt, and re-enter the existing service credentials
-(a refresh currently reruns the full service deployment). If the certificates have already expired, the same steps
-recover the site. Afterwards eject the disk (`.\sophon-provision.ps1 detach-certificates` on local Hyper-V).
-
-See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.
-
-**Rebuild the tools image before preparing new media:** `docker build -t sophon-tools -f Containerfile .`
-(use `podman` if that is your engine). The launchers reuse an existing tools image.
-Then run `prepare -e prepare_force=true`. **Do not apply these database/LDAP changes to existing volumes without
-migration:** see [the upgrade boundary](docs/inputs.md#upgrading-from-the-previous-pins).
+Rebuild the tools image (`docker build -t sophon-tools -f Containerfile .`, or `podman`), then run
+`bash sophon-provision.sh prepare -e prepare_force=true`. New ISOs only affect **new** VMs; don't swap images under
+existing PostgreSQL, LDAP or Portainer volumes without migrating ([details](docs/inputs.md#upgrading-from-the-previous-pins)).

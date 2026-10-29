@@ -3,8 +3,9 @@
   Step 2 for Hyper-V on THIS machine, as the signed-in user (no WinRM, no credentials, no Python).
 .DESCRIPTION
   Run after step 1 (the container's `prepare`) has built the ISOs. Creates the same blank InfraVM as the
-  WinRM provider: Generation 2, Secure Boot off, static memory, no checkpoints, one dynamic disk, both ISOs as
-  DVD drives, disk first. Needs an elevated PowerShell or Hyper-V Administrators membership.
+  WinRM provider: Generation 2, Secure Boot off, static memory, no checkpoints, one dynamic disk, the installer and
+  deployment ISOs as DVD drives plus a third drive for the secret certificate ISO (empty unless it exists), disk first.
+  Needs an elevated PowerShell or Hyper-V Administrators membership.
 .EXAMPLE
   .\2-provision-hyperv-local.ps1 -Switch 'Default Switch'
 .EXAMPLE

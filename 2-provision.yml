@@ -1,6 +1,6 @@
 ---
 # Steps 1+2 - connected laptop with hypervisor access. Validates inputs, builds
-# the media (1-prepare.yml), then creates a blank InfraVM with both ISOs attached.
+# the media (1-prepare.yml), then creates a blank InfraVM with the installer and deployment ISOs attached.
 - name: Validate provisioning inputs
   hosts: localhost
   gather_facts: false
@@ -39,16 +39,16 @@
       ansible.builtin.include_role:
         name: hyperv
       when: hypervisor_provider == 'hyperv'
-    - name: Create InfraVM with a blank disk and two ISOs
+    - name: Create InfraVM with a blank disk and the installer and deployment ISOs
       ansible.builtin.include_role:
         name: "{{ hypervisor_provider }}"
         tasks_from: vm
     - name: Hand off to the InfraVM console
       ansible.builtin.debug:
         msg: |
-          InfraVM is running. Step 3: open its hypervisor console (the CoreOS live
-          environment) and run:
-            sudo mkdir -p /mnt/sophon
-            sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
-            sudo bash /mnt/sophon/install.sh
-          Then log in as core and run sophon-deploy (step 4).
+          InfraVM is running. Step 3 installs CoreOS by itself and reboots; watch it on the VM's
+          hypervisor console (nothing to type). If it stops and says why, see "If the install stops"
+          in the README.
+          On the first boot, choose the password for the user core, log in, and run: sophon-deploy (step 4).
+          It first asks for the network (the VM starts on DHCP). At an air-gapped site, attach the
+          certificate disk (artifacts/secrets/sophon-certificates.iso) before running it.

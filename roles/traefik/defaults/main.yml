@@ -22,7 +22,7 @@ traefik_compose_project: "traefik"
 traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
 
 # Normal reruns keep the live store; sophon-deploy --refresh-certificates
-# sets this to replace it with the imported payload.
+# sets this to replace it with the imported certificate file.
 traefik_acme_replace_existing: false
 
 # Short-lived helper that mounts the data volume so acme.json can be moved in and

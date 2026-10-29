@@ -5,7 +5,7 @@ How the pieces fit and what breaks what. Vocabulary is in [../CONTEXT.md](../CON
 ## Shape
 
 ```text
-laptop ── hypervisor API ──▶ blank InfraVM + two ISOs     (steps 1-2)
+laptop ── hypervisor API ──▶ blank InfraVM + installer and deployment ISOs   (steps 1-2)
 installer ISO ── install.sh --auto ──▶ persistent CoreOS    (step 3, unattended)
 InfraVM: rootless Portainer + runner container ──▶ services (step 4)
 ```
@@ -57,7 +57,8 @@ failures from the left.
 
 Two resolvers share port 53 on InfraVM. Podman's aardvark-dns serves `10.89.0.1:53` for container names;
 CoreDNS binds only `127.0.0.1:53` and `<infravm_ip>:53` for the zone, and anything it does not own goes to
-the operator's upstream DNS (`SOPHON_VNET_DNS`). Containers reach each other through aardvark-dns, which
+the operator's upstream DNS (`SOPHON_VNET_DNS`, default `1.1.1.1`; it must be a real resolver and never a machine that
+forwards its own DNS back to InfraVM, or lookups loop). Containers reach each other through aardvark-dns, which
 forwards unknown names to CoreDNS. CoreDNS is a custom build (`coredns-dockerdiscovery`) that publishes
 records from container labels and can sync Cloudflare tunnel routes. Before CoreDNS exists the runner maps
 the service names to InfraVM in its own `/etc/hosts` ([4-configure.yml](../4-configure.yml)); the host

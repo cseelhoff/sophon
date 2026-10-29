@@ -1,6 +1,7 @@
 ---
 # Step 1 - connected laptop. Builds everything the later steps carry:
-# the stock CoreOS live ISO, container archives, the offline runner and
+# the stock CoreOS live ISO, the installer ISO built from it (artifacts/coreos/sophon-installer.iso, with the
+# unattended installer baked in), container archives, the offline runner and
 # artifacts/bootstrap/sophon-deployment.iso. Cached inputs are reused;
 # `-e prepare_force=true` refreshes them.
 - name: Prepare installation media

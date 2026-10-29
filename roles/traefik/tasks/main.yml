@@ -2,7 +2,7 @@
 # Deploy Traefik through Portainer's HTTP API (no SSH).
 
 # Without egress (no Cloudflare token) or on an explicit refresh, certificates
-# can only come from the imported payload, so it must be complete and trusted.
+# can only come from the imported certificate file, so it must be complete and trusted.
 - name: Validate imported certificates
   ansible.builtin.command:
     argv:

@@ -75,7 +75,7 @@ options:
     type: int
     default: 100
   coreos_iso:
-    description: Local unchanged Fedora CoreOS full live ISO.
+    description: Local Sophon installer ISO (the stock Fedora CoreOS live ISO with the unattended installer baked in).
     type: path
   bundle_iso:
     description: Local reusable Sophon artifact ISO.

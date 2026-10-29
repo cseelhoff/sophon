@@ -82,7 +82,7 @@ service accounts** (default no), then asks for:
 |---|---|
 | Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
 | ACME email | Connected sites only. A real address. |
-| Cloudflare token | Connected sites only, required. Zone:Read, DNS:Edit (+ Tunnel:Edit if you use tunnels), scoped to one zone. |
+| Cloudflare token | Connected sites only, required. A custom token with three permissions: Zone / Zone / Read, Zone / DNS / Edit and Account / Cloudflare Tunnel / Edit (tunnel permission only if you use tunnels), scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
 | Cloudflare tunnel name | Connected sites only (default `sophon`). |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
 | Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) fills every one of these except the Cloudflare token and licence key. |

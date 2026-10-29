@@ -9,8 +9,9 @@ Use this page when you want to see or customise them. Every setting is listed in
 docker build -t sophon-tools -f Containerfile .      # or: podman build ...
 ```
 
-Needs internet and about 560 MB; repeat only when `Containerfile` changes (tool versions are pinned there). Changes
-to playbooks and `src/` need no rebuild, because the project folder is mounted into the container on every run.
+Needs internet and about 560 MB; the first build takes several minutes because it compiles `coreos-installer`. Repeat
+only when `Containerfile` changes (tool versions are pinned there). Changes to playbooks and `src/` need no rebuild,
+because the project folder is mounted into the container on every run.
 
 ## Which socket to mount
 
@@ -37,7 +38,8 @@ docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/dock
 docker run --rm -it -v "${PWD}:/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
 ```
 
-Repeat runs rebuild the deployment ISO only when an input changed (`-e prepare_force=true` as extra arguments forces it).
+Repeat runs rebuild the deployment ISO and the installer ISO (`artifacts/coreos/sophon-installer.iso`) only when an
+input changed (`-e prepare_force=true` as extra arguments forces it).
 
 ## Step 2: provision
 
@@ -84,8 +86,8 @@ Switch Manager). Then:
 docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/docker.sock -v sophon-state:/state -e SOPHON_HYPERVISOR=hyperv -e SOPHON_HYPERV_HOST=hv.example.com -e SOPHON_HYPERV_USERNAME=Administrator -e SOPHON_HYPERV_SWITCH="External" -e SOPHON_HYPERV_PASSWORD sophon-tools provision
 ```
 
-It creates a Generation 2 VM (Secure Boot off, static memory, no checkpoints) with one blank dynamic disk and both ISOs
-as DVD drives, disk first in the boot order, uploads each ISO once (hash-named, verified, skipped on reruns; allow a
+It creates a Generation 2 VM (Secure Boot off, static memory, no checkpoints) with one blank dynamic disk and the installer
+and deployment ISOs as DVD drives, disk first in the boot order, uploads each ISO once (hash-named, verified, skipped on reruns; allow a
 while on the first run, since they travel over WinRM), and starts it. Optional settings: `SOPHON_HYPERV_PORT` (5985 HTTP
 with NTLM message encryption, or 5986 HTTPS with a verified certificate, plus `SOPHON_HYPERV_CA_FILE`) and
 `SOPHON_HYPERV_PATH` (a folder on the host such as `D:\Hyper-V`, default is the host's VM path). This provider has been
@@ -103,7 +105,23 @@ Python or container:
 
 `-Switch` (or `SOPHON_HYPERV_SWITCH`) names an existing virtual switch (if omitted, the script lists them and asks);
 `-Path`, `-Name`, `-Cores`, `-MemoryMB` and `-DiskGB` are optional (`SOPHON_HYPERV_PATH` and `SOPHON_INFRAVM_*` are
-honoured). It creates the same VM as the remote provider. Verified end to end on a real host.
+honoured). It creates the same VM as the remote provider, plus a third DVD drive for the secret certificate ISO
+(inserted if `artifacts\secrets\sophon-certificates.iso` exists, otherwise empty). Verified end to end on a real host.
+For an air-gapped site, `.\2-provision-hyperv-local.ps1 -AttachCertificates` inserts that ISO into the existing VM and
+`-DetachCertificates` ejects it (the same as `.\sophon-provision.ps1 attach-certificates` / `detach-certificates`).
+
+## Certificates (air-gapped sites only)
+
+On a connected machine, to make the secret certificate ISO (`artifacts/secrets/sophon-certificates.iso`, label
+`SOPHON_CERTS`; see [certificates.md](certificates.md)). No engine socket is needed, but the `sophon-state` volume keeps
+the ACME account and issued certificate between runs:
+
+```bash
+docker run --rm -it -v "$(pwd):/workspace" -v sophon-state:/state -e CF_DNS_API_TOKEN sophon-tools certificates issue --domain example.com
+```
+
+It prompts for the ACME email (and the Cloudflare token if `CF_DNS_API_TOKEN` is unset, hidden). Options:
+`--email`, `--timeout`, `--output-iso PATH`, `--output-file PATH` (also write the bare `acme.json`).
 
 ## Notes
 

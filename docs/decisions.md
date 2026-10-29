@@ -25,12 +25,13 @@ The choices the design rests on, newest understanding first. Each is cheap to st
 8. **State is either reconstructible or irreplaceable.** A rerun rebuilds the Keycloak realm, seeded users and
    routing. Gitea repositories, user-created LDAP entries and `acme.json` need a backup, which is deliberately
    out of scope for now.
-9. **Addresses are inputs.** The InfraVM address is entered at the console, from outside the DHCP pool, not
-   discovered; every service name resolves to it.
+9. **Addresses are inputs.** The InfraVM address is confirmed at the console in step 4 (the VM starts on its DHCP
+   lease, which is the default; reserve it or type a static one from outside the DHCP pool) and saved, not
+   rediscovered; every service name resolves to it.
 10. **Existing VMs are never adopted or rewritten.** A VM with the InfraVM name is only started, and only if
     this workflow marked it.
 11. **One container image is the laptop toolchain.** `docker run <flags> sophon-tools <command>` runs Ansible, xorriso,
-    govc and Traefik from an image built from the `Containerfile`; the InfraVM runner is that file's smaller
+    govc, coreos-installer and Traefik from an image built from the `Containerfile`; the InfraVM runner is that file's smaller
     `runner` stage. Docker or Podman is the only laptop requirement (no Nix, bash, Python or Ansible install),
     and the commands are plain `docker run` lines that behave the same in bash and PowerShell. The tools image
     drives the host engine through its socket for image pulls, saves and builds, and reaches the hypervisor
