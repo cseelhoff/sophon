@@ -23,6 +23,11 @@
 - name: when block for if admin not initialized
   when: portainer_admin_check.status == 404
   block:
+    - name: Require the first-run Portainer setup token
+      ansible.builtin.assert:
+        that: portainer_setup_token | length > 0
+        fail_msg: "Portainer requires its one-time setup token. Run sophon-deploy on InfraVM; restart sophon-host-bootstrap if its setup window expired."
+
     - name: Validate Portainer password meets requirements
       ansible.builtin.assert:
         that:
@@ -33,6 +38,8 @@
       ansible.builtin.uri:
         url: "{{ infravm_portainer_url }}/api/users/admin/init"
         method: POST
+        headers:
+          X-Setup-Token: "{{ portainer_setup_token }}"
         body_format: json
         body:
           Username: "admin"
@@ -40,6 +47,7 @@
         validate_certs: false
         status_code: [200]
       register: portainer_init
+      no_log: true
 
     - name: Display Portainer admin credentials
       ansible.builtin.debug:

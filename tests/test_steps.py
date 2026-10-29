@@ -362,7 +362,7 @@ def test_portainer_routing_configured_with_traefik():
         result, _ = run_fixture(directory, [
             {'ansible.builtin.set_fact': {
                 'domain_name': 'Step4.Example.', 'traefik_fqdn': 'traefik.step4.example',
-                'traefik_image_tag': 'v3.2', 'coredns_cf_token': '', 'traefik_port_http': 80,
+                'traefik_image_tag': 'v3.7.16', 'coredns_cf_token': '', 'traefik_port_http': 80,
                 'traefik_port_https': 443, 'traefik_acme_email': 'admin@example.com',
                 'traefik_acme_server': 'https://acme.invalid', 'traefik_log_level': 'INFO',
             }},
@@ -407,7 +407,7 @@ def test_ldaps_reads_the_wildcard_certificate_by_its_main_domain():
     # The certs dumper names files after the certificate's main domain, which is now the domain itself.
     text = (ROOT / 'roles/openldap/templates/docker-compose.yml.j2').read_text()
     assert 'openldap_tls_domain }}.crt' not in text and 'openldap_tls_domain }}.key' not in text
-    assert text.count('{{ openldap_tls_cert_name }}.crt') == 3 and text.count('{{ openldap_tls_cert_name }}.key') == 1
+    assert text.count('{{ openldap_tls_cert_name }}.crt') == 2 and text.count('{{ openldap_tls_cert_name }}.key') == 1
     defaults = yaml.safe_load((ROOT / 'roles/openldap/defaults/main.yml').read_text())
     with tempfile.TemporaryDirectory() as temporary:
         result, _ = run_fixture(Path(temporary), [

@@ -1,7 +1,7 @@
 ---
 # Keycloak configuration
 keycloak_image_name: "quay.io/keycloak/keycloak"
-keycloak_image_tag: "26.5"
+keycloak_image_tag: "26.8.1"
 
 # Network
 keycloak_port: 8080
@@ -18,7 +18,7 @@ keycloak_admin_user: "admin"
 # container. Bundled Postgres on the shared `proxy` network, same pattern as
 # gitea-db: no host port, no traefik labels.
 keycloak_db_type: "postgres"
-keycloak_postgres_image: "docker.io/library/postgres:16-alpine"
+keycloak_postgres_image: "docker.io/library/postgres:18.6-alpine3.24"
 keycloak_db_host: "keycloak-db"
 keycloak_db_port: 5432
 keycloak_db_name: "keycloak"
@@ -27,7 +27,7 @@ keycloak_db_user: "keycloak"
 # Prestaged tars loaded before the stack deploys (<vendor>-<image>_<tag>.tar).
 keycloak_image_tars:
   - "{{ sophon_containers_dir }}/keycloak-keycloak_{{ keycloak_image_tag }}.tar"
-  - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_{{ keycloak_postgres_image.split(':')[-1] }}.tar"
 
 # LDAP integration (requires openldap role deployed first)
 openldap_domain: "{{ domain_name }}"

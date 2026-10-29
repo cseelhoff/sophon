@@ -59,7 +59,7 @@ def bundle(media):
         "guest/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
         "guest/sophon-network": NETWORK.read_text(),
         "guest/sophon-set-password": (SCRIPTS / "sophon-set-password").read_text(),
-        "project/bootstrap/portainer-image": "docker.io/portainer/portainer-ee:2.33.3\n",
+        "project/bootstrap/portainer-image": "docker.io/portainer/portainer-ee:3.0.0\n",
         "project/bootstrap/portainer-archive": "portainer.tar\n",
         "project/artifacts/containers/portainer.tar": "fixture portainer",
     }.items():
@@ -112,7 +112,7 @@ elif name == "podman":
         status = int(args[2] not in state["images"])
     elif args[0] == "load":
         image = ("sophon:latest" if args[-1].endswith("runner.tar")
-                 else "docker.io/portainer/portainer-ee:2.33.3")
+                 else "docker.io/portainer/portainer-ee:3.0.0")
         state["images"].append(image)
     elif args[:2] == ["network", "exists"]:
         status = int(not state["network"])
@@ -127,8 +127,12 @@ elif name == "podman":
         status = int(not state["container"])
     elif args[0] == "run":
         state["container"] = True
+        if os.environ.get("SOPHON_PORTAINER_SETUP_TOKEN"):
+            (root / "received-setup-token").write_text(os.environ["SOPHON_PORTAINER_SETUP_TOKEN"])
     elif args[0] == "inspect":
         print("true")
+    elif args[0] == "logs":
+        print("setup_token=first-fixture-token\n\x1b[36msetup_token=\x1b[0mlatest-fixture-token", file=sys.stderr)
     statefile.write_text(json.dumps(state))
     sys.exit(status)
 elif name == "df":
@@ -662,7 +666,7 @@ udevadm() { [[ $1 == settle ]]; }
     def test_wrapper_argument_and_environment_boundary(self):
         source = (SCRIPTS / "sophon-deploy").read_text()
         allowed = source.split("for name in", 1)[1].split("\ndo", 1)[0].replace("\\", "").split()
-        self.assertEqual(set(allowed), set(step_fields("configure")))
+        self.assertEqual(set(allowed), set(step_fields("configure")) | {"SOPHON_PORTAINER_SETUP_TOKEN"})
         with fixture() as directory:
             script, ready, _, env = self.controller(directory)
             ready.touch()
@@ -681,6 +685,9 @@ udevadm() { [[ $1 == settle ]]; }
                 self.assertIn("SOPHON_DEPLOYMENT_STEP=configure", command[:boundary])
                 self.assertIn("SOPHON_CF_TOKEN", command[:boundary])
                 self.assertIn("SOPHON_INFRAVM_IP", command[:boundary])
+                self.assertIn("SOPHON_PORTAINER_SETUP_TOKEN", command[:boundary])
+                self.assertNotIn("latest-fixture-token", " ".join(command))
+                self.assertEqual((directory / "received-setup-token").read_text(), "latest-fixture-token")
                 self.assertNotIn("secret with spaces", " ".join(command))
                 self.assertFalse(any("forbidden" in arg or "=bootstrap" in arg for arg in command))
                 self.assertIn("/var/lib/sophon/project:/workspace:Z", command)

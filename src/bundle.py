@@ -138,14 +138,14 @@ def fingerprint(root, output, runner, containers, tools, portainer_image, portai
 
 
 def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
-                  portainer_image='docker.io/portainer/portainer-ee:2.41.0',
-                  portainer_archive='portainer-portainer-ee_2.41.0.tar'):
+                  portainer_image='docker.io/portainer/portainer-ee:3.0.0',
+                  portainer_archive='portainer-portainer-ee_3.0.0.tar'):
     root = regular_path(root, directory=True)
     for name in (*PROJECT, *(f'guest/{name}' for name in (*GUEST, 'install.sh'))):
         path = root / name
         regular_path(path, directory=path.is_dir())
     runner = regular_path(runner)
-    tools = regular_path(bootstrap_tools or root / 'artifacts/bootstrap/busybox')
+    tools = regular_path(bootstrap_tools or root / 'artifacts/bootstrap/busybox-1.38.0-musl')
     if not containers:
         raise ValueError('An explicit container list or manifest is required')
     containers = [regular_path(path) for path in containers]
@@ -227,8 +227,8 @@ def main(argv=None):
     parser.add_argument('--output', type=Path)
     parser.add_argument('--runner', type=Path)
     parser.add_argument('--bootstrap-tools', type=Path)
-    parser.add_argument('--portainer-image', default='docker.io/portainer/portainer-ee:2.41.0')
-    parser.add_argument('--portainer-archive', default='portainer-portainer-ee_2.41.0.tar')
+    parser.add_argument('--portainer-image', default='docker.io/portainer/portainer-ee:3.0.0')
+    parser.add_argument('--portainer-archive', default='portainer-portainer-ee_3.0.0.tar')
     parser.add_argument('--container', type=Path, action='append',
                         help='Expected container archive; repeat for every required image')
     parser.add_argument('--manifest', type=Path,
@@ -246,7 +246,7 @@ def main(argv=None):
             containers = [root / path for path in containers]
         output = Path(os.path.abspath(args.output or root / 'artifacts/bootstrap/sophon-deployment.iso'))
         runner = args.runner or root / 'artifacts/bootstrap/runner.tar'
-        tools = args.bootstrap_tools or root / 'artifacts/bootstrap/busybox'
+        tools = args.bootstrap_tools or root / 'artifacts/bootstrap/busybox-1.38.0-musl'
         stamp = output.with_name(output.name + '.stamp')
         current = fingerprint(root, output, runner, containers, tools, args.portainer_image, args.portainer_archive)
         if (current and not args.force and output.is_file() and stamp.is_file()

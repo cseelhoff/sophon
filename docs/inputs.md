@@ -82,13 +82,44 @@ service accounts** (default no), then asks for:
 | Cloudflare tunnel name | Connected sites only (default `sophon`). |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
 | Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) fills every one of these except the Cloudflare token and licence key. |
-| Portainer licence | Business Edition key (a free 5-node starter licence works). |
+| Portainer licence | Business Edition key (the current free program covers three nodes). |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
 (passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
 
 Service names (`traefik`, `portainer`, `dns`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.
+
+## Upgrading from the previous pins
+
+The 2026-10-28 pins target **fresh installations**. Existing VMs are not upgraded just by preparing new ISOs;
+provision still leaves their installed system alone. Back up application data and verify restoration before
+replacing any stack or image.
+
+* **Portainer 3.0.0 is STS, not LTS.** Its image was published October 28, ahead of the October 29 release-note
+  date. Docker/Podman environments remain available, but 3.x's new features focus on Kubernetes. Back up the
+  Portainer data volume before trying it; do not assume an upgraded database can be opened by 2.x.
+  New instances require a one-time setup token. `sophon-deploy` reads it from the local Portainer logs and
+  passes it only to step 4, by environment variable, without printing or saving it. The runner sends it as
+  `X-Setup-Token` when creating the first administrator; initialized instances do not use it.
+* **PostgreSQL 16 -> 18 requires migration.** Both Gitea and Keycloak now use `18.6-alpine3.24`. The supported
+  PostgreSQL 18 volume mount is `/var/lib/postgresql`, not `/var/lib/postgresql/data`. Dump each old database
+  with the old server, restore into a fresh PostgreSQL 18 volume, then verify the applications. Never point 18
+  at a 16 data directory or delete a volume to make an upgrade start.
+* **LDAP changes image families.** Bitnami's current image requires a commercial subscription; its public legacy
+  image is frozen. The maintained `vegardit/openldap:2.6.10` image uses separate `openldap_database` and
+  `openldap_config` volumes. The old `openldap_data` volume is mounted read-only and startup explicitly refuses
+  to proceed if it contains data, rather than silently starting an empty directory.
+  Export the old LDAP entries with its `slapcat`, retain an offline copy, initialize and validate a separate
+  new stack, and import the directory data (not Bitnami's vendor-specific `cn=config`). Reconcile seed-entry
+  collisions and verify passwords, POSIX attributes, `memberOf`, policy and Keycloak binds before cutover.
+  Keep the original volume until restoration and the new deployment are verified.
+* **Gitea 1.22 -> 28.2.0 and Keycloak 26.5 -> 26.8.1** may migrate their application schemas. Read their
+  upstream upgrade notes and retain backups of both application and database volumes.
+
+For a fresh deployment, first rebuild `sophon-tools` from the updated [Containerfile](../Containerfile), then
+run step 1 with `-e prepare_force=true`. CoreDNS archives, CoreOS metadata and BusyBox cache paths are versioned
+so the previous cached artifacts cannot satisfy these new pins.
 
 ## If something fails
 

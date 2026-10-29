@@ -131,6 +131,40 @@ window between day 60 and day 90.
 
 See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.
 
+## Pinned releases (2026-10-28)
+
+| Product | Version |
+|---|---|
+| [Portainer Business Edition](https://docs.portainer.io/portainer-documentation/sts/release-notes) | **3.0.0 STS**, not LTS; image published October 28, release notes dated October 29 |
+| [Traefik](https://github.com/traefik/traefik/releases/tag/v3.7.16) | 3.7.16 (services and certificate tool) |
+| [Gitea](https://docs.gitea.com/installation/install-with-docker/) | 28.2.0 |
+| [Keycloak](https://github.com/keycloak/keycloak/releases/tag/26.8.1) | 26.8.1 |
+| [PostgreSQL](https://www.postgresql.org/support/versioning/) | 18.6, Alpine 3.24 image; supported by Gitea's current Compose example and [Keycloak](https://www.keycloak.org/server/db) |
+| [OpenLDAP container](https://github.com/vegardit/docker-openldap) | `vegardit/openldap:2.6.10`, the vendor's current Debian-packaged 2.6 image, replacing frozen Bitnami Legacy |
+| [Traefik certs dumper](https://github.com/ldez/traefik-certs-dumper/releases/tag/v2.11.4) | 2.11.4 |
+| [CoreDNS](https://github.com/coredns/coredns/releases/tag/v1.15.0) | 1.15.0, custom discovery plugin commit `961da07798aef59715f7d8f8802185863a3909c8` |
+| [Fedora CoreOS stable](https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/44.20260928.3.2/x86_64/meta.json) | 44.20260928.3.2 installer media |
+
+Build tools are pinned in [Containerfile](Containerfile): Python 3.14.10 (Debian trixie; Ansible 2.21 does not
+support Python 3.15), Ansible Core 2.21.5,
+cryptography 50.0.2, requests 2.34.2, proxmoxer 2.3.0, pypsrp 0.9.1, community.proxmox 2.1.0,
+Rust 1.99.1, coreos-installer 0.27.0, Docker CLI 29.9.2 and govc 0.56.2 (with upstream SHA-256).
+CoreDNS uses Go 1.27.3 (the published Alpine 3.24 builder tag) and an Alpine 3.24.3 runtime in
+[its build file](roles/prepare/files/coredns.Containerfile); the installer helper is BusyBox 1.38.0-musl.
+The local build file separates the builder and runtime tags; the upstream shared Alpine argument would select
+a nonexistent Go image when set to the full Alpine patch version.
+These are explicit release tags, not digest locks of every OS/Python transitive dependency. Local `sophon:latest`
+and `sophon-tools:latest` name this project's builds, not upstream release channels.
+
+The maintained LDAP image deliberately follows Debian's OpenLDAP package rather than upstream's newer source
+release; Debian security revisions arrive in vendor rebuilds of the same version tag. CoreOS's installed-host
+automatic update policy is unchanged.
+
+**Rebuild the tools image before preparing new media:** `docker build -t sophon-tools -f Containerfile .`
+(use `podman` if that is your engine). The launchers reuse an existing tools image.
+Then run `prepare -e prepare_force=true`. **Do not apply these database/LDAP changes to existing volumes without
+migration:** see [the upgrade boundary](docs/inputs.md#upgrading-from-the-previous-pins).
+
 ## Layout
 
 ```text
@@ -172,4 +206,10 @@ tests/              unit and fixture tests
 bash sophon-provision.sh test   # unit, fixture and step-boundary tests
 ```
 
-The 4-step flow has been verified end to end on Proxmox and vCenter; Hyper-V is newer and not yet verified on a real host.
+With the pinned LDAP and certificate-dumper images preloaded and the engine socket mounted,
+`SOPHON_CONTAINER_TESTS=1 bash sophon-provision.sh test` also exercises Traefik v3 certificate extraction,
+real LDAP TLS, seed-account binds, group membership, password hashing, persistence across restart and rejection
+of legacy volumes.
+
+The previous pins' 4-step flow was verified end to end on Proxmox and vCenter; this version refresh still needs
+a fresh-VM deployment check. Hyper-V is newer and not yet verified on a real host.

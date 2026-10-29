@@ -33,12 +33,22 @@
         path: "{{ prepare_coredns_src }}"
         state: absent
     - name: Clone CoreDNS Docker Discovery source
-      ansible.builtin.command:
-        argv: [git, clone, --depth, "1", --branch, master, "{{ prepare_coredns_repo }}", "{{ prepare_coredns_src }}"]
-      changed_when: true
+      ansible.builtin.git:
+        repo: "{{ prepare_coredns_repo }}"
+        dest: "{{ prepare_coredns_src }}"
+        version: "{{ coredns_plugin_revision }}"
     - name: Build the CoreDNS image
       ansible.builtin.command:
-        argv: [docker, build, -t, "{{ prepare_coredns_image }}", "{{ prepare_coredns_src }}"]
+        argv:
+          - docker
+          - build
+          - -f
+          - "{{ playbook_dir }}/roles/prepare/files/coredns.Containerfile"
+          - --build-arg
+          - "COREDNS_VERS={{ prepare_coredns_version }}"
+          - -t
+          - "{{ prepare_coredns_image }}"
+          - "{{ prepare_coredns_src }}"
       changed_when: true
     - name: Save the CoreDNS archive
       ansible.builtin.command:
@@ -47,7 +57,7 @@
 
 - name: Record the complete archive list
   ansible.builtin.copy:
-    content: "{{ (prepare_image_tars + ['coredns-dockerdiscovery.tar']) | map('regex_replace', '^', 'artifacts/containers/') | list | to_nice_json }}\n"
+    content: "{{ (prepare_image_tars + [prepare_coredns_tar | basename]) | map('regex_replace', '^', 'artifacts/containers/') | list | to_nice_json }}\n"
     dest: "{{ prepare_manifest_path }}"
     mode: "0644"
 
@@ -59,9 +69,9 @@
   loop: ["{{ prepare_coreos_metadata_path }}", "{{ coreos_iso_path }}"]
   register: prepare_coreos_cache
 
-- name: Download the official CoreOS stable stream metadata
+- name: Download the pinned CoreOS stable release metadata
   ansible.builtin.get_url:
-    url: "{{ prepare_coreos_stream_url }}"
+    url: "{{ prepare_coreos_metadata_url }}"
     dest: "{{ prepare_coreos_metadata_path }}"
     mode: "0644"
     force: true
@@ -70,18 +80,18 @@
 - name: Read the live ISO location and digest
   ansible.builtin.set_fact:
     prepare_coreos_media: >-
-      {{ (lookup('file', prepare_coreos_metadata_path) | from_json)
-         .architectures.x86_64.artifacts.metal.formats.iso.disk }}
+      {{ (lookup('file', prepare_coreos_metadata_path) | from_json).images['live-iso'] }}
 
 - name: Require trusted HTTPS media metadata
   ansible.builtin.assert:
     that:
-      - prepare_coreos_media.location is match('^https://builds\.coreos\.fedoraproject\.org/.*\.iso$')
+      - prepare_coreos_metadata_url is match('^https://builds\.coreos\.fedoraproject\.org/prod/streams/stable/builds/[0-9.]+/x86_64/meta\.json$')
+      - prepare_coreos_media.path == 'fedora-coreos-' ~ prepare_coreos_version ~ '-live-iso.x86_64.iso'
       - prepare_coreos_media.sha256 is match('^[a-f0-9]{64}$')
 
 - name: Download the unchanged full CoreOS live ISO
   ansible.builtin.get_url:
-    url: "{{ prepare_coreos_media.location }}"
+    url: "{{ prepare_coreos_metadata_url | dirname }}/{{ prepare_coreos_media.path }}"
     dest: "{{ coreos_iso_path }}"
     checksum: "sha256:{{ prepare_coreos_media.sha256 }}"
     mode: "0644"

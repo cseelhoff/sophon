@@ -77,7 +77,7 @@ services:
       - POSTGRES_USER={{ gitea_db_user }}
       - POSTGRES_PASSWORD={{ gitea_db_password }}
     volumes:
-      - gitea_db_data:/var/lib/postgresql/data
+      - gitea_db_data:/var/lib/postgresql
     networks:
       - proxy
     healthcheck:

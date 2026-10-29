@@ -30,11 +30,11 @@ class BundleTests(unittest.TestCase):
                 self.write(f'{name}/tasks/main.yml')
         for name in (*bundle.GUEST, 'install.sh'):
             self.write(f'guest/{name}', f'#!/bin/sh\n# {name}\n')
-        self.tools = self.write('artifacts/bootstrap/busybox', 'static-helper-fixture')
+        self.tools = self.write('artifacts/bootstrap/busybox-1.38.0-musl', 'static-helper-fixture')
         self.runner = self.directory / 'runner.tar'
         self.runner.write_bytes(b'runner-image')
         self.containers = [self.directory / name for name in (
-            'portainer-portainer-ee_2.41.0.tar', 'keycloak-keycloak_26.5.tar',
+            'portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar',
             'coredns-dockerdiscovery.tar',
         )]
         for container in self.containers:
@@ -244,7 +244,7 @@ class BundleTests(unittest.TestCase):
             self.assertTrue((extracted / 'guest' / name).stat().st_mode & 0o111, name)
         self.assertTrue((extracted / 'tools/busybox').stat().st_mode & 0o111)
         self.assertEqual((extracted / 'project/bootstrap/portainer-image').read_text(),
-                         'docker.io/portainer/portainer-ee:2.41.0\n')
+                         'docker.io/portainer/portainer-ee:3.0.0\n')
 
 
 @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is not installed')
@@ -281,16 +281,16 @@ class PrepareTests(unittest.TestCase):
             self.write(f'guest/{name}')
         self.write('ansible.cfg', '[defaults]\nhost_key_checking=False\n')
         live_iso = self.write('artifacts/coreos/fedora-coreos-live.iso', 'cached-stock-live-iso')
-        self.write('artifacts/coreos/stable.json', json.dumps({
-            'architectures': {'x86_64': {'artifacts': {'metal': {'formats': {'iso': {'disk': {
-                'location': 'https://builds.coreos.fedoraproject.org/cached.iso',
+        self.write('artifacts/coreos/44.20260928.3.2.json', json.dumps({
+            'images': {'live-iso': {
+                'path': 'fedora-coreos-44.20260928.3.2-live-iso.x86_64.iso',
                 'sha256': hashlib.sha256(live_iso.read_bytes()).hexdigest(),
-            }}}}}}}}))
+            }}}))
         self.write('Containerfile', 'FROM scratch\n')
         self.write('artifacts/bootstrap/runner.tar', 'cached-runner')
         self.write('artifacts/bootstrap/runner.tar.id', 'sha256:cached')
-        self.write('artifacts/bootstrap/busybox', 'cached-helper')
-        for name in ('portainer-portainer-ee_2.41.0.tar', 'keycloak-keycloak_26.5.tar', 'coredns-dockerdiscovery.tar'):
+        self.write('artifacts/bootstrap/busybox-1.38.0-musl', 'cached-helper')
+        for name in ('portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'):
             self.write('artifacts/containers/' + name, name)
         # Building and inspecting the local runner image is allowed; pulls, saves and git are not.
         forbidden = self.root / 'fake-bin'
@@ -319,11 +319,11 @@ class PrepareTests(unittest.TestCase):
                 'coreos_iso_path': str(live_iso),
                 'installer_iso_path': str(self.root / 'artifacts/coreos/sophon-installer.iso'),
                 'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-deployment.iso'),
-                'portainer_image': 'docker.io/portainer/portainer-ee:2.41.0',
-                'portainer_image_tarname': 'portainer-portainer-ee_2.41.0.tar',
-                'prepare_coreos_stream_url': 'https://must-not-contact.invalid/stable.json',
+                'portainer_image': 'docker.io/portainer/portainer-ee:3.0.0',
+                'portainer_image_tarname': 'portainer-portainer-ee_3.0.0.tar',
+                'prepare_coredns_tar': str(self.root / 'artifacts/containers/coredns-dockerdiscovery.tar'),
                 'prepare_container_images': [
-                    'docker.io/portainer/portainer-ee:2.41.0', 'quay.io/keycloak/keycloak:26.5'],
+                    'docker.io/portainer/portainer-ee:3.0.0', 'quay.io/keycloak/keycloak:26.8.1'],
             },
             'tasks': [{'ansible.builtin.import_role': {'name': 'prepare'}}],
         }]))
@@ -343,7 +343,7 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(live_iso.read_text(), 'cached-stock-live-iso', 'the stock ISO must stay unchanged')
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())
         self.assertEqual([Path(path).name for path in manifest], [
-            'portainer-portainer-ee_2.41.0.tar', 'keycloak-keycloak_26.5.tar', 'coredns-dockerdiscovery.tar'])
+            'portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'])
         # A changed runner image must be re-saved (saving is the only thing that should be attempted).
         image_id.write_text('sha256:rebuilt')
         changed = run()

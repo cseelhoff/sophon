@@ -10,8 +10,9 @@ COMMANDS = {
     'prepare': lambda args: ['ansible-playbook', '1-prepare.yml', *args],
     'provision': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision.yml'],
     'certificates': lambda args: ['python3', 'src/certificates.py', *args],
-    'test': lambda args: ['sh', '-c', 'python3 -m unittest discover -s tests "$@" && python3 tests/test_deployment.py '
-                          '>/dev/null && python3 tests/test_steps.py', 'sh', *args],
+    # </dev/null: the wizard tests assume no terminal, and `docker run -it` would make them wait for keystrokes.
+    'test': lambda args: ['sh', '-c', 'exec </dev/null; python3 -m unittest discover -s tests "$@" && '
+                          'python3 tests/test_deployment.py >/dev/null && python3 tests/test_steps.py', 'sh', *args],
     'shell': lambda args: ['bash', *args],
 }
 

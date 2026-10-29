@@ -36,6 +36,19 @@ if [[ ! -f /run/user/1000/sophon-ready ]]; then
     exit 1
 fi
 
+# First-run Portainer setup requires the one-time token from its local logs.
+if [[ -z ${SOPHON_PORTAINER_SETUP_TOKEN:-} ]]; then
+    if ! portainer_logs=$(podman --remote=false logs portainer 2>&1); then
+        echo "Cannot read Portainer's setup token. Check host setup and retry." >&2
+        exit 1
+    fi
+    export SOPHON_PORTAINER_SETUP_TOKEN
+    SOPHON_PORTAINER_SETUP_TOKEN=$(printf '%s\n' "$portainer_logs" |
+        sed $'s/\033\\[[0-9;]*m//g' |
+        sed -nE 's/.*setup_token=([A-Za-z0-9_-]+).*/\1/p' | tail -n 1)
+    unset portainer_logs
+fi
+
 args=(
     --remote=false run --rm --network host --pull never
     -v /var/lib/sophon/project:/workspace:Z --workdir /workspace
@@ -71,7 +84,8 @@ for name in \
     SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET \
     SOPHON_GITEA_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
     SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD \
-    SOPHON_PORTAINER_LICENSE_KEY SOPHON_PORTAINER_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD
+    SOPHON_PORTAINER_LICENSE_KEY SOPHON_PORTAINER_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD \
+    SOPHON_PORTAINER_SETUP_TOKEN
 do
     if [[ -v $name ]]; then
         args+=(--env "$name")

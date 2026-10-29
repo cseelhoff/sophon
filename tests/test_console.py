@@ -225,6 +225,7 @@ class ConsoleTests(unittest.TestCase):
             environment = dict(os.environ, **service_values(),
                                SOPHON_PROXMOX_PASSWORD='DO_NOT_FORWARD', SOPHON_NFS_IP='DO_NOT_FORWARD',
                                SOPHON_KOPIA_REPOSITORY_PASSWORD='DO_NOT_FORWARD',
+                               SOPHON_PORTAINER_SETUP_TOKEN='ONE_TIME_SETUP_TOKEN',
                                PATH=str(directory) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(
                 [sys.executable, str(ROOT / 'src/console.py'), '--run'],
@@ -234,6 +235,8 @@ class ConsoleTests(unittest.TestCase):
             self.assertNotIn('DO_NOT_FORWARD', forwarded.values())
             self.assertEqual(forwarded['SOPHON_INFRAVM_IP'], '192.0.2.3')
             self.assertEqual(forwarded['SOPHON_DEPLOYMENT_STEP'], 'configure')
+            self.assertEqual(forwarded['SOPHON_PORTAINER_SETUP_TOKEN'], 'ONE_TIME_SETUP_TOKEN')
+            self.assertNotIn('ONE_TIME_SETUP_TOKEN', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@
 
 # Image
 gitea_image_name: "gitea/gitea"
-gitea_image_tag: "1.22"
+gitea_image_tag: "28.2.0"
 gitea_image: "docker.io/{{ gitea_image_name }}:{{ gitea_image_tag }}"
 
 # Database — bundled PostgreSQL (recommended for production).
@@ -16,11 +16,11 @@ gitea_db_name: "gitea"
 gitea_db_user: "gitea"
 
 # Postgres image used for the bundled DB container.
-gitea_postgres_image: "docker.io/library/postgres:16-alpine"
+gitea_postgres_image: "docker.io/library/postgres:18.6-alpine3.24"
 
 gitea_image_tars:
   - "{{ sophon_containers_dir }}/gitea-gitea_{{ gitea_image_tag }}.tar"
-  - "{{ sophon_containers_dir }}/library-postgres_16-alpine.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_{{ gitea_postgres_image.split(':')[-1] }}.tar"
 
 # Network
 gitea_port_http: 3000

@@ -201,8 +201,11 @@ def main(argv=None):
             parser.error('Start step 4 using sophon-deploy on installed InfraVM.')
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
         parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
+    allowed = set(step_fields(options.step))
+    if options.step == 'configure':
+        allowed.add('SOPHON_PORTAINER_SETUP_TOKEN')
     for name in list(os.environ):
-        if name.startswith('SOPHON_') and name not in step_fields(options.step):
+        if name.startswith('SOPHON_') and name not in allowed:
             os.environ.pop(name, None)
     os.environ['SOPHON_DEPLOYMENT_STEP'] = options.step
     arguments = options.arguments

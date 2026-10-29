@@ -61,11 +61,12 @@ openldap_example_user_uid: "john.doe"
 openldap_example_admin_uid: "john.doe.admin"
 
 portainer_image_repo: "docker.io/portainer/portainer-ee"
-portainer_image_tag: "2.41.0"
+portainer_image_tag: "3.0.0"
 portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
-# Business Edition; a free 5-node Starter licence is available from portainer.io.
+# Business Edition 3.0 STS; the free licence covers three nodes, not an LTS release.
 portainer_license_key: "{{ lookup('env', 'SOPHON_PORTAINER_LICENSE_KEY') | default('', true) }}"
 portainer_admin_password: "{{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD') }}"
+portainer_setup_token: "{{ lookup('env', 'SOPHON_PORTAINER_SETUP_TOKEN') }}"
 # Existing deployments must keep supplying the same database password.
 gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(portainer_admin_password, true) }}"
 
@@ -75,9 +76,12 @@ coreos_iso_path: "{{ artifacts_dir }}/coreos/fedora-coreos-live.iso"
 # The stock live ISO above, plus the unattended installer; this is the one every hypervisor boots.
 installer_iso_path: "{{ artifacts_dir }}/coreos/sophon-installer.iso"
 bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
-# <vendor>-<image>_<tag>.tar, e.g. portainer-portainer-ee_2.41.0.tar
+# <vendor>-<image>_<tag>.tar, e.g. portainer-portainer-ee_3.0.0.tar
 sophon_containers_dir: "{{ artifacts_dir }}/containers"
 portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
+
+coredns_plugin_revision: "961da07798aef59715f7d8f8802185863a3909c8"
+coredns_image_tag: "1.15.0-{{ coredns_plugin_revision[:12] }}"
 
 # Addressed by IP: the runner is local to InfraVM and no DNS exists yet when it
 # first talks to Portainer. Users reach portainer.<domain> through Traefik.

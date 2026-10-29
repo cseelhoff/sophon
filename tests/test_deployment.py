@@ -167,21 +167,25 @@ def run_launcher(arguments, extra=None, path=None):
 def test_launcher_passes_only_the_steps_settings():
   result, received = run_launcher(['--step', 'provision', '--', '2-provision.yml', '-e', 'prepare_force=true'], {
     'SOPHON_PROXMOX_HOST': '192.0.2.10', 'SOPHON_PROXMOX_PASSWORD': 'PRIVATE_TEST_PASSWORD',
-    'SOPHON_DOMAIN': 'service-setting.example', 'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 16})
+    'SOPHON_DOMAIN': 'service-setting.example', 'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 16,
+    'SOPHON_PORTAINER_SETUP_TOKEN': 'ONE_TIME_SETUP_TOKEN'})
   assert result.returncode == 0, result.stderr
   assert received['args'] == ['2-provision.yml', '-e', 'prepare_force=true']
   environment = received['environment']
   assert environment['SOPHON_PROXMOX_PASSWORD'] == 'PRIVATE_TEST_PASSWORD'
   assert environment['SOPHON_DEPLOYMENT_STEP'] == 'provision'
   assert 'SOPHON_DOMAIN' not in environment and 'SOPHON_PORTAINER_ADMIN_PASSWORD' not in environment
+  assert 'SOPHON_PORTAINER_SETUP_TOKEN' not in environment
   assert 'PRIVATE_TEST_PASSWORD' not in result.stdout + result.stderr
 
   result, received = run_launcher(['--step', 'configure', '--', '4-configure.yml'], {
     'SOPHON_DEPLOYMENT_STEP': 'configure', 'SOPHON_PROXMOX_PASSWORD': 'DO_NOT_FORWARD',
-    'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_DOMAIN': 'example.test'})
+    'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_DOMAIN': 'example.test',
+    'SOPHON_PORTAINER_SETUP_TOKEN': 'ONE_TIME_SETUP_TOKEN'})
   assert result.returncode == 0, result.stderr
   environment = received['environment']
   assert environment['SOPHON_DOMAIN'] == 'example.test'
+  assert environment['SOPHON_PORTAINER_SETUP_TOKEN'] == 'ONE_TIME_SETUP_TOKEN'
   assert 'SOPHON_PROXMOX_PASSWORD' not in environment and 'SOPHON_ACME_FILE' not in environment
 
 

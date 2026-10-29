@@ -51,7 +51,7 @@ services:
       - POSTGRES_USER={{ keycloak_db_user }}
       - POSTGRES_PASSWORD={{ keycloak_db_password }}
     volumes:
-      - keycloak_db_data:/var/lib/postgresql/data
+      - keycloak_db_data:/var/lib/postgresql
     networks:
       - proxy
     healthcheck:
