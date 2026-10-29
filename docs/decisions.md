@@ -34,4 +34,4 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     `runner` stage. Docker or Podman is the only laptop requirement (no Nix, bash, Python or Ansible install),
     and the commands are plain `docker run` lines that behave the same in bash and PowerShell. The tools image
     drives the host engine through its socket for image pulls, saves and builds, and reaches the hypervisor
-    through the engine's NAT. Base images are pinned by tag, not digest. Only the Linux path is verified.
+    through the engine's NAT. Base images are pinned by tag, not digest. Linux/WSL and Windows are verified.

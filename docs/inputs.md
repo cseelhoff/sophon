@@ -3,7 +3,7 @@
 Nothing site-specific is baked into the reusable ISOs. Each step asks only for what it needs.
 Keep every credential in a password manager: reruns need the same existing values.
 
-## Step 1 - prepare (internet)
+## On the laptop: prepare (internet)
 
 No inputs. Needs Docker or Podman, space for the images and ISOs, and internet.
 Pass `-e prepare_force=true` after `prepare` to refresh cached downloads and force an ISO rebuild, for example:
@@ -13,7 +13,7 @@ A laptop that is later offline
 must already have `artifacts/` and the built `sophon-tools` image from a completed run; steps 1-2 then
 use only the hypervisor's management network.
 
-## Step 2 - provision
+## On the laptop: provision
 
 Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or `hyperv`).
 Every step 1-2 variable below is also listed, with a comment, in [`.env.example`](../.env.example); copy it to `.env` and the
@@ -26,6 +26,10 @@ Every step 1-2 variable below is also listed, with a comment, in [`.env.example`
 | `SOPHON_PROXMOX_NODE` | the real node name, usually not `proxmox` |
 | `SOPHON_PROXMOX_ISO_STORAGE`, `_DISK_STORAGE` | `local`, `local-lvm` |
 | `SOPHON_VNET_INTERFACE`, `SOPHON_VNET_VLAN` | bridge (`vmbr0`) and optional VLAN tag |
+
+The Proxmox API certificate is not verified (it is usually self-signed). The VM uses the default SeaBIOS firmware,
+one virtio disk and NIC, the installer ISO on `ide2`, the deployment ISO on `ide3` and a serial socket; the console in
+the web UI (noVNC) shows step 3 and the `core` password prompt.
 
 | vCenter | Meaning |
 |---|---|
@@ -47,7 +51,7 @@ Every step 1-2 variable below is also listed, with a comment, in [`.env.example`
 All providers: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
 A VM that already exists is only started if this workflow created it; anything else is left alone.
 
-## Step 3 - install (automatic)
+## Automatic install (nothing to type)
 
 The installer ISO (the stock live ISO plus a small baked-in Ignition config, built by step 1) runs `install.sh --auto`
 as soon as the deployment ISO is attached. It installs to the only blank disk (`/dev/vda` on Proxmox, `/dev/sda` on
@@ -59,7 +63,7 @@ disk to use. No network settings or password are baked in.
 On the first boot of the installed system `sophon-set-password.service` asks for the `core` console password on tty1,
 before the login prompt (the account stays locked until then). The VM starts on DHCP.
 
-## Step 4 - configure (console)
+## On the VM console: sophon-deploy
 
 `sophon-deploy` first asks for the **network**, unless one is already saved: the static IPv4 address, prefix
 length, gateway and DNS server. Address, prefix and gateway show the live DHCP value in square brackets (Enter accepts

@@ -89,7 +89,7 @@ as DVD drives, disk first in the boot order, uploads each ISO once (hash-named, 
 while on the first run, since they travel over WinRM), and starts it. Optional settings: `SOPHON_HYPERV_PORT` (5985 HTTP
 with NTLM message encryption, or 5986 HTTPS with a verified certificate, plus `SOPHON_HYPERV_CA_FILE`) and
 `SOPHON_HYPERV_PATH` (a folder on the host such as `D:\Hyper-V`, default is the host's VM path). This provider has been
-checked against the cmdlet definitions and with stubbed PowerShell, but **not yet against a real host**.
+checked against the cmdlet definitions and with stubbed PowerShell, but **not yet against a real remote host**.
 
 ### Hyper-V on this same Windows machine (no WinRM, no credentials)
 
@@ -103,12 +103,13 @@ Python or container:
 
 `-Switch` (or `SOPHON_HYPERV_SWITCH`) names an existing virtual switch (if omitted, the script lists them and asks);
 `-Path`, `-Name`, `-Cores`, `-MemoryMB` and `-DiskGB` are optional (`SOPHON_HYPERV_PATH` and `SOPHON_INFRAVM_*` are
-honoured). It creates the same VM as the remote provider. **Untested against a real host.**
+honoured). It creates the same VM as the remote provider. Verified end to end on a real host.
 
 ## Notes
 
 - **Rootful Docker on Linux** creates `artifacts/` as root; add `--user "$(id -u):$(id -g)" --group-add "$(stat -c %g /var/run/docker.sock)"` after `docker run`.
 - The container reaches the hypervisor through the engine's normal NAT (no host networking). If the hypervisor is only
   reachable through a VPN or special route, check that route works from containers.
-- Only the Linux (Podman and Docker) path has been verified end to end. Windows and macOS are lightly tested; the
+- Linux/WSL (Podman and Docker) and Windows have both been verified end to end; macOS is lightly tested. The
   commands avoid bash features on purpose, and `sophon-state` is a named volume so private file modes also hold on Windows.
+- Under WSL, run from a folder on the Linux filesystem (`~/sophon`), not `/mnt/c/...`: ISO builds are much slower over 9p.

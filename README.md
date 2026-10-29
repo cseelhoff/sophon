@@ -4,212 +4,108 @@ Offline-capable deployment of DNS, reverse proxy, directory, SSO and Git service
 Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft Hyper-V. Services run as rootless Podman
 containers managed through Portainer; the Ansible runner is a container on InfraVM itself.
 
-## The four steps
+## Install
 
-The only thing the laptop needs is **Docker or Podman** (on Windows, either one, or WSL with one of them). Everything
-else (Ansible, xorriso, govc, Traefik) lives in one container image that the scripts build for you.
+You do two things: run one command on your laptop, then answer prompts on the VM's console.
+The laptop needs only **Docker or Podman** (Linux, WSL, macOS or Windows). Under WSL, keep this folder on the Linux
+filesystem (`~/sophon`, not `/mnt/c/...`): building the ISOs is several times faster.
 
-| Step | Where | What happens |
-|---|---|---|
-| 1. Prepare | connected laptop | Download and cache the stock CoreOS live ISO and container images; build the runner image, `artifacts/bootstrap/sophon-deployment.iso`, and `artifacts/coreos/sophon-installer.iso` (the live ISO with the unattended installer baked in). |
-| 2. Provision | laptop with hypervisor access | Runs step 1 if needed, then creates a blank InfraVM with both ISOs attached and starts it. |
-| 3. Install | automatic | The VM boots the installer ISO, which installs CoreOS offline to the only blank disk and reboots by itself. On the first boot **you choose the `core` console password** at the console, before the login prompt. |
-| 4. Configure | InfraVM console | Log in as `core`, run `sophon-deploy`: it asks for the static IP, prefix and gateway (the DHCP values are the defaults) and DNS (default `1.1.1.1`), then the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. It assumes the site is connected to the internet unless you answer **y** to "air-gapped". |
-
-### Steps 1 and 2: one command
-
-From the project folder:
+**1. On your laptop** (internet needed)
 
 ```bash
-bash sophon-provision.sh          # Linux, macOS, WSL
-```
-```powershell
-.\sophon-provision.ps1            # Windows
+bash sophon-provision.sh          # Windows: .\sophon-provision.ps1
 ```
 
-The script finds Docker or Podman and the right socket, builds the tools image the first time (internet, about 560 MB),
-then asks **where InfraVM should run** (Proxmox, vCenter, Hyper-V, or *only download and build the installation media
-and exit*) and for any setting you haven't already given it. It runs step 1 (internet) and then creates and starts the
-VM. Passwords are prompted for and never put on a command line.
+Choose where InfraVM runs (Proxmox, vCenter or Hyper-V) and answer the prompts. It downloads everything, builds the
+install media, then creates and starts a blank VM with the media attached.
 
-**Settings:** to avoid the questions, copy [.env.example](.env.example) to `.env` and fill in what you know. It lists
-every option for steps 1 and 2 with a comment on each; the scripts read `.env` automatically (it is git-ignored).
-Anything left blank is asked for, and a variable already set in your shell overrides the file. The step 4 settings are
-entered on the InfraVM console instead (see [docs/inputs.md](docs/inputs.md)).
+**2. On the VM's console** (Proxmox/vCenter console, or Hyper-V Manager > Connect)
 
-```powershell
-Copy-Item .env.example .env     # bash: cp .env.example .env
-# edit .env, for example SOPHON_HYPERVISOR=hyperv to deploy to Hyper-V on this PC without the menu
+1. CoreOS installs itself and reboots. Nothing to type.
+2. When asked, choose a password for `core`, then log in as `core`.
+3. Run `sophon-deploy`. Confirm the network, then enter your domain and credentials. It deploys CoreDNS, Traefik,
+   OpenLDAP, Keycloak and Gitea.
+
+**No internet at the VM's site?** Also follow [Air-gapped sites](#air-gapped-sites).
+
+### Laptop settings
+
+The script builds a tools image the first time (about 560 MB), then asks for anything it doesn't know. Passwords are
+prompted for and never put on a command line. To skip the questions, copy [.env.example](.env.example) to `.env`
+and fill it in (git-ignored; the scripts read it automatically).
+
+```bash
+cp .env.example .env              # PowerShell: Copy-Item .env.example .env
 ```
-
-What each hypervisor needs:
 
 | Hypervisor | Required settings |
 |---|---|
 | Proxmox | `SOPHON_PROXMOX_HOST`, `SOPHON_PROXMOX_NODE`, password |
 | vCenter | `SOPHON_VCENTER_URL`, `_USERNAME`, `_DATACENTER`, `_CLUSTER`, `_DATASTORE`, `_NETWORK`, password |
-| Hyper-V on **this** Windows PC (PowerShell script only) | nothing up front: runs as you, one UAC prompt, asks which virtual switch; no password, WinRM or firewall changes |
-| Hyper-V on another host | `SOPHON_HYPERV_HOST`, `_USERNAME`, `_SWITCH`, password; WinRM must be enabled on the host (see [docs/manual-commands.md](docs/manual-commands.md)) |
-
-Other commands take the same form: `prepare` (step 1 only), `certificates ...`, `test`. Then open the VM's console (Hyper-V Manager > Connect, or your
-hypervisor's console) and watch step 3 run. Create the Hyper-V virtual switch beforehand if you have none; InfraVM
-connects to it and needs a DHCP lease at first (step 4 then offers it as the static address). The raw `docker run` equivalents, the socket paths for each engine
-and the Hyper-V details are in [docs/manual-commands.md](docs/manual-commands.md).
+| Hyper-V on **this** Windows PC (PowerShell script only) | nothing up front: runs as you, one UAC prompt, asks which virtual switch |
+| Hyper-V on another host | `SOPHON_HYPERV_HOST`, `_USERNAME`, `_SWITCH`, password; WinRM enabled on the host (see [docs/manual-commands.md](docs/manual-commands.md)) |
 
 ### Another hypervisor (for example VMware Workstation)
 
-Proxmox, vCenter and Hyper-V are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
+Run `prepare`, then do the VM part by hand:
 
-1. Run `prepare` and copy `artifacts/coreos/sophon-installer.iso` and
-   `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
-2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
-   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
-3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
-4. Power on. Step 3 runs by itself and reboots into the installed disk; then continue with step 4. If it boots the
-   installer ISO again after install, nothing is reinstalled (the disk is no longer blank and the installer stops),
-   but move the disk above the CDs or eject the ISOs.
+1. Copy `artifacts/coreos/sophon-installer.iso` and `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
+   At an [air-gapped site](#air-gapped-sites) also copy the certificate disk, `artifacts/secrets/sophon-certificates.iso`.
+2. Create a blank VM: 64-bit Linux, UEFI or BIOS (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
+   one 40+ GiB disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
+3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, disk first in the boot order.
+   The certificate disk can be attached now as a third drive, or any time before you run `sophon-deploy`.
+4. Power on and continue with part 2 above. If the VM boots the installer again after install, nothing is reinstalled
+   (the disk is no longer blank); move the disk above the CDs or eject the ISOs.
 
-### Step 3: install (automatic) and the first login
+### If the install stops
 
-Nothing to type. The installer ISO waits for the deployment ISO (volume label `SOPHON_DEPLOY`), installs to the only
-blank disk, and reboots. If it cannot find exactly one blank disk, or the deployment ISO, it says so on the console and
-stops; you can then run it yourself (`sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY
-/mnt/sophon && sudo bash /mnt/sophon/install.sh`, which also lets you choose the disk).
+If the installer cannot find exactly one blank disk or the deployment ISO, it says so on the console and stops. Run it
+yourself (this also lets you choose the disk):
+`sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon && sudo bash /mnt/sophon/install.sh`.
 
-On the first boot of the installed system the console asks you to **choose the password for `core`** (no default password
-exists), then shows the login prompt. Log in as `core` and run step 4:
+`sophon-deploy --network` asks for the network again later. Both ISOs can be detached once `sophon-deploy` finishes.
 
-```bash
-sophon-deploy
-```
+### Air-gapped sites
 
-It first asks for the network (IP, prefix and gateway default to the live DHCP values, so Enter keeps them as a static
-address; DNS defaults to `1.1.1.1` and the prompt also shows the DHCP-provided server) and applies it.
-`sophon-deploy --network` asks again later. Both ISOs can be detached after
-step 4. **No internet at the site?** Read [Step 4 at a site with no internet](#step-4-at-a-site-with-no-internet-air-gapped) first.
+Do part 1 on a **connected** laptop: it caches every image, and nothing is pulled later. The laptop can then be offline
+if it can still reach the hypervisor. The VM installs offline; a secret certificate disk replaces Let's Encrypt. Add
+these to the install above:
 
-### Step 4 at a site with no internet (air-gapped)
-
-Steps 1 to 3 are the same; only step 4 and a recurring renewal differ. Read this before you start:
-
-| Step | Air-gapped difference |
-|---|---|
-| Setup and 1 | Do these on a **connected** laptop. Step 1 caches every image the services need, and the deployment never pulls anything later. |
-| Before 4 | On a connected machine, make the secret certificate ISO (below). Carry it to the site and attach it to the InfraVM. |
-| 2 | None, if the laptop can reach the hypervisor's management network. The laptop itself may be offline once steps 1 and the tools image exist. |
-| 3 | None. It was always offline. |
-| 4 | Attach the certificate ISO, run `sophon-deploy` and answer **y** to "air-gapped". It finds the disk by itself and offers its file as the default at the *Pre-issued certificates file* prompt (press Enter). The file is **required**; step 4 stops if it does not hold a trusted certificate for the domain and `*.<domain>`. |
-
-Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
-point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
-
-**Renewals (recurring, every 30 days or so).** Certificates last 90 days and nothing on an air-gapped InfraVM can
-renew them, so carry in a fresh certificate disk on a schedule. Run the generator on the connected machine about once
-a month: it reuses certificates that still have more than 30 days left and issues new ones only after that, so an
-early run just writes the same disk again. Import it before the day-90 expiry; a monthly cadence always lands in the
-window between day 60 and day 90.
-
-1. **On the connected machine**, for the first time and every renewal:
+1. **On the connected machine**, make the certificate disk (first time and every renewal):
    ```bash
    bash sophon-provision.sh certificates issue --domain example.com
    ```
    (PowerShell: `.\sophon-provision.ps1 certificates issue ...`.) It prompts for an ACME email and a Cloudflare token
    (or reads `CF_DNS_API_TOKEN` from your environment) and writes `artifacts/secrets/sophon-certificates.iso`
    (volume label `SOPHON_CERTS`): one `acme.json` with your wildcard certificate for the domain and `*.<domain>`, its
-   full chain and its private key, never the token or the ACME account. The ISO holds a private key: carry it to the
-   site, and delete it afterwards. Run the command on the same machine each time (it keeps the ACME account in the
+   full chain and its private key, never the token or the ACME account. It holds a private key: carry it to the
+   site and delete it afterwards. Run the command on the same machine each time (it keeps the ACME account in the
    `sophon-state` volume).
-2. **Attach it to the InfraVM.** On this PC's Hyper-V: `.\sophon-provision.ps1 attach-certificates` (a new VM gets it
-   automatically if the ISO already exists). Elsewhere, attach the ISO as a CD/DVD in your hypervisor.
-3. **On the InfraVM console**, run `sophon-deploy` the first time. For a renewal run:
-   ```bash
-   sophon-deploy --refresh-certificates
-   ```
-   Answer **y** to "air-gapped" and press Enter at the certificate prompt, and re-enter the existing service credentials
-   (a refresh currently reruns the full service deployment). If the certificates have already expired, the same
-   steps recover the site. Afterwards eject the disk (`.\sophon-provision.ps1 detach-certificates` on local Hyper-V).
+2. **Attach it to the VM** as a CD/DVD (on this PC's Hyper-V: `.\sophon-provision.ps1 attach-certificates`; a new VM
+   gets it automatically if the ISO already exists).
+3. **On the console**, run `sophon-deploy` and answer **y** to "air-gapped". It finds the disk and offers its file at the
+   *Pre-issued certificates file* prompt (press Enter). The file is **required**; `sophon-deploy` stops if it does not
+   hold a trusted certificate for the domain and `*.<domain>`.
+
+Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
+point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
+
+**Renewals (every 30 days or so).** Certificates last 90 days and nothing on an air-gapped InfraVM can renew them.
+Repeat step 1 monthly: it reuses certificates with more than 30 days left, so an early run just writes the same disk
+again, and a monthly cadence always lands between day 60 and day 90. Attach the new disk and run on the console:
+
+```bash
+sophon-deploy --refresh-certificates
+```
+
+Answer **y** to "air-gapped", press Enter at the certificate prompt, and re-enter the existing service credentials
+(a refresh currently reruns the full service deployment). If the certificates have already expired, the same steps
+recover the site. Afterwards eject the disk (`.\sophon-provision.ps1 detach-certificates` on local Hyper-V).
 
 See [docs/certificates.md](docs/certificates.md) for validation, backups and rate limits.
-
-## Pinned releases (2026-10-28)
-
-| Product | Version |
-|---|---|
-| [Portainer Business Edition](https://docs.portainer.io/portainer-documentation/sts/release-notes) | **3.0.0 STS**, not LTS; image published October 28, release notes dated October 29 |
-| [Traefik](https://github.com/traefik/traefik/releases/tag/v3.7.16) | 3.7.16 (services and certificate tool) |
-| [Gitea](https://docs.gitea.com/installation/install-with-docker/) | 28.2.0 |
-| [Keycloak](https://github.com/keycloak/keycloak/releases/tag/26.8.1) | 26.8.1 |
-| [PostgreSQL](https://www.postgresql.org/support/versioning/) | 18.6, Alpine 3.24 image; supported by Gitea's current Compose example and [Keycloak](https://www.keycloak.org/server/db) |
-| [OpenLDAP container](https://github.com/vegardit/docker-openldap) | `vegardit/openldap:2.6.10`, the vendor's current Debian-packaged 2.6 image, replacing frozen Bitnami Legacy |
-| [Traefik certs dumper](https://github.com/ldez/traefik-certs-dumper/releases/tag/v2.11.4) | 2.11.4 |
-| [CoreDNS](https://github.com/coredns/coredns/releases/tag/v1.15.0) | 1.15.0, custom discovery plugin commit `961da07798aef59715f7d8f8802185863a3909c8` |
-| [Fedora CoreOS stable](https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/44.20260928.3.2/x86_64/meta.json) | 44.20260928.3.2 installer media |
-
-Build tools are pinned in [Containerfile](Containerfile): Python 3.14.10 (Debian trixie; Ansible 2.21 does not
-support Python 3.15), Ansible Core 2.21.5,
-cryptography 50.0.2, requests 2.34.2, proxmoxer 2.3.0, pypsrp 0.9.1, community.proxmox 2.1.0,
-Rust 1.99.1, coreos-installer 0.27.0, Docker CLI 29.9.2 and govc 0.56.2 (with upstream SHA-256).
-CoreDNS uses Go 1.27.3 (the published Alpine 3.24 builder tag) and an Alpine 3.24.3 runtime in
-[its build file](roles/prepare/files/coredns.Containerfile); the installer helper is BusyBox 1.38.0-musl.
-The local build file separates the builder and runtime tags; the upstream shared Alpine argument would select
-a nonexistent Go image when set to the full Alpine patch version.
-These are explicit release tags, not digest locks of every OS/Python transitive dependency. Local `sophon:latest`
-and `sophon-tools:latest` name this project's builds, not upstream release channels.
-
-The maintained LDAP image deliberately follows Debian's OpenLDAP package rather than upstream's newer source
-release; Debian security revisions arrive in vendor rebuilds of the same version tag. CoreOS's installed-host
-automatic update policy is unchanged.
 
 **Rebuild the tools image before preparing new media:** `docker build -t sophon-tools -f Containerfile .`
 (use `podman` if that is your engine). The launchers reuse an existing tools image.
 Then run `prepare -e prepare_force=true`. **Do not apply these database/LDAP changes to existing volumes without
 migration:** see [the upgrade boundary](docs/inputs.md#upgrading-from-the-previous-pins).
-
-## Layout
-
-```text
-sophon-provision.sh  sophon-provision.ps1          steps 1-2 in one command (detect engine, run the tools container)
-.env.example                                       every step 1-2 setting with comments; copy to .env
-2-provision-hyperv-local.ps1                       step 2 for Hyper-V on this PC, as the signed-in user
-Containerfile                                      the tools image (default) and the InfraVM runner image
-1-prepare.yml  2-provision.yml  4-configure.yml   the playbooks, numbered by step
-ansible.cfg  inventory.yml                         Ansible setup
-group_vars/all.yml                                 every SOPHON_* setting, in one place
-
-roles/
-  prepare/          step 1   cache downloads, build runner + deployment ISO
-  proxmox/ vcenter/ hyperv/ step 2   authenticate and create the blank VM
-  portainer/        step 4   first-run Portainer setup and licence
-  portainer_stack/  step 4   deploy one compose stack through Portainer's API
-  coredns/ traefik/ openldap/ keycloak/ gitea/   step 4   the services
-library/vcenter_vm.py                              vCenter module (wraps govc)
-library/hyperv_vm.py                               Hyper-V module (PowerShell over WinRM, pypsrp)
-
-guest/              files that run inside InfraVM
-  install.sh          step 3, from the live ISO
-  host-bootstrap.sh   first boot: load images, start Portainer and the runner
-  sophon-deploy   step 4 entry point (runs src/console.py in the runner)
-
-src/                Python helpers
-  cli.py              the container's entry point: prepare, provision, certificates, test
-  bundle.py           builds the deployment ISO
-  certificates.py     issue / validate / import the ACME certificate store
-  console.py          step 4 terminal wizard
-  deployment.py       setting validation and the playbook launcher
-docs/               inputs, manual commands, architecture, certificates, decisions
-tests/              unit and fixture tests
-```
-
-## Tests
-
-```bash
-bash sophon-provision.sh test   # unit, fixture and step-boundary tests
-```
-
-With the pinned LDAP and certificate-dumper images preloaded and the engine socket mounted,
-`SOPHON_CONTAINER_TESTS=1 bash sophon-provision.sh test` also exercises Traefik v3 certificate extraction,
-real LDAP TLS, seed-account binds, group membership, password hashing, persistence across restart and rejection
-of legacy volumes.
-
-The previous pins' 4-step flow was verified end to end on Proxmox and vCenter; this version refresh still needs
-a fresh-VM deployment check. Hyper-V is newer and not yet verified on a real host.
