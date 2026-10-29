@@ -259,7 +259,7 @@
               dig @{{ infravm_ip }} {{ coredns_preflight_fqdn }} +short
 
           Deploy addresses every remaining service by FQDN. Re-run through
-          sophon-controller so the runner's managed /etc/hosts entries are
+          sophon-deploy so the runner's managed /etc/hosts entries are
           refreshed, and check that they contain the correct InfraVM address.
 
     - name: Display CoreDNS status

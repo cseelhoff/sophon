@@ -47,20 +47,31 @@ Every step 1-2 variable below is also listed, with a comment, in [`.env.example`
 All providers: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
 A VM that already exists is only started if this workflow created it; anything else is left alone.
 
-## Step 3 - install (console)
+## Step 3 - install (automatic)
 
-`install.sh` installs to the only blank disk (`/dev/vda` on Proxmox, `/dev/sda` on VMware and Hyper-V), found
-automatically; if there is none or several it asks which. It then asks for the static IPv4 address, prefix length,
-gateway and DNS server, each showing the live system's current value in square brackets: press Enter to accept it or
-type a different one. Finally it asks for a new password for the `core` console user. It refuses disks with
-partitions or filesystem signatures, rechecks that right before writing, and waits 10 seconds (Ctrl-C aborts).
-The address and DNS values are saved, so `sophon-controller` (step 4) does not ask for them again. The default address
-is usually a DHCP lease: reserve it on your DHCP server or type a static address, because it is the address every
-service name resolves to.
+The installer ISO (the stock live ISO plus a small baked-in Ignition config, built by step 1) runs `install.sh --auto`
+as soon as the deployment ISO is attached. It installs to the only blank disk (`/dev/vda` on Proxmox, `/dev/sda` on
+VMware and Hyper-V). It refuses disks with partitions or filesystem signatures, so booting the ISO again after
+installation never reinstalls; it rechecks that right before writing and waits 10 seconds (Ctrl-C aborts). With no
+single blank disk, `--auto` stops with a message; run `sudo bash <deployment-iso-mount>/install.sh` to be asked which
+disk to use. No network settings or password are baked in.
+
+On the first boot of the installed system `sophon-set-password.service` asks for the `core` console password on tty1,
+before the login prompt (the account stays locked until then). The VM starts on DHCP.
 
 ## Step 4 - configure (console)
 
-`sophon-controller` first asks **whether the site is air-gapped** (default no) and whether to **use one password for all
+`sophon-deploy` first asks for the **network**, unless one is already saved: the static IPv4 address, prefix
+length, gateway and DNS server. Address, prefix and gateway show the live DHCP value in square brackets (Enter accepts
+it); DNS defaults to `1.1.1.1` and the DHCP-provided server is printed above the prompt for reference. It applies the
+address with NetworkManager and saves the address and DNS in `site.json`, so the console wizard does not ask again.
+The default address is usually a DHCP lease: reserve it on your DHCP server or type a static address, because it is the
+address every service name resolves to. The DNS server is CoreDNS's upstream for every name outside your domain, so give
+it a real resolver (router or public). Do not use a machine that forwards its own DNS to this VM: the Hyper-V Default
+Switch address (the PC's ICS proxy) does that as soon as you point the PC at the VM, and lookups loop.
+`sophon-deploy --network` asks again later.
+
+Then it asks **whether the site is air-gapped** (default no) and whether to **use one password for all
 service accounts** (default no), then asks for:
 
 | Input | Notes |
@@ -74,7 +85,7 @@ service accounts** (default no), then asks for:
 | Portainer licence | Business Edition key (a free 5-node starter licence works). |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
-(passwords are skipped silently). `sophon-controller --run` does the same non-interactively.
+(passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
 
 Service names (`traefik`, `portainer`, `dns`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.

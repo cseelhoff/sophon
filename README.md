@@ -11,10 +11,10 @@ else (Ansible, xorriso, govc, Traefik) lives in one container image that the scr
 
 | Step | Where | What happens |
 |---|---|---|
-| 1. Prepare | connected laptop | Download and cache the stock CoreOS live ISO and container images; build the runner image and `artifacts/bootstrap/sophon-deployment.iso`. |
+| 1. Prepare | connected laptop | Download and cache the stock CoreOS live ISO and container images; build the runner image, `artifacts/bootstrap/sophon-deployment.iso`, and `artifacts/coreos/sophon-installer.iso` (the live ISO with the unattended installer baked in). |
 | 2. Provision | laptop with hypervisor access | Runs step 1 if needed, then creates a blank InfraVM with both ISOs attached and starts it. |
-| 3. Install | InfraVM console | Installs CoreOS offline to the only blank disk. Asks for the static IP, prefix, gateway and DNS (current values are the defaults; Enter accepts) and a new `core` console password. Then reboots. |
-| 4. Configure | InfraVM console | Asks for the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. |
+| 3. Install | automatic | The VM boots the installer ISO, which installs CoreOS offline to the only blank disk and reboots by itself. On the first boot **you choose the `core` console password** at the console, before the login prompt. |
+| 4. Configure | InfraVM console | Log in as `core`, run `sophon-deploy`: it asks for the static IP, prefix and gateway (the DHCP values are the defaults) and DNS (default `1.1.1.1`), then the domain and credentials, then deploys CoreDNS, Traefik, OpenLDAP, Keycloak and Gitea. It assumes the site is connected to the internet unless you answer **y** to "air-gapped". |
 
 ### Steps 1 and 2: one command
 
@@ -52,36 +52,41 @@ What each hypervisor needs:
 | Hyper-V on another host | `SOPHON_HYPERV_HOST`, `_USERNAME`, `_SWITCH`, password; WinRM must be enabled on the host (see [docs/manual-commands.md](docs/manual-commands.md)) |
 
 Other commands take the same form: `prepare` (step 1 only), `certificates ...`, `test`. Then open the VM's console (Hyper-V Manager > Connect, or your
-hypervisor's console) and continue at step 3. Create the Hyper-V virtual switch beforehand if you have none; InfraVM
-connects to it and needs a static-capable network. The raw `docker run` equivalents, the socket paths for each engine
+hypervisor's console) and watch step 3 run. Create the Hyper-V virtual switch beforehand if you have none; InfraVM
+connects to it and needs a DHCP lease at first (step 4 then offers it as the static address). The raw `docker run` equivalents, the socket paths for each engine
 and the Hyper-V details are in [docs/manual-commands.md](docs/manual-commands.md).
 
 ### Another hypervisor (for example VMware Workstation)
 
 Proxmox, vCenter and Hyper-V are automated. Elsewhere, do step 2 by hand; steps 3 and 4 are unchanged.
 
-1. Run `prepare` and copy `artifacts/coreos/fedora-coreos-live.iso` and
+1. Run `prepare` and copy `artifacts/coreos/sophon-installer.iso` and
    `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
 2. Create a blank VM: 64-bit Linux, UEFI (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
-   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged).
+   one 40+ GiB (default 100) disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
 3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, with the disk first in the boot order.
-4. Power on and continue with steps 3 and 4. If it boots the live ISO again after install,
-   move the disk above the CDs or eject the ISOs.
+4. Power on. Step 3 runs by itself and reboots into the installed disk; then continue with step 4. If it boots the
+   installer ISO again after install, nothing is reinstalled (the disk is no longer blank and the installer stops),
+   but move the disk above the CDs or eject the ISOs.
 
-### Step 3: install, on the VM console (the stock live ISO)
+### Step 3: install (automatic) and the first login
+
+Nothing to type. The installer ISO waits for the deployment ISO (volume label `SOPHON_DEPLOY`), installs to the only
+blank disk, and reboots. If it cannot find exactly one blank disk, or the deployment ISO, it says so on the console and
+stops; you can then run it yourself (`sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY
+/mnt/sophon && sudo bash /mnt/sophon/install.sh`, which also lets you choose the disk).
+
+On the first boot of the installed system the console asks you to **choose the password for `core`** (no default password
+exists), then shows the login prompt. Log in as `core` and run step 4:
 
 ```bash
-sudo mkdir -p /mnt/sophon && sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
-sudo bash /mnt/sophon/install.sh
+sophon-deploy
 ```
 
-After the reboot, log in as `core`, then step 4:
-
-```bash
-sophon-controller
-```
-
-Both ISOs can then be detached. **No internet at the site?** Read [Step 4 at a site with no internet](#step-4-at-a-site-with-no-internet-air-gapped) first.
+It first asks for the network (IP, prefix and gateway default to the live DHCP values, so Enter keeps them as a static
+address; DNS defaults to `1.1.1.1` and the prompt also shows the DHCP-provided server) and applies it.
+`sophon-deploy --network` asks again later. Both ISOs can be detached after
+step 4. **No internet at the site?** Read [Step 4 at a site with no internet](#step-4-at-a-site-with-no-internet-air-gapped) first.
 
 ### Step 4 at a site with no internet (air-gapped)
 
@@ -93,7 +98,7 @@ Steps 1 to 3 are the same; only step 4 and a recurring renewal differ. Read this
 | Before 4 | On a connected machine, make the secret certificate ISO (below). Carry it to the site and attach it to the InfraVM. |
 | 2 | None, if the laptop can reach the hypervisor's management network. The laptop itself may be offline once steps 1 and the tools image exist. |
 | 3 | None. It was always offline. |
-| 4 | Attach the certificate ISO, run `sophon-controller` and answer **y** to "air-gapped". It finds the disk by itself and offers its file as the default at the *Pre-issued certificates file* prompt (press Enter). The file is **required**; step 4 stops if it does not hold a trusted certificate for the domain and `*.<domain>`. |
+| 4 | Attach the certificate ISO, run `sophon-deploy` and answer **y** to "air-gapped". It finds the disk by itself and offers its file as the default at the *Pre-issued certificates file* prompt (press Enter). The file is **required**; step 4 stops if it does not hold a trusted certificate for the domain and `*.<domain>`. |
 
 Without a Cloudflare token, Cloudflare tunnel publishing is also unavailable. Give InfraVM an accurate clock, and
 point your clients' DNS at CoreDNS on InfraVM (see [docs/inputs.md](docs/inputs.md)).
@@ -116,9 +121,9 @@ window between day 60 and day 90.
    `sophon-state` volume).
 2. **Attach it to the InfraVM.** On this PC's Hyper-V: `.\sophon-provision.ps1 attach-certificates` (a new VM gets it
    automatically if the ISO already exists). Elsewhere, attach the ISO as a CD/DVD in your hypervisor.
-3. **On the InfraVM console**, run `sophon-controller` the first time. For a renewal run:
+3. **On the InfraVM console**, run `sophon-deploy` the first time. For a renewal run:
    ```bash
-   sophon-controller --refresh-certificates
+   sophon-deploy --refresh-certificates
    ```
    Answer **y** to "air-gapped" and press Enter at the certificate prompt, and re-enter the existing service credentials
    (a refresh currently reruns the full service deployment). If the certificates have already expired, the same
@@ -149,7 +154,7 @@ library/hyperv_vm.py                               Hyper-V module (PowerShell ov
 guest/              files that run inside InfraVM
   install.sh          step 3, from the live ISO
   host-bootstrap.sh   first boot: load images, start Portainer and the runner
-  sophon-controller   step 4 entry point (runs src/console.py in the runner)
+  sophon-deploy   step 4 entry point (runs src/console.py in the runner)
 
 src/                Python helpers
   cli.py              the container's entry point: prepare, provision, certificates, test

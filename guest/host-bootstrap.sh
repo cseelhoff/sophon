@@ -22,9 +22,8 @@ main() {
         echo "Invalid Portainer archive metadata." >&2; return 1;
     }
     archive=$project/artifacts/containers/${lines[0]}
-    infravm_ip=$(jq -er '.SOPHON_INFRAVM_IP | select(type == "string" and length > 0)' "$project/site.json") || {
-        echo "Missing InfraVM address in $project/site.json." >&2; return 1;
-    }
+    # The address arrives later, when sophon-deploy asks for the network; until then Portainer needs no DNS server.
+    infravm_ip=$(jq -er '.SOPHON_INFRAVM_IP | select(type == "string" and length > 0)' "$project/site.json" 2>/dev/null) || infravm_ip=
     [[ -f $archive && -f /var/lib/sophon/runner.tar ]]
     systemctl --user start podman.socket
     for image_archive in "sophon:latest|/var/lib/sophon/runner.tar" "$image|$archive"; do
@@ -34,9 +33,9 @@ main() {
         podman --remote=false image exists "${image_archive%%|*}"
     done
     if podman --remote=false network exists proxy; then
-        podman --remote=false network update --dns-add "$infravm_ip" proxy
+        [[ -z $infravm_ip ]] || podman --remote=false network update --dns-add "$infravm_ip" proxy
     else
-        podman --remote=false network create --dns "$infravm_ip" \
+        podman --remote=false network create ${infravm_ip:+--dns "$infravm_ip"} \
             --label com.docker.compose.network=proxy proxy
     fi
     if ! podman --remote=false volume exists portainer_data; then
@@ -57,7 +56,7 @@ main() {
         if curl --fail --silent --insecure --max-time 2 \
             https://127.0.0.1:9443/api/status >/dev/null; then
             touch /run/user/1000/sophon-ready
-            printf '%s\n' 'Sophon is ready. Log in as core and run: sophon-controller'
+            printf '%s\n' 'Sophon is ready. Log in as core and run: sophon-deploy'
             return 0
         fi
         sleep 2

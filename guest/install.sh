@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run with sudo bash /<artifact-mount>/install.sh from the stock FCOS live console.
+# Run with sudo bash /<artifact-mount>/install.sh [--auto] from the CoreOS live console. The Sophon live ISO runs it
+# with --auto by itself (see guest/sophon-autoinstall).
 set -euo pipefail
 umask 077
 
@@ -31,59 +32,10 @@ verify_bundle() {
     (cd "$media" && sha256sum --strict --check SHA256SUMS) ||
         die "Artifact checksum verification failed; do not install."
     for path in install.sh runner.tar tools/busybox project/src/console.py \
-        guest/sophon-controller guest/host-bootstrap.sh \
+        guest/sophon-deploy guest/host-bootstrap.sh guest/sophon-network guest/sophon-set-password \
         project/bootstrap/portainer-image project/bootstrap/portainer-archive; do
         [[ -v 'listed[$path]' && -f $media/$path ]] || die "Missing required artifact: $path"
     done
-}
-
-ipv4_number() {
-    local value=$1 part result=0
-    local -a parts
-    [[ $value =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
-    IFS=. read -r -a parts <<< "$value"
-    for part in "${parts[@]}"; do
-        [[ ${#part} -le 3 && ( $part == 0 || $part != 0* ) ]] || return 1
-        (( 10#$part <= 255 )) || return 1
-        result=$(( (result << 8) | 10#$part ))
-    done
-    printf '%s\n' "$result"
-}
-
-validate_network() {
-    local ip=$1 prefix=$2 gateway=$3 dns=$4 ipn gwn dnsn mask hostmask
-    [[ $prefix =~ ^([1-9]|[12][0-9]|30)$ ]] || die "Prefix must be 1 through 30."
-    ipn=$(ipv4_number "$ip") || die "Invalid IPv4 address."
-    gwn=$(ipv4_number "$gateway") || die "Invalid gateway IPv4 address."
-    dnsn=$(ipv4_number "$dns") || die "Invalid DNS IPv4 address."
-    # Reject unspecified, multicast, reserved and loopback addresses.
-    for number in "$ipn" "$gwn" "$dnsn"; do
-        (( number > 0 && (number >> 24) != 127 && (number >> 24) < 224 )) ||
-            die "Use unicast, non-loopback IPv4 addresses."
-    done
-    mask=$(( (0xffffffff << (32 - prefix)) & 0xffffffff ))
-    hostmask=$(( 0xffffffff ^ mask ))
-    (( (ipn & mask) == (gwn & mask) && ipn != gwn )) ||
-        die "Gateway must be distinct and in the same subnet."
-    (( (ipn & hostmask) != 0 && (ipn & hostmask) != hostmask &&
-       (gwn & hostmask) != 0 && (gwn & hostmask) != hostmask )) ||
-        die "IP and gateway must not be network or broadcast addresses."
-}
-
-detect_network() {
-    local route dev cidr
-    detected_ip= detected_prefix= detected_gateway= detected_dns=
-    route=$(ip -4 route show default 2>/dev/null | head -n1) || true
-    detected_gateway=$(awk '{for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit }}' <<< "$route")
-    dev=$(awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}' <<< "$route")
-    if [[ -n $dev ]]; then
-        cidr=$(ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{ print $4; exit }') || true
-        if [[ $cidr == */* ]]; then detected_ip=${cidr%/*}; detected_prefix=${cidr#*/}; fi
-        detected_dns=$(resolvectl dns "$dev" 2>/dev/null |
-            awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print $i; exit }}') || true
-    fi
-    [[ -n $detected_dns ]] ||
-        detected_dns=$(awk '$1 == "nameserver" && $2 !~ /^127\./ { print $2; exit }' /etc/resolv.conf 2>/dev/null) || true
 }
 
 # The only disk that passes every blank-disk check, if there is exactly one; empty otherwise.
@@ -153,11 +105,7 @@ ignition_file() {
 }
 
 render_ignition() {
-    local media=$1 ip=$2 prefix=$3 gateway=$4 dns=$5 hash=$6 unit network
-    validate_network "$ip" "$prefix" "$gateway" "$dns"
-    [[ $hash =~ ^\$6\$[a-zA-Z0-9./]{1,16}\$[a-zA-Z0-9./]{86}$ ]] ||
-        die "Invalid SHA-512 password hash."
-    network=$(printf '[connection]\nid=sophon-static\ntype=ethernet\n\n[ipv4]\nmethod=manual\naddress1=%s/%s,%s\ndns=%s;\n\n[ipv6]\nmethod=disabled\n' "$ip" "$prefix" "$gateway" "$dns")
+    local media=$1 unit password_unit
     unit='[Unit]
 Description=Sophon offline host bootstrap
 After=network-online.target user@1000.service
@@ -181,19 +129,42 @@ TimeoutStartSec=0
 [Install]
 WantedBy=multi-user.target
 '
-    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"passwordHash":"%s","groups":["sudo","wheel"]}]},"storage":{"files":[' "$hash"
+    # The console login is locked until the operator chooses a password here, before the first login prompt.
+    password_unit='[Unit]
+Description=Sophon first-boot console password
+ConditionPathExists=!/var/lib/sophon-core-password-set
+After=systemd-user-sessions.service plymouth-quit-wait.service
+Before=getty@tty1.service getty.target
+
+[Service]
+Type=oneshot
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+ExecStart=/usr/local/libexec/sophon-set-password
+
+[Install]
+WantedBy=multi-user.target
+'
+    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"files":['
     ignition_file /etc/hostname 420 sophon-infravm; printf ','
-    ignition_file /etc/NetworkManager/system-connections/sophon-static.nmconnection 384 "$network"; printf ','
     ignition_file /etc/sysctl.d/99-sophon-lowports.conf 420 $'net.ipv4.ip_unprivileged_port_start=0\n'; printf ','
     ignition_file /etc/systemd/resolved.conf.d/nostub.conf 420 $'[Resolve]\nDNSStubListener=no\n'; printf ','
     ignition_file /etc/zincati/config.d/90-disable-auto-reboot.toml 420 $'[updates]\nenabled = false\n'; printf ','
     ignition_file /etc/ssh/sshd_config.d/40-sophon-console-only.conf 420 $'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'; printf ','
     ignition_file /var/lib/systemd/linger/core 420 ''; printf ','
-    ignition_file /etc/issue.d/sophon.issue 420 $'Sophon: log in as core, then run sophon-controller.\nIf setup failed: sudo systemctl restart sophon-host-bootstrap\nIf firmware boots the live ISO again, select the installed disk; do not reinstall.\n'; printf ','
-    ignition_file /usr/local/bin/sophon-controller 493 "$(cat "$media/guest/sophon-controller")"; printf ','
-    ignition_file /usr/local/libexec/sophon-host-bootstrap 493 "$(cat "$media/guest/host-bootstrap.sh")"
+    ignition_file /etc/issue.d/sophon.issue 420 $'Sophon: log in as core, then run sophon-deploy (it asks for the network).\nIf setup failed: sudo systemctl restart sophon-host-bootstrap\nIf firmware boots the live ISO again, select the installed disk; do not reinstall.\n'; printf ','
+    ignition_file /usr/local/bin/sophon-deploy 493 "$(cat "$media/guest/sophon-deploy")"; printf ','
+    ignition_file /usr/local/libexec/sophon-host-bootstrap 493 "$(cat "$media/guest/host-bootstrap.sh")"; printf ','
+    ignition_file /usr/local/libexec/sophon-network 493 "$(cat "$media/guest/sophon-network")"; printf ','
+    ignition_file /usr/local/libexec/sophon-set-password 493 "$(cat "$media/guest/sophon-set-password")"
     printf '],"links":[{"path":"/etc/systemd/user/sockets.target.wants/podman.socket","target":"/usr/lib/systemd/user/podman.socket"},{"path":"/etc/systemd/user/default.target.wants/podman-restart.service","target":"/usr/lib/systemd/user/podman-restart.service"}]},"systemd":{"units":[{"name":"sophon-host-bootstrap.service","enabled":true,"contents":'
     json_string "$unit"
+    printf '},{"name":"sophon-set-password.service","enabled":true,"contents":'
+    json_string "$password_unit"
     printf '}]}}\n'
 }
 
@@ -228,9 +199,7 @@ grow_installed_root() {
 }
 
 copy_artifacts() {
-    local media=$1 root=$2 ip=$3 dns=$4 var available needed
-    ipv4_number "$ip" >/dev/null || die "Invalid installed IP."
-    ipv4_number "$dns" >/dev/null || die "Invalid installed DNS."
+    local media=$1 root=$2 var available needed
     var=$(installed_var "$root")
     available=$(df -B1 --output=avail "$var" | tail -n 1)
     needed=$(required_bytes "$media")
@@ -242,30 +211,37 @@ copy_artifacts() {
     cp -- "$media/runner.tar" "$var/lib/sophon/runner.tar"
     # ISO files are read-only; the runner must be able to write its bind mount.
     chmod -R u+rwX "$var/lib/sophon"
-    printf '{"SOPHON_INFRAVM_IP":"%s","SOPHON_VNET_DNS":"%s"}\n' "$ip" "$dns" \
-        > "$var/lib/sophon/project/site.json"
     chown -R 1000:1000 "$var/lib/sophon"
     # The first-boot service restores these labels with the installed policy.
     sync
 }
 
 main() {
-    [[ $# == 0 ]] || die "Usage: sudo bash /<artifact-mount>/install.sh (interactive fresh-disk install only)."
+    local auto=0
+    case ${1:-} in
+        '') ;;
+        --auto) auto=1 ;;
+        *) die "Usage: sudo bash /<artifact-mount>/install.sh [--auto] (fresh-disk install only)." ;;
+    esac
+    [[ $# -le 1 ]] || die "Usage: sudo bash /<artifact-mount>/install.sh [--auto] (fresh-disk install only)."
     [[ $EUID == 0 ]] || die "Run with sudo from the CoreOS live console."
     [[ -e /run/ostree-live ]] ||
         die "This installer only runs in a CoreOS live environment, never on the installed host."
-    local media disk ip prefix gateway dns password confirmation hash required work root part source
+    local media disk required work root part source
     media=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
     verify_bundle "$media"
     [[ -x $media/tools/busybox ]] || die "Missing executable static BusyBox."
     for source in coreos-installer growpart sgdisk xfs_growfs; do
         command -v "$source" >/dev/null || die "Required live installer tool is unavailable: $source"
     done
-    printf '%s\n' 'Fresh-disk installation only. Existing installations must use sophon-controller or restart sophon-host-bootstrap.'
+    printf '%s\n' 'Fresh-disk installation only. Existing installations must use sophon-deploy or restart sophon-host-bootstrap.'
     lsblk -e7 -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL
     disk=$(detect_disk)
     if [[ -n $disk ]]; then
         printf 'Target disk: %s (the only blank disk)\n' "$disk"
+    elif (( auto )); then
+        # Unattended runs never guess: a second boot of this ISO after installing finds no blank disk and stops here.
+        die "Automatic install needs exactly one blank disk and found none or several (already installed? boot the installed disk, not the ISO). To choose a disk yourself: sudo bash $media/install.sh"
     else
         ask disk 'No single blank disk found automatically. Target whole disk (for example /dev/vda)' ''
     fi
@@ -274,24 +250,9 @@ main() {
     required=$(required_bytes "$media")
     (( $(blockdev --getsize64 "$disk") >= required )) ||
         die "Disk is too small; need at least $required bytes for OS, artifacts and image extraction."
-    # The live system's current network settings are offered as defaults; Enter accepts, typing overrides.
-    detect_network
-    printf '%s\n' 'Network for the installed system. Press Enter to accept the [current value].'
-    ask ip 'Installed IPv4 address' "$detected_ip"
-    ask prefix 'IPv4 prefix length (1-30)' "$detected_prefix"
-    ask gateway 'IPv4 gateway' "$detected_gateway"
-    ask dns 'DNS server IPv4 address' "$detected_dns"
-    validate_network "$ip" "$prefix" "$gateway" "$dns"
-    read -r -s -p 'New core console password: ' password; printf '\n'
-    read -r -s -p 'Confirm core console password: ' confirmation; printf '\n'
-    [[ -n $password && $password == "$confirmation" ]] || die "Passwords are empty or do not match."
-    # BusyBox -P 0 reads stdin; omitting -P would prompt/read /dev/tty.
-    hash=$(printf '%s\n' "$password" | "$media/tools/busybox" mkpasswd -m sha512 -P 0)
-    unset password confirmation
     work=/run/sophon-install
     install -d -m 0700 "$work"
-    render_ignition "$media" "$ip" "$prefix" "$gateway" "$dns" "$hash" > "$work/config.ign"
-    unset hash
+    render_ignition "$media" > "$work/config.ign"
     printf 'ALL DATA ON %s WILL BE DESTROYED (it is blank). Installing in 10 seconds; press Ctrl-C to abort.\n' "$disk"
     sleep 10
     # Recheck immediately before the sole destructive command.
@@ -311,13 +272,13 @@ main() {
     mount "$part" "$root"
     trap 'umount /run/sophon-install/installed-root || true' EXIT
     xfs_growfs "$root"
-    copy_artifacts "$media" "$root" "$ip" "$dns"
+    copy_artifacts "$media" "$root"
     umount "$root"
     trap - EXIT
     rm -f "$work/config.ign"
     printf '%s\n' \
         'Installation complete. Rebooting to the installed disk.' \
-        'Log in as core with your console password, wait for host setup, then run: sophon-controller' \
+        'On first boot choose the core console password, log in as core, then run: sophon-deploy' \
         'If firmware boots the live ISO again, select the disk or detach ISOs. DO NOT reinstall.' \
         'For setup failures: journalctl -u sophon-host-bootstrap; sudo systemctl restart sophon-host-bootstrap'
     sync

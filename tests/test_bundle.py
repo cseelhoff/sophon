@@ -78,7 +78,7 @@ class BundleTests(unittest.TestCase):
         self.assertIn('project/4-configure.yml', self.captured)
         self.assertIn('project/roles/gitea/tasks/main.yml', self.captured)
         self.assertIn('project/src/console.py', self.captured)
-        for name in ('install.sh', 'runner.tar', 'tools/busybox', 'guest/sophon-controller', 'guest/host-bootstrap.sh'):
+        for name in ('install.sh', 'runner.tar', 'tools/busybox', 'guest/sophon-deploy', 'guest/host-bootstrap.sh'):
             self.assertIn(name, self.captured)
         self.assertNotIn(b'HYPERVISOR_ONLY', b''.join(self.captured.values()))
         self.assertNotIn(b'LAPTOP_ONLY', b''.join(self.captured.values()))
@@ -239,7 +239,9 @@ class BundleTests(unittest.TestCase):
         self.assertTrue((extracted / 'project/4-configure.yml').is_file())
         self.assertTrue((extracted / 'runner.tar').is_file())
         self.assertTrue((extracted / 'install.sh').stat().st_mode & 0o111)
-        self.assertTrue((extracted / 'guest/sophon-controller').stat().st_mode & 0o111)
+        self.assertTrue((extracted / 'guest/sophon-deploy').stat().st_mode & 0o111)
+        for name in ('sophon-network', 'sophon-set-password', 'host-bootstrap.sh'):
+            self.assertTrue((extracted / 'guest' / name).stat().st_mode & 0o111, name)
         self.assertTrue((extracted / 'tools/busybox').stat().st_mode & 0o111)
         self.assertEqual((extracted / 'project/bootstrap/portainer-image').read_text(),
                          'docker.io/portainer/portainer-ee:2.41.0\n')
@@ -268,6 +270,8 @@ class PrepareTests(unittest.TestCase):
     def test_cached_prepare_never_invokes_network_tools(self):
         shutil.copytree(ROOT / 'roles/prepare', self.root / 'roles/prepare')
         self.write('src/bundle.py', (ROOT / 'src/bundle.py').read_text())
+        self.write('src/installer_iso.py', (ROOT / 'src/installer_iso.py').read_text())
+        self.write('guest/sophon-autoinstall')
         for name in bundle.PROJECT:
             if Path(name).suffix:
                 self.write(name)
@@ -302,7 +306,10 @@ class PrepareTests(unittest.TestCase):
             f'echo "$1" >> "{attempted}"',
             'exit 99', '']))
         (forbidden / 'git').write_text(f'#!/bin/sh\necho git >> "{attempted}"\nexit 99\n')
-        for name in ('docker', 'git'):
+        # coreos-installer only customises a local file; it never touches the network.
+        (forbidden / 'coreos-installer').write_text(
+            '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\necho customised > "$out"\n')
+        for name in ('docker', 'git', 'coreos-installer'):
             (forbidden / name).chmod(0o755)
         playbook = self.write('cached-prepare.yml', json.dumps([{
             'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
@@ -310,6 +317,7 @@ class PrepareTests(unittest.TestCase):
                 'artifacts_dir': str(self.root / 'artifacts'),
                 'sophon_containers_dir': str(self.root / 'artifacts/containers'),
                 'coreos_iso_path': str(live_iso),
+                'installer_iso_path': str(self.root / 'artifacts/coreos/sophon-installer.iso'),
                 'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-deployment.iso'),
                 'portainer_image': 'docker.io/portainer/portainer-ee:2.41.0',
                 'portainer_image_tarname': 'portainer-portainer-ee_2.41.0.tar',
@@ -331,6 +339,8 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(attempted.exists(), attempted.read_text() if attempted.exists() else '')
         self.assertTrue((self.root / 'artifacts/bootstrap/sophon-deployment.iso').is_file())
+        self.assertEqual((self.root / 'artifacts/coreos/sophon-installer.iso').read_text().strip(), 'customised')
+        self.assertEqual(live_iso.read_text(), 'cached-stock-live-iso', 'the stock ISO must stay unchanged')
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())
         self.assertEqual([Path(path).name for path in manifest], [
             'portainer-portainer-ee_2.41.0.tar', 'keycloak-keycloak_26.5.tar', 'coredns-dockerdiscovery.tar'])

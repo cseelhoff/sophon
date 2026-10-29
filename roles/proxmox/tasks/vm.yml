@@ -48,12 +48,12 @@
       ansible.builtin.stat:
         path: "{{ item }}"
         checksum_algorithm: sha256
-      loop: ["{{ coreos_iso_path }}", "{{ bundle_iso_path }}"]
+      loop: ["{{ installer_iso_path }}", "{{ bundle_iso_path }}"]
       register: infravm_media
     - name: Name immutable hypervisor media
       ansible.builtin.set_fact:
         infravm_isos:
-          - {source: "{{ coreos_iso_path }}", filename: "sophon-coreos-{{ infravm_media.results[0].stat.checksum }}.iso",
+          - {source: "{{ installer_iso_path }}", filename: "sophon-coreos-{{ infravm_media.results[0].stat.checksum }}.iso",
              size: "{{ infravm_media.results[0].stat.size }}"}
           - {source: "{{ bundle_iso_path }}", filename: "sophon-deployment-{{ infravm_media.results[1].stat.checksum }}.iso",
              size: "{{ infravm_media.results[1].stat.size }}"}

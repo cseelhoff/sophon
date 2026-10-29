@@ -41,7 +41,7 @@ per-service certificates is not reused: a new wildcard certificate is issued.
 Attach the ISO to the InfraVM as a CD/DVD: on this PC's Hyper-V `.\sophon-provision.ps1 attach-certificates` (a VM
 created while the ISO exists already has it), elsewhere through your hypervisor.
 
-`sophon-controller` looks for a disk labelled `SOPHON_CERTS`. If it finds one it mounts it read-only, copies
+`sophon-deploy` looks for a disk labelled `SOPHON_CERTS`. If it finds one it mounts it read-only, copies
 `acme.json` into the project's `imports` folder (mode 0600) and unmounts it. Answer **y** to "air-gapped" and press
 Enter at the **Pre-issued certificates file** prompt to accept that file (you can also type another path under
 `/workspace`). Sophon checks that the domain and every service name are covered by a trusted, unexpired chain whose
@@ -52,7 +52,7 @@ laptop.
 
 ## Renew
 
-Repeat the steps about monthly (certificates last 90 days). Run `sophon-controller
+Repeat the steps about monthly (certificates last 90 days). Run `sophon-deploy
 --refresh-certificates` with the new disk attached and supply the existing service credentials:
 a refresh currently reruns the full service deployment. A normal rerun keeps the live store.
 If certificates already expired, the same procedure recovers the site.

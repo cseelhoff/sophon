@@ -14,7 +14,7 @@
     cores: "{{ infravm_cores }}"
     memory: "{{ infravm_memory }}"
     disk_gb: "{{ infravm_disk_gb }}"
-    coreos_iso: "{{ coreos_iso_path }}"
+    coreos_iso: "{{ installer_iso_path }}"
     bundle_iso: "{{ bundle_iso_path }}"
   register: infravm_vcenter
 

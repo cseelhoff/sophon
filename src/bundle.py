@@ -25,7 +25,7 @@ PROJECT = (
                                    'openldap', 'keycloak', 'gitea')),
     'src/console.py', 'src/deployment.py', 'src/certificates.py',
 )
-GUEST = ('host-bootstrap.sh', 'sophon-controller')
+GUEST = ('host-bootstrap.sh', 'sophon-deploy', 'sophon-network', 'sophon-set-password')
 EXCLUDED = frozenset((
     'artifacts', 'deployment', 'logs', 'log', 'keys', 'credentials', 'secrets',
     '__pycache__', 'node_modules', 'result', 'results',

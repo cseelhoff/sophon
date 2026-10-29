@@ -21,7 +21,7 @@ traefik_acme_backup_path: "{{ traefik_acme_artifacts_dir }}/acme.json"
 traefik_compose_project: "traefik"
 traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
 
-# Normal reruns keep the live store; sophon-controller --refresh-certificates
+# Normal reruns keep the live store; sophon-deploy --refresh-certificates
 # sets this to replace it with the imported payload.
 traefik_acme_replace_existing: false
 

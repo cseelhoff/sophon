@@ -198,7 +198,7 @@ def main(argv=None):
         parser.error(str(error))
     if options.step == 'configure':
         if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
-            parser.error('Start step 4 using sophon-controller on installed InfraVM.')
+            parser.error('Start step 4 using sophon-deploy on installed InfraVM.')
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
         parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
     for name in list(os.environ):

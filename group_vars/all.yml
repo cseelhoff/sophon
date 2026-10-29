@@ -72,6 +72,8 @@ gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(porta
 # --- Shared paths --------------------------------------------------------------
 artifacts_dir: "{{ playbook_dir }}/artifacts"
 coreos_iso_path: "{{ artifacts_dir }}/coreos/fedora-coreos-live.iso"
+# The stock live ISO above, plus the unattended installer; this is the one every hypervisor boots.
+installer_iso_path: "{{ artifacts_dir }}/coreos/sophon-installer.iso"
 bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
 # <vendor>-<image>_<tag>.tar, e.g. portainer-portainer-ee_2.41.0.tar
 sophon_containers_dir: "{{ artifacts_dir }}/containers"

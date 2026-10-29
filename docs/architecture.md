@@ -6,15 +6,16 @@ How the pieces fit and what breaks what. Vocabulary is in [../CONTEXT.md](../CON
 
 ```text
 laptop ── hypervisor API ──▶ blank InfraVM + two ISOs     (steps 1-2)
-live console ── install.sh ──▶ persistent CoreOS            (step 3)
+installer ISO ── install.sh --auto ──▶ persistent CoreOS    (step 3, unattended)
 InfraVM: rootless Portainer + runner container ──▶ services (step 4)
 ```
 
 Every play targets `localhost`. The laptop only creates a blank VM; it never reaches into the guest
-(no SSH, guest agent, NFS, injected Ignition or disk conversion). The two media are reusable and hold no
-site data or secrets: the stock CoreOS live ISO and `sophon-deployment.iso` (the service project,
-runner image, container archives and installer). Networking, the `core` password, the domain and all
-service credentials are entered at the consoles. See [decisions.md](decisions.md).
+(no SSH, guest agent, NFS or disk conversion). The two media are reusable and hold no site data or secrets:
+`sophon-installer.iso` (the stock CoreOS live ISO with a small live Ignition config baked in by
+`coreos-installer iso customize`) and `sophon-deployment.iso` (the service project, runner image, container archives and
+installer). The `core` password is chosen at the first boot, the network, domain and all service credentials in step 4.
+See [decisions.md](decisions.md).
 
 Three surfaces do all the work; knowing which one is in play explains most failures:
 
@@ -22,8 +23,9 @@ Three surfaces do all the work; knowing which one is in play explains most failu
    with verified HTTPS and environment-only credentials. Hyper-V: PowerShell over WinRM (`pypsrp`); every value
    reaches the host as base64 JSON, never inside PowerShell source. Existing VMs are only started, and only if this
    workflow marked them; anything else is left untouched.
-2. **The live console** (step 3). `guest/install.sh` verifies the media checksums, requires an unpartitioned disk with no
-   filesystem signatures, renders Ignition locally and runs `coreos-installer --offline`.
+2. **The live system** (step 3). `guest/sophon-autoinstall` (baked into the installer ISO) starts `guest/install.sh --auto` from
+   the deployment ISO; it verifies the media checksums, requires exactly one unpartitioned disk with no filesystem
+   signatures, renders Ignition locally and runs `coreos-installer --offline`.
 3. **The Portainer API** (step 4). Stacks, image loads and volume seeding all go through Portainer's HTTP
    API; there is no other path into InfraVM ([decisions.md](decisions.md)).
    If Portainer is down, fix it by hand, then rerun.

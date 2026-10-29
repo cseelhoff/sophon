@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Baked into the Sophon live ISO (see src/installer_iso.py) and run by sophon-install.service on the live system:
+# find the deployment ISO, then run its installer unattended.
+set -uo pipefail
+
+label=SOPHON_DEPLOY
+device=/dev/disk/by-label/$label
+mount_point=/run/sophon-media
+
+echo "Sophon: waiting for the deployment ISO (volume label $label)..."
+for _ in $(seq 1 120); do
+    [[ -b $device ]] && break
+    sleep 1
+done
+if [[ ! -b $device ]]; then
+    echo "Sophon: the deployment ISO was not found. Attach it as a second CD/DVD, then run: sudo systemctl restart sophon-install" >&2
+    exit 1
+fi
+mkdir -p "$mount_point"
+mountpoint -q "$mount_point" || mount -o ro "$device" "$mount_point"
+exec bash "$mount_point/install.sh" --auto

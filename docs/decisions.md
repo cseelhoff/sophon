@@ -2,10 +2,12 @@
 
 The choices the design rests on, newest understanding first. Each is cheap to state and costly to reverse.
 
-1. **Two reusable ISOs, installed from the console.** The stock CoreOS live ISO plus `sophon-deployment.iso`.
-   The laptop creates a blank VM and attaches both; the installer runs offline from the hypervisor console
-   and asks for the static network and `core` password. No Ignition injection, guest agent, SSH, disk
-   conversion, controller VM or NFS. Site data and secrets never enter either ISO.
+1. **Two reusable ISOs, installed unattended.** `sophon-installer.iso` (the stock CoreOS live ISO with a small
+   live Ignition config baked in by `coreos-installer iso customize`) plus `sophon-deployment.iso`. The laptop
+   creates a blank VM and attaches both; the installer runs by itself, offline, and only ever to a blank disk, so
+   booting it again cannot reinstall. No guest agent, SSH, disk conversion, controller VM or NFS. The `core`
+   password is chosen at the first boot (the account is locked until then, so no default password exists) and the
+   static network in step 4. Site data and secrets never enter either ISO.
 2. **The runner lives on InfraVM.** A container that sees only Portainer's HTTP API: no hypervisor
    credentials, SSH, host root or Podman socket. Step 4 therefore needs nothing from the laptop.
 3. **Portainer is the deployment substrate.** Stacks, image loads and volume seeding all go through its API.

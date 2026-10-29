@@ -20,8 +20,8 @@ from deployment import step_fields
 
 SCRIPTS = ROOT / "guest"
 INSTALL = SCRIPTS / "install.sh"
-BUSYBOX = os.environ.get("BUSYBOX", shutil.which("busybox"))
-HASH = "$6$testsalt$" + "a" * 86
+NETWORK = SCRIPTS / "sophon-network"
+
 
 
 @contextlib.contextmanager
@@ -34,9 +34,9 @@ def fixture():
         shutil.rmtree(directory)
 
 
-def shell(code, *args, env=None):
+def shell(code, *args, env=None, script=INSTALL):
     return subprocess.run(
-        ["bash", "-c", "source " + shlex.quote(str(INSTALL)) + "\n" + code, "fixture", *map(str, args)],
+        ["bash", "-c", "source " + shlex.quote(str(script)) + "\n" + code, "fixture", *map(str, args)],
         text=True, capture_output=True, env=env,
     )
 
@@ -55,8 +55,10 @@ def bundle(media):
         "tools/busybox": "fixture binary",
         "project/src/console.py": "print('console')",
         "project/site.json": '{"SOPHON_INFRAVM_IP":"10.0.60.2"}',
-        "guest/sophon-controller": (SCRIPTS / "sophon-controller").read_text(),
+        "guest/sophon-deploy": (SCRIPTS / "sophon-deploy").read_text(),
         "guest/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
+        "guest/sophon-network": NETWORK.read_text(),
+        "guest/sophon-set-password": (SCRIPTS / "sophon-set-password").read_text(),
         "project/bootstrap/portainer-image": "docker.io/portainer/portainer-ee:2.33.3\n",
         "project/bootstrap/portainer-archive": "portainer.tar\n",
         "project/artifacts/containers/portainer.tar": "fixture portainer",
@@ -156,12 +158,14 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_shell_syntax_and_no_python_on_host(self):
-        for script in (INSTALL, SCRIPTS / "sophon-controller", SCRIPTS / "host-bootstrap.sh"):
+        scripts = [INSTALL, *(SCRIPTS / name for name in (
+            "sophon-deploy", "host-bootstrap.sh", "sophon-network", "sophon-set-password", "sophon-autoinstall"))]
+        for script in scripts:
             result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
             self.assert_success(result)
             self.assertTrue(os.access(script, os.X_OK))
-        self.assertNotIn("python", INSTALL.read_text())
-        self.assertNotIn("python", (SCRIPTS / "host-bootstrap.sh").read_text())
+            if script.name != "sophon-deploy":  # the controller starts the runner container, which is Python
+                self.assertNotIn("python", script.read_text())
 
     def test_manifest_from_arbitrary_mountpoint(self):
         with fixture() as directory:
@@ -203,7 +207,7 @@ class InstallerTests(unittest.TestCase):
             ("192.168.1.2", "30", "192.168.1.1", "192.168.1.1"),
             ("172.16.0.2", "12", "172.16.0.1", "8.8.8.8"),
         ]:
-            self.assert_success(shell('validate_network "$@"', *network))
+            self.assert_success(shell('validate_network "$@"', *network, script=NETWORK))
         for network in [
             ("10.0.60.0", "24", "10.0.60.1", "1.1.1.1"),
             ("10.0.60.255", "24", "10.0.60.1", "1.1.1.1"),
@@ -222,9 +226,9 @@ class InstallerTests(unittest.TestCase):
             ('10.0.60.2";touch BAD', "24", "10.0.60.1", "1.1.1.1"),
         ]:
             with self.subTest(network=network):
-                self.assertNotEqual(shell('validate_network "$@"', *network).returncode, 0)
+                self.assertNotEqual(shell('validate_network "$@"', *network, script=NETWORK).returncode, 0)
 
-    def test_prompts_default_to_the_current_system_values(self):
+    def test_network_defaults_come_from_the_current_system(self):
         stubs = r'''
 ip() {
     case "$*" in
@@ -234,20 +238,13 @@ ip() {
     esac
 }
 resolvectl() { echo "Link 2 (eth0): 10.0.60.53 10.0.60.54"; }
-lsblk() {
-    case "$*" in
-        "-dnrpo NAME,TYPE,RO") printf '/dev/sda disk 0\n/dev/sdb disk 0\n/dev/sr0 rom 1\n/dev/sr1 rom 1\n';;
-        *) return 99;;
-    esac
-}
-validate_disk() { [[ $1 == /dev/sda ]]; }
 '''
         result = shell(stubs + r'''
 detect_network
-printf '%s|%s|%s|%s|%s\n' "$detected_ip" "$detected_prefix" "$detected_gateway" "$detected_dns" "$(detect_disk)"
-''')
+printf '%s|%s|%s|%s\n' "$detected_ip" "$detected_prefix" "$detected_gateway" "$detected_dns"
+''', script=NETWORK)
         self.assert_success(result)
-        self.assertEqual(result.stdout.strip(), '10.0.60.23|24|10.0.60.1|10.0.60.53|/dev/sda')
+        self.assertEqual(result.stdout.strip(), '10.0.60.23|24|10.0.60.1|10.0.60.53')
 
         # Enter alone takes the default; typing a value overrides it; no default and no answer stays empty.
         result = shell(r'''
@@ -255,29 +252,110 @@ ask one 'One' 1.1.1.1 <<< ""
 ask two 'Two' 1.1.1.1 <<< "9.9.9.9"
 ask three 'Three' "" <<< ""
 printf '%s|%s|%s\n' "$one" "$two" "$three"
-''')
+''', script=NETWORK)
         self.assert_success(result)
         self.assertEqual(result.stdout.splitlines()[-1], '1.1.1.1|9.9.9.9|')
-
-    def test_each_prompt_is_its_own_statement(self):
-        # A joined line once turned the password prompt into extra arguments of the previous command.
-        for line in INSTALL.read_text().splitlines():
-            if "read -r" in line:
-                self.assertTrue(line.lstrip().startswith(("read -r", "while IFS= read", "IFS=. read", "if ")), line)
-        self.assertRegex(INSTALL.read_text(), r'validate_network "\$ip" "\$prefix" "\$gateway" "\$dns"\n\s+read -r -s -p')
 
     def test_nothing_detectable_gives_no_defaults(self):
         result = shell(r'''
 ip() { return 1; }
 resolvectl() { return 1; }
-lsblk() { return 1; }
 detect_network
-printf '[%s|%s|%s|%s|%s]\n' "$detected_ip" "$detected_prefix" "$detected_gateway" "$detected_dns" "$(detect_disk)"
-''')
+printf '[%s|%s|%s|%s]\n' "$detected_ip" "$detected_prefix" "$detected_gateway" "$detected_dns"
+''', script=NETWORK)
         self.assert_success(result)
         output = result.stdout.strip()
         # The DNS field may come from this machine's own resolv.conf; everything else must be empty.
-        self.assertTrue(output.startswith('[|||') and output.endswith('|]'), output)
+        self.assertTrue(output.startswith('[|||') and output.endswith(']'), output)
+
+    def test_network_step_applies_the_answers_and_remembers_them(self):
+        with fixture() as directory:
+            site = directory / "site.json"
+            log = directory / "log"
+            stubs = f'''
+ip() {{ return 1; }}
+resolvectl() {{ return 1; }}
+sudo() {{ printf '%s\\n' "$*" >> {shlex.quote(str(log))}; if [[ $1 == sh ]]; then cat > {shlex.quote(str(directory / "keyfile"))}; fi; }}
+'''
+            # A bad address is asked again; then every answer is accepted.
+            answers = "10.0.60.2\n24\n10.0.61.1\n1.1.1.1\n10.0.60.2\n24\n10.0.60.1\n1.1.1.1\n"
+            result = subprocess.run(
+                ["bash", "-c", "source " + shlex.quote(str(NETWORK)) + "\n" + stubs + 'main "$1"', "x", str(site)],
+                input=answers, text=True, capture_output=True)
+            self.assert_success(result)
+            self.assertIn("Gateway must be distinct and in the same subnet", result.stderr)
+            self.assertEqual(json.loads(site.read_text()), {"SOPHON_INFRAVM_IP": "10.0.60.2", "SOPHON_VNET_DNS": "1.1.1.1"})
+            keyfile = (directory / "keyfile").read_text()
+            self.assertIn("address1=10.0.60.2/24,10.0.60.1", keyfile)
+            self.assertIn("dns=1.1.1.1;", keyfile)
+            commands = log.read_text().splitlines()
+            self.assertIn("nmcli connection reload", commands)
+            self.assertIn("nmcli connection up sophon-static", commands)
+            self.assertTrue(commands[0].startswith("sh -c umask 077"))
+            self.assertFalse(site.with_name("site.json.tmp").exists())
+
+    def test_dns_defaults_to_cloudflare_and_shows_the_current_server(self):
+        with fixture() as directory:
+            site = directory / "site.json"
+            stubs = f'''
+ip() {{
+    case "$*" in
+        "-4 route show default") echo "default via 10.0.60.1 dev eth0";;
+        "-4 -o addr show dev eth0 scope global") echo "2: eth0    inet 10.0.60.23/24 brd 10.0.60.255 scope global eth0";;
+        *) return 1;;
+    esac
+}}
+resolvectl() {{ echo "Link 2 (eth0): 10.0.60.53"; }}
+sudo() {{ cat > /dev/null 2>&1 || true; }}
+'''
+            # Enter at every prompt: address, prefix and gateway keep the current values; DNS takes the default.
+            result = subprocess.run(
+                ["bash", "-c", "source " + shlex.quote(str(NETWORK)) + "\n" + stubs + 'main "$1"', "x", str(site)],
+                input="\n\n\n\n", text=True, capture_output=True)
+            self.assert_success(result)
+            self.assertIn("Current DNS server (from DHCP): 10.0.60.53", result.stdout)
+            self.assertIn('ask dns \'DNS server IPv4 address\' "$default_dns"', NETWORK.read_text())
+            self.assertIn("default_dns=1.1.1.1", NETWORK.read_text())
+            self.assertEqual(json.loads(site.read_text()),
+                             {"SOPHON_INFRAVM_IP": "10.0.60.23", "SOPHON_VNET_DNS": "1.1.1.1"})
+
+    def test_each_prompt_is_its_own_statement(self):
+        # A joined line once turned the password prompt into extra arguments of the previous command.
+        for script in (INSTALL, NETWORK, SCRIPTS / "sophon-set-password"):
+            for line in script.read_text().splitlines():
+                if "read -r" in line:
+                    self.assertTrue(line.lstrip().startswith(("read -r", "while IFS= read", "IFS=. read", "if ")), line)
+
+    def test_first_boot_password_is_confirmed_and_set_once(self):
+        with fixture() as directory:
+            flag = directory / "password-set"
+            received = directory / "chpasswd-input"
+            script = directory / "set-password"
+            script.write_text((SCRIPTS / "sophon-set-password").read_text()
+                              .replace("/var/lib/sophon-core-password-set", str(flag)))
+            env = tools(directory)
+            stub = directory / "bin/chpasswd"
+            stub.write_text(f'#!/bin/sh\ncat > {received}\n')
+            stub.chmod(0o755)
+            # Empty, then mismatched, then a matching password containing a colon.
+            answers = "\n\nabc\ndef\nsecret:pass word\nsecret:pass word\n"
+            result = subprocess.run(["bash", str(script)], input=answers, env=env, text=True, capture_output=True)
+            self.assert_success(result)
+            self.assertIn("must not be empty", result.stdout)
+            self.assertIn("do not match", result.stdout)
+            self.assertEqual(received.read_text(), "core:secret:pass word\n")
+            self.assertTrue(flag.is_file())
+            self.assertNotIn("secret:pass word", result.stdout + result.stderr)
+            received.unlink()
+            # Once a password exists the unit does nothing, even if it is started again.
+            result = subprocess.run(["bash", str(script)], input="x\nx\n", env=env, text=True, capture_output=True)
+            self.assert_success(result)
+            self.assertFalse(received.exists())
+            # Without a terminal answer (input closed) it fails instead of spinning or setting a blank password.
+            flag.unlink()
+            result = subprocess.run(["bash", str(script)], input="", env=env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(flag.exists())
 
     def test_fresh_disk_only(self):
         self.assert_success(shell(DISK_STUBS + '\nvalidate_disk /dev/fixture'))
@@ -306,52 +384,62 @@ printf '[%s|%s|%s|%s|%s]\n' "$detected_ip" "$detected_prefix" "$detected_gateway
             self.assertLess(source.index('(( $(blockdev --getsize64 "$disk") >= required ))'),
                             source.index('coreos-installer install --offline'))
 
-    @unittest.skipUnless(BUSYBOX, "Set BUSYBOX to the static bundle binary to verify hashing")
-    def test_real_busybox_stdin_sha512(self):
-        result = subprocess.run([BUSYBOX, "mkpasswd", "-m", "sha512", "-S", "testsalt", "-P", "0"],
-                                input="console password\n", text=True, capture_output=True)
-        self.assert_success(result)
-        self.assertRegex(result.stdout.strip(), r"^\$6\$testsalt\$[A-Za-z0-9./]{86}$")
-        other = subprocess.run([BUSYBOX, "mkpasswd", "-m", "sha512", "-S", "testsalt", "-P", "0"],
-                               input="different password\n", text=True, capture_output=True)
-        self.assertNotEqual(result.stdout, other.stdout)
-
-    def test_render_valid_ignition_and_static_host_contract(self):
+    def test_render_valid_ignition_and_host_contract(self):
         with fixture() as media:
             bundle(media)
-            result = shell('render_ignition "$@"', media, "10.0.60.2", "24", "10.0.60.1", "1.1.1.1", HASH)
+            result = shell('render_ignition "$1"', media)
             self.assert_success(result)
             ignition = json.loads(result.stdout)
             self.assertEqual(ignition["ignition"]["version"], "3.4.0")
+            # No password and no network are baked in: the first boot and step 4 ask for them.
             user, = ignition["passwd"]["users"]
-            self.assertEqual(user, dict(name="core", uid=1000, passwordHash=HASH, groups=["sudo", "wheel"]))
+            self.assertEqual(user, dict(name="core", uid=1000, groups=["sudo", "wheel"]))
             files = {
                 item["path"]: (item["mode"], base64.b64decode(item["contents"]["source"].split(",", 1)[1]).decode())
                 for item in ignition["storage"]["files"]
             }
-            mode, network = files["/etc/NetworkManager/system-connections/sophon-static.nmconnection"]
-            self.assertEqual(mode, 0o600)
-            self.assertIn("address1=10.0.60.2/24,10.0.60.1", network)
-            self.assertIn("dns=1.1.1.1;", network)
-            self.assertNotIn("127.0.0.1", network)
-            self.assertEqual(files["/usr/local/bin/sophon-controller"][0], 0o755)
+            self.assertNotIn("/etc/NetworkManager/system-connections/sophon-static.nmconnection", files)
+            for name in ("deploy", "host-bootstrap", "network", "set-password"):
+                self.assertIn(name, " ".join(files))
+            self.assertEqual(files["/usr/local/bin/sophon-deploy"][0], 0o755)
+            self.assertEqual(files["/usr/local/libexec/sophon-network"][1], NETWORK.read_text().rstrip("\n"))
+            self.assertEqual(files["/usr/local/libexec/sophon-set-password"][0], 0o755)
             self.assertIn("PasswordAuthentication no", files["/etc/ssh/sshd_config.d/40-sophon-console-only.conf"][1])
             self.assertIn("enabled = false", files["/etc/zincati/config.d/90-disable-auto-reboot.toml"][1])
             self.assertIn("/var/lib/systemd/linger/core", files)
-            unit, = ignition["systemd"]["units"]
-            self.assertTrue(unit["enabled"])
-            self.assertIn("User=core", unit["contents"])
-            self.assertIn("Requires=user@1000.service", unit["contents"])
-            self.assertIn("ExecStartPre=+/usr/sbin/restorecon -RF /var/lib/sophon", unit["contents"])
-            self.assertIn("StandardOutput=journal+console", unit["contents"])
+            units = {unit["name"]: unit for unit in ignition["systemd"]["units"]}
+            self.assertEqual(set(units), {"sophon-host-bootstrap.service", "sophon-set-password.service"})
+            bootstrap = units["sophon-host-bootstrap.service"]
+            self.assertTrue(bootstrap["enabled"])
+            self.assertIn("User=core", bootstrap["contents"])
+            self.assertIn("Requires=user@1000.service", bootstrap["contents"])
+            self.assertIn("ExecStartPre=+/usr/sbin/restorecon -RF /var/lib/sophon", bootstrap["contents"])
+            self.assertIn("StandardOutput=journal+console", bootstrap["contents"])
+            password = units["sophon-set-password.service"]
+            self.assertTrue(password["enabled"])
+            # The login prompt waits for the password to be chosen, and the question never repeats.
+            self.assertIn("Before=getty@tty1.service", password["contents"])
+            self.assertIn("ConditionPathExists=!/var/lib/sophon-core-password-set", password["contents"])
+            self.assertIn("TTYPath=/dev/tty1", password["contents"])
+            self.assertNotIn("passwordHash", result.stdout)
             self.assertNotIn("sshAuthorizedKeys", result.stdout)
             self.assertNotIn("setenforce", result.stdout)
 
-    def test_hash_injection_refused(self):
-        with fixture() as media:
-            bundle(media)
-            result = shell('render_ignition "$@"', media, "10.0.60.2", "24", "10.0.60.1", "1.1.1.1", '"bad')
-            self.assertIn("Invalid SHA-512", result.stderr)
+    def test_automatic_mode_never_guesses_a_disk(self):
+        source = INSTALL.read_text()
+        self.assertIn("--auto) auto=1", source)
+        auto_stop = source.index("elif (( auto ));")
+        self.assertLess(auto_stop, source.index("ask disk"))
+        self.assertIn("exactly one blank disk", source[auto_stop:auto_stop + 400])
+        # Unknown arguments are refused (before anything touches a disk).
+        result = shell('main --bogus')
+        self.assertIn("Usage:", result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        result = shell('main --auto extra')
+        self.assertIn("Usage:", result.stderr)
+        # An already-installed disk is nonblank, so booting the ISO again can never reinstall over it.
+        self.assertIn("(already installed?", source)
+        self.assertNotIn("INSTALL $disk", source)
 
     def test_ostree_var_is_selected_not_physical_root_var(self):
         with fixture() as directory:
@@ -428,25 +516,51 @@ udevadm() { [[ $1 == settle ]]; }
             (root / "ostree/deploy/fedora-coreos/var").symlink_to(root / "var", target_is_directory=True)
             self.assertNotEqual(shell('installed_var "$1"', root).returncode, 0)
 
-    def test_persistent_copy_ownership_site_defaults_and_no_overwrite(self):
+    def test_persistent_copy_ownership_and_no_overwrite(self):
         with fixture() as directory:
             media = directory / "media"
             bundle(media)
+            (media / "project/site.json").unlink()
             root = directory / "root"
             var = root / "ostree/deploy/fedora-coreos/var"
             var.mkdir(parents=True)
             var.parent.joinpath("deploy").mkdir()
             env = tools(directory)
-            result = shell('copy_artifacts "$@"', media, root, "10.0.60.2", "1.1.1.1", env=env)
+            result = shell('copy_artifacts "$@"', media, root, env=env)
             self.assert_success(result)
             data = var / "lib/sophon"
             self.assertEqual((data / "runner.tar").read_bytes(), (media / "runner.tar").read_bytes())
-            self.assertEqual(json.loads((data / "project/site.json").read_text()),
-                             {"SOPHON_INFRAVM_IP": "10.0.60.2", "SOPHON_VNET_DNS": "1.1.1.1"})
+            # The address is chosen later by sophon-deploy; the installer saves none.
+            self.assertFalse((data / "project/site.json").exists())
             self.assertFalse((root / "var").exists())
             self.assertEqual(calls(directory, "chown"), [["chown", "-R", "1000:1000", str(data)]])
-            result = shell('copy_artifacts "$@"', media, root, "10.0.60.2", "1.1.1.1", env=env)
+            result = shell('copy_artifacts "$@"', media, root, env=env)
             self.assertIn("already exists", result.stderr)
+
+    def test_bootstrap_before_the_address_is_known_starts_portainer_without_dns(self):
+        with fixture() as directory:
+            bundle(directory / "media")
+            data = directory / "persistent"
+            shutil.copytree(directory / "media/project", data / "project")
+            (data / "project/site.json").unlink()
+            (data / "runner.tar").write_text("runner")
+            ready = directory / "ready"
+            script = directory / "host-bootstrap"
+            script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
+                              .replace("/var/lib/sophon", str(data))
+                              .replace("/run/user/1000/sophon-ready", str(ready)))
+            env = tools(directory)
+            self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
+            self.assertTrue(ready.is_file())
+            podman = calls(directory, "podman")
+            network_create, = [call for call in podman if call[2:4] == ["network", "create"]]
+            self.assertNotIn("--dns", network_create)
+            self.assertEqual(len([call for call in podman if call[2:4] == ["network", "update"]]), 0)
+            # Once step 4 has saved the address, a rerun points the services' network at it.
+            (data / "project/site.json").write_text('{"SOPHON_INFRAVM_IP":"10.0.60.2"}')
+            self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
+            self.assertIn(["podman", "--remote=false", "network", "update", "--dns-add", "10.0.60.2", "proxy"],
+                          calls(directory, "podman"))
 
     def test_bootstrap_is_idempotent_offline_and_api_ready(self):
         with fixture() as directory:
@@ -515,17 +629,43 @@ udevadm() { [[ $1 == settle ]]; }
             self.assertIn("Invalid Portainer image", result.stderr)
             self.assertFalse(calls(directory, "podman"))
 
+    def controller(self, directory, saved=True, relocate=False):
+        """A copy of sophon-deploy whose paths point into `directory`; returns (script, ready file, data dir, env)."""
+        data = directory / "persistent"
+        (data / "project").mkdir(parents=True)
+        site = data / "project/site.json"
+        if saved:
+            site.write_text('{"SOPHON_INFRAVM_IP":"10.0.60.2","SOPHON_VNET_DNS":"1.1.1.1"}')
+        ready = directory / "ready"
+        helper = directory / "network-helper"
+        helper.write_text('#!/bin/sh\necho "$@" >> "$STUB_ROOT/helper-calls"\n'
+                          'printf \'{"SOPHON_INFRAVM_IP":"10.0.60.9","SOPHON_VNET_DNS":"1.1.1.1"}\' > "$1"\n')
+        helper.chmod(0o755)
+        text = (SCRIPTS / "sophon-deploy").read_text()
+        text = (text.replace("/var/lib/sophon", str(data)) if relocate
+                else text.replace("site=/var/lib/sophon/project/site.json", f"site={site}"))
+        script = directory / "controller"
+        script.write_text(text.replace("/run/user/1000/sophon-ready", str(ready))
+                          .replace("/usr/local/libexec/sophon-network", str(helper)))
+        env = tools(directory)
+        # Starting or restarting host setup is what makes it ready.
+        sudo = directory / "bin/sudo"
+        sudo.write_text(f'#!/bin/sh\necho "sudo $*" >> "$STUB_ROOT/sudo-calls"\n'
+                        f'[ "$1 $2" != "systemctl restart" ] || touch {shlex.quote(str(ready))}\n')
+        sudo.chmod(0o755)
+        return script, ready, data, env
+
+    def sudo_calls(self, directory):
+        path = directory / "sudo-calls"
+        return path.read_text().splitlines() if path.exists() else []
+
     def test_wrapper_argument_and_environment_boundary(self):
-        source = (SCRIPTS / "sophon-controller").read_text()
+        source = (SCRIPTS / "sophon-deploy").read_text()
         allowed = source.split("for name in", 1)[1].split("\ndo", 1)[0].replace("\\", "").split()
         self.assertEqual(set(allowed), set(step_fields("configure")))
         with fixture() as directory:
-            ready = directory / "ready"
+            script, ready, _, env = self.controller(directory)
             ready.touch()
-            script = directory / "controller"
-            script.write_text((SCRIPTS / "sophon-controller").read_text()
-                              .replace("/run/user/1000/sophon-ready", str(ready)))
-            env = tools(directory)
             env.update(SOPHON_DOMAIN="example.test", SOPHON_CF_TOKEN="secret with spaces",
                        SOPHON_INFRAVM_IP="10.0.60.2", SOPHON_VNET_DNS="1.1.1.1",
                        SOPHON_NFS_IP="forbidden", SOPHON_VNET_GATEWAY="forbidden",
@@ -552,17 +692,11 @@ udevadm() { [[ $1 == settle ]]; }
 
     def test_certificate_disk_is_copied_into_the_project_and_unmounted(self):
         with fixture() as directory:
-            ready = directory / "ready"
+            script, ready, data, env = self.controller(directory, relocate=True)
             ready.touch()
-            data = directory / "persistent"
             disk = directory / "disk"
             disk.mkdir()
             (disk / "acme.json").write_text('{"letsencrypt":{}}')
-            script = directory / "controller"
-            script.write_text((SCRIPTS / "sophon-controller").read_text()
-                              .replace("/run/user/1000/sophon-ready", str(ready))
-                              .replace("/var/lib/sophon", str(data)))
-            env = tools(directory)
             sudo = directory / "bin/sudo"
             sudo.write_text('#!/usr/bin/env bash\n'
                             'echo "sudo $*" >> "$STUB_ROOT/sudo-calls"\n'
@@ -577,32 +711,55 @@ udevadm() { [[ $1 == settle ]]; }
             command = calls(directory, "podman")[-1]
             self.assertIn("SOPHON_ACME_FILE", command[:command.index("sophon:latest")])
             self.assertNotIn("/workspace/imports/acme.json", " ".join(command))
-            commands = (directory / "sudo-calls").read_text().splitlines()
+            commands = self.sudo_calls(directory)
             self.assertTrue(commands[0].startswith("sudo mount -o ro "))
             self.assertTrue(commands[1].startswith("sudo umount "))
 
     def test_without_a_certificate_disk_no_file_is_offered(self):
         with fixture() as directory:
-            ready = directory / "ready"
+            script, ready, _, env = self.controller(directory)
             ready.touch()
-            script = directory / "controller"
-            script.write_text((SCRIPTS / "sophon-controller").read_text()
-                              .replace("/run/user/1000/sophon-ready", str(ready)))
-            env = tools(directory)
             env["SOPHON_CERTS_DEVICE"] = str(directory / "absent")
             result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
             self.assert_success(result)
             command = calls(directory, "podman")[-1]
             self.assertNotIn("SOPHON_ACME_FILE", command[:command.index("sophon:latest")])
 
-    def test_wrapper_refuses_root_or_not_ready(self):
+    def test_first_run_asks_for_the_network_then_finishes_host_setup(self):
         with fixture() as directory:
-            script = directory / "controller"
-            script.write_text((SCRIPTS / "sophon-controller").read_text()
-                              .replace("/run/user/1000/sophon-ready", str(directory / "ready")))
-            env = tools(directory)
+            script, ready, data, env = self.controller(directory, saved=False)
+            result = subprocess.run(["bash", str(script), "--run"], env=env, text=True, capture_output=True)
+            self.assert_success(result)
+            site = data / "project/site.json"
+            self.assertEqual(json.loads(site.read_text())["SOPHON_INFRAVM_IP"], "10.0.60.9")
+            self.assertEqual((directory / "helper-calls").read_text().split(), [str(site)])
+            # Wait for the host setup that began at boot, then redo it so DNS points at the saved address.
+            self.assertEqual(self.sudo_calls(directory), ["sudo systemctl start sophon-host-bootstrap",
+                                                          "sudo systemctl restart sophon-host-bootstrap"])
+            command = calls(directory, "podman")[-1]
+            self.assertEqual(command[command.index("sophon:latest") + 1:], ["python3", "src/console.py", "--run"])
+
+    def test_saved_network_is_not_asked_again_unless_requested(self):
+        with fixture() as directory:
+            script, ready, _, env = self.controller(directory)
+            ready.touch()
+            self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
+            self.assertFalse((directory / "helper-calls").exists())
+            self.assertEqual(self.sudo_calls(directory), [])
+            # --network is the wrapper's own switch: it asks again and is not passed on to the console.
+            result = subprocess.run(["bash", str(script), "--network", "--run"], env=env, text=True, capture_output=True)
+            self.assert_success(result)
+            self.assertTrue((directory / "helper-calls").exists())
+            command = calls(directory, "podman")[-1]
+            self.assertEqual(command[command.index("sophon:latest") + 1:], ["python3", "src/console.py", "--run"])
+
+    def test_wrapper_waits_for_unfinished_host_setup_then_refuses_root_or_not_ready(self):
+        with fixture() as directory:
+            script, ready, _, env = self.controller(directory)
+            # A saved network but setup not finished: it waits for setup, and stops if it still is not ready.
             result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
             self.assertIn("without reinstalling", result.stderr)
+            self.assertEqual(self.sudo_calls(directory), ["sudo systemctl start sophon-host-bootstrap"])
             env["STUB_UID"] = "0"
             result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
             self.assertIn("do not use sudo", result.stderr)
@@ -632,7 +789,7 @@ printf '[%s]\n' "$(detect_disk)"
         self.assertNotIn("podman load", source)
         self.assertNotIn("--force", source)
         self.assertNotIn("coreos-installer", (SCRIPTS / "host-bootstrap.sh").read_text())
-        self.assertNotIn("coreos-installer", (SCRIPTS / "sophon-controller").read_text())
+        self.assertNotIn("coreos-installer", (SCRIPTS / "sophon-deploy").read_text())
 
 
 if __name__ == "__main__":

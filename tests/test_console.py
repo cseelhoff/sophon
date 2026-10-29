@@ -86,7 +86,7 @@ class ConsoleTests(unittest.TestCase):
             self.assertEqual(console.main([]), 0)
         self.assertFalse([prompt for prompt in prompts if 'SOPHON_INFRAVM_IP' in prompt or 'SOPHON_VNET_DNS' in prompt])
         self.assertTrue([prompt for prompt in prompts if 'SOPHON_DOMAIN' in prompt])
-        self.assertIn('192.0.2.53 (from installation)', output.getvalue())
+        self.assertIn('192.0.2.53 (saved network)', output.getvalue())
 
     def wizard(self, environment, answers, secrets=()):
         """Run the interactive wizard with scripted answers; returns (exit code, prompts, secret prompts, output)."""
@@ -123,6 +123,17 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('SOPHON_CF_TUNNEL_NAME', text)
         self.assertNotIn('SOPHON_ACME_FILE', text)
         self.assertTrue([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt])
+
+    def test_connected_is_the_default_even_when_a_certificate_file_was_found(self):
+        values = service_values() | {'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_ACME_EMAIL': 'me@example.test'}
+        # Enter at the air-gapped question means "no": the certificate file is dropped and the token is asked for.
+        code, prompts, hidden, _ = self.wizard(values, [''] * 12, ['token'] * 4)
+        self.assertEqual(code, 0)
+        self.assertTrue(prompts[0].startswith('Is this site air-gapped') and prompts[0].endswith('[y/N] '), prompts[0])
+        text = ' '.join(prompts + hidden)
+        self.assertIn('SOPHON_CF_TOKEN', text)
+        self.assertNotIn('SOPHON_ACME_FILE', text)
+        self.assertFalse(os.environ.get('SOPHON_ACME_FILE'))
 
     def test_air_gapped_site_asks_only_for_the_certificate_file(self):
         values = service_values() | {'SOPHON_CF_TOKEN': 'WOULD_LEAK'}

@@ -51,4 +51,4 @@
             sudo mkdir -p /mnt/sophon
             sudo mount -o ro /dev/disk/by-label/SOPHON_DEPLOY /mnt/sophon
             sudo bash /mnt/sophon/install.sh
-          Then log in as core and run sophon-controller (step 4).
+          Then log in as core and run sophon-deploy (step 4).

@@ -1,5 +1,5 @@
 ---
-# Step 4 - runs inside the InfraVM's runner container (via sophon-controller).
+# Step 4 - runs inside the InfraVM's runner container (via sophon-deploy).
 # Deploys services through Portainer's HTTP API; no hypervisor access, no SSH.
 - name: Deploy services from InfraVM
   hosts: localhost
@@ -11,14 +11,14 @@
           - lookup('env', 'SOPHON_DEPLOYMENT_STEP') == 'configure'
           - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
           - lookup('env', 'SOPHON_VCENTER_PASSWORD') == ''
-        fail_msg: "Run sophon-controller on the installed InfraVM. Provisioning is a separate laptop step."
+        fail_msg: "Run sophon-deploy on the installed InfraVM. Provisioning is a separate laptop step."
       tags: [always]
     - name: Validate service credentials
       ansible.builtin.assert:
         that:
           - lookup('vars', item) is string
           - lookup('vars', item) | trim | length > 0
-        fail_msg: "Supply SOPHON_{{ item | upper }} through sophon-controller on InfraVM."
+        fail_msg: "Supply SOPHON_{{ item | upper }} through sophon-deploy on InfraVM."
         quiet: true
       loop:
         - portainer_admin_password

@@ -10,7 +10,7 @@
 .EXAMPLE
   .\2-provision-hyperv-local.ps1 -AttachCertificates   # insert the secret certificate ISO into the existing InfraVM
 .EXAMPLE
-  .\2-provision-hyperv-local.ps1 -DetachCertificates   # eject it again once sophon-controller has used it
+  .\2-provision-hyperv-local.ps1 -DetachCertificates   # eject it again once sophon-deploy has used it
 #>
 param(
     [string]$Switch = $env:SOPHON_HYPERV_SWITCH,
@@ -19,7 +19,7 @@ param(
     [int]$Cores = $(if ($env:SOPHON_INFRAVM_CORES) { $env:SOPHON_INFRAVM_CORES } else { 8 }),
     [int]$MemoryMB = $(if ($env:SOPHON_INFRAVM_MEMORY) { $env:SOPHON_INFRAVM_MEMORY } else { 8192 }),
     [int]$DiskGB = $(if ($env:SOPHON_INFRAVM_DISK_GB) { $env:SOPHON_INFRAVM_DISK_GB } else { 100 }),
-    [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\fedora-coreos-live.iso'),
+    [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\sophon-installer.iso'),
     [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-deployment.iso'),
     [string]$CertificatesIso = (Join-Path $PSScriptRoot 'artifacts\secrets\sophon-certificates.iso'),
     [switch]$AttachCertificates,
@@ -66,7 +66,7 @@ if ($manageCertificates) {
     if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing certificate ISO: $CertificatesIso (run: .\sophon-provision.ps1 certificates issue)." }
     $empty = $drives | Where-Object { -not $_.Path } | Select-Object -First 1
     if ($empty) { Set-VMDvdDrive -VMDvdDrive $empty -Path $full } else { $null = Add-VMDvdDrive -VM $vm -Path $full }
-    Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-controller and answer y to air-gapped."
+    Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-deploy and answer y to air-gapped."
     return
 }
 
@@ -131,4 +131,4 @@ $installer = Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $coreos }
 Set-VMFirmware -VM $vm -BootOrder $disk, $installer
 Set-VM -VM $vm -Notes $marker
 Start-VM -VM $vm
-Write-Host "InfraVM '$Name' created and started. Open it in Hyper-V Manager > Connect, then continue at step 3."
+Write-Host "InfraVM '$Name' created and started. Step 3 installs by itself; open it in Hyper-V Manager > Connect, choose the core password when asked, log in and run sophon-deploy (step 4)."

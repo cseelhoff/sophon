@@ -188,7 +188,7 @@ def test_launcher_passes_only_the_steps_settings():
 def test_launcher_rejects_wrong_step_and_hypervisor():
   for arguments, extra, message in (
       (['--step', 'provision', '--', '4-configure.yml'], {}, 'provision requires 2-provision.yml'),
-      (['--step', 'configure', '--', '4-configure.yml'], {}, 'sophon-controller'),
+      (['--step', 'configure', '--', '4-configure.yml'], {}, 'sophon-deploy'),
       (['--step', 'provision', '--', '2-provision.yml'], {'SOPHON_HYPERVISOR': 'xen'}, 'proxmox, vcenter or hyperv')):
     result, received = run_launcher(arguments, extra)
     assert result.returncode == 2 and message in result.stderr, (arguments, result.stderr)

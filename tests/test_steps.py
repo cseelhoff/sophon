@@ -116,7 +116,7 @@ def test_site_configuration_and_secret_boundary():
         site.unlink()
         environment.pop('SOPHON_DEPLOYMENT_STEP')
         result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
-        assert result.returncode == 2 and 'sophon-controller' in result.stderr
+        assert result.returncode == 2 and 'sophon-deploy' in result.stderr
 
 
 def test_provision_preservation():

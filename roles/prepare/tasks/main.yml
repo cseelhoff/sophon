@@ -149,3 +149,13 @@
          + (['--force'] if prepare_force | bool else []) }}
   register: prepare_bundle
   changed_when: "'up to date' not in prepare_bundle.stdout"
+
+# ---- The live ISO with the unattended installer baked in ---------------------------
+- name: Bake the unattended installer into the CoreOS live ISO
+  ansible.builtin.command:
+    argv: >-
+      {{ [ansible_playbook_python, playbook_dir ~ '/src/installer_iso.py',
+          '--stock', coreos_iso_path, '--output', installer_iso_path]
+         + (['--force'] if prepare_force | bool else []) }}
+  register: prepare_installer_iso
+  changed_when: "'up to date' not in prepare_installer_iso.stdout"

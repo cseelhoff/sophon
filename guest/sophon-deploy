@@ -3,11 +3,33 @@
 set -euo pipefail
 
 if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
-    echo "Log in as core to run sophon-controller (do not use sudo)." >&2
+    echo "Log in as core to run sophon-deploy (do not use sudo)." >&2
     exit 1
 fi
 export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+
+# `--network` asks the network questions again; the first run asks them because nothing is saved yet.
+site=/var/lib/sophon/project/site.json
+redo_network=0
+forwarded=()
+for argument in "$@"; do
+    if [[ $argument == --network ]]; then redo_network=1; else forwarded+=("$argument"); fi
+done
+set -- "${forwarded[@]}"
+network_changed=0
+if (( redo_network )) ||
+    ! jq -e '(.SOPHON_INFRAVM_IP // "") != "" and (.SOPHON_VNET_DNS // "") != ""' "$site" >/dev/null 2>&1; then
+    /usr/local/libexec/sophon-network "$site"
+    network_changed=1
+fi
+# Host setup (loading the images, starting Portainer) begins at boot; wait for it, and redo it once the address is known
+# so the services' DNS points at this machine.
+if (( network_changed )) || [[ ! -f /run/user/1000/sophon-ready ]]; then
+    echo "Finishing host setup (this can take a few minutes the first time)..."
+    sudo systemctl start sophon-host-bootstrap || true
+    if (( network_changed )); then sudo systemctl restart sophon-host-bootstrap || true; fi
+fi
 if [[ ! -f /run/user/1000/sophon-ready ]]; then
     echo "Host setup is not ready. Inspect: journalctl -u sophon-host-bootstrap" >&2
     echo "Retry without reinstalling: sudo systemctl restart sophon-host-bootstrap" >&2

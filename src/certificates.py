@@ -277,7 +277,7 @@ def issue_main(argv):
             raise ValueError('The ACME store exceeds the 2 MiB import limit; use a dedicated store for this domain.')
         iso = write_certificate_iso(data, options.output_iso)
         print(f'Secret certificate disk written: {iso} ({os.path.getsize(iso)} bytes, label {CERTIFICATE_LABEL}). '
-              'It holds a private key: attach it to the InfraVM, run sophon-controller, then detach and delete it.',
+              'It holds a private key: attach it to the InfraVM, run sophon-deploy, then detach and delete it.',
               file=sys.stderr)
         if options.output_file:
             descriptor = os.open(options.output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)

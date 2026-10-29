@@ -76,7 +76,7 @@
 
         - name: Preserve the existing live store on normal reruns
           ansible.builtin.debug:
-            msg: "Keeping live certificates; use sophon-controller --refresh-certificates for an intentional replacement."
+            msg: "Keeping live certificates; use sophon-deploy --refresh-certificates for an intentional replacement."
           when: _traefik_acme_live.status == 200 and not traefik_acme_replace_existing | bool
 
         - name: Restore the certificate handoff

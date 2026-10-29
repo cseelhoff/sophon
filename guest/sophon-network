@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Run by sophon-deploy as core on the installed InfraVM: choose the static network, apply it and remember it.
+# Usage: sophon-network /var/lib/sophon/project/site.json
+set -euo pipefail
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+ipv4_number() {
+    local value=$1 part result=0
+    local -a parts
+    [[ $value =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    IFS=. read -r -a parts <<< "$value"
+    for part in "${parts[@]}"; do
+        [[ ${#part} -le 3 && ( $part == 0 || $part != 0* ) ]] || return 1
+        (( 10#$part <= 255 )) || return 1
+        result=$(( (result << 8) | 10#$part ))
+    done
+    printf '%s\n' "$result"
+}
+
+validate_network() {
+    local ip=$1 prefix=$2 gateway=$3 dns=$4 ipn gwn dnsn mask hostmask
+    [[ $prefix =~ ^([1-9]|[12][0-9]|30)$ ]] || die "Prefix must be 1 through 30."
+    ipn=$(ipv4_number "$ip") || die "Invalid IPv4 address."
+    gwn=$(ipv4_number "$gateway") || die "Invalid gateway IPv4 address."
+    dnsn=$(ipv4_number "$dns") || die "Invalid DNS IPv4 address."
+    # Reject unspecified, multicast, reserved and loopback addresses.
+    for number in "$ipn" "$gwn" "$dnsn"; do
+        (( number > 0 && (number >> 24) != 127 && (number >> 24) < 224 )) ||
+            die "Use unicast, non-loopback IPv4 addresses."
+    done
+    mask=$(( (0xffffffff << (32 - prefix)) & 0xffffffff ))
+    hostmask=$(( 0xffffffff ^ mask ))
+    (( (ipn & mask) == (gwn & mask) && ipn != gwn )) ||
+        die "Gateway must be distinct and in the same subnet."
+    (( (ipn & hostmask) != 0 && (ipn & hostmask) != hostmask &&
+       (gwn & hostmask) != 0 && (gwn & hostmask) != hostmask )) ||
+        die "IP and gateway must not be network or broadcast addresses."
+}
+
+# The address, prefix, gateway and DNS server this machine currently uses (usually from DHCP); empty if unknown.
+detect_network() {
+    local route dev cidr
+    detected_ip= detected_prefix= detected_gateway= detected_dns=
+    route=$(ip -4 route show default 2>/dev/null | head -n1) || true
+    detected_gateway=$(awk '{for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit }}' <<< "$route")
+    dev=$(awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}' <<< "$route")
+    if [[ -n $dev ]]; then
+        cidr=$(ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{ print $4; exit }') || true
+        if [[ $cidr == */* ]]; then detected_ip=${cidr%/*}; detected_prefix=${cidr#*/}; fi
+        detected_dns=$(resolvectl dns "$dev" 2>/dev/null |
+            awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print $i; exit }}') || true
+    fi
+    [[ -n $detected_dns ]] ||
+        detected_dns=$(awk '$1 == "nameserver" && $2 !~ /^127\./ { print $2; exit }' /etc/resolv.conf 2>/dev/null) || true
+}
+
+# ask VARIABLE 'Prompt' [default]: Enter alone accepts the default shown in brackets.
+ask() {
+    local answer
+    read -r -p "$2${3:+ [$3]}: " answer
+    printf -v "$1" '%s' "${answer:-${3:-}}"
+}
+
+main() {
+    # Not the DHCP-provided server: that is often the PC or router in front of this VM, which can forward back to it.
+    local default_dns=1.1.1.1
+    local site=${1:?Usage: sophon-network /path/to/site.json} ip prefix gateway dns network
+    local connection=/etc/NetworkManager/system-connections/sophon-static.nmconnection
+    detect_network
+    printf '%s\n' 'Network for this InfraVM. Press Enter to accept the [default].' \
+        'DNS server: use a real resolver (your router or a public one). Do not use a PC that forwards its DNS to this VM,' \
+        'for example the Hyper-V Default Switch address, or lookups loop once that PC uses this VM for DNS.'
+    [[ -z $detected_dns ]] || printf 'Current DNS server (from DHCP): %s\n' "$detected_dns"
+    while true; do
+        ask ip 'InfraVM IPv4 address' "$detected_ip"
+        ask prefix 'IPv4 prefix length (1-30)' "$detected_prefix"
+        ask gateway 'IPv4 gateway' "$detected_gateway"
+        ask dns 'DNS server IPv4 address' "$default_dns"
+        # validate_network exits on failure, so it runs in a subshell and the questions are asked again.
+        ( validate_network "$ip" "$prefix" "$gateway" "$dns" ) && break
+        printf '%s\n' 'Please enter the network again.'
+    done
+    network=$(printf '[connection]\nid=sophon-static\ntype=ethernet\n\n[ipv4]\nmethod=manual\naddress1=%s/%s,%s\ndns=%s;\n\n[ipv6]\nmethod=disabled\n' \
+        "$ip" "$prefix" "$gateway" "$dns")
+    printf '%s\n' "$network" | sudo sh -c 'umask 077; cat > "$0"' "$connection"
+    sudo nmcli connection reload
+    sudo nmcli connection up sophon-static ||
+        printf '%s\n' 'Could not switch networks now; the address applies at the next reboot.' >&2
+    jq -n --arg ip "$ip" --arg dns "$dns" '{SOPHON_INFRAVM_IP: $ip, SOPHON_VNET_DNS: $dns}' > "$site.tmp"
+    mv -- "$site.tmp" "$site"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

@@ -110,7 +110,7 @@ def main(argv=None):
                         help='Replace an existing Traefik certificate store with the validated local handoff')
     options = parser.parse_args(argv)
     if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
-        parser.error('Start this program using sophon-controller on installed InfraVM.')
+        parser.error('Start this program using sophon-deploy on installed InfraVM.')
     try:
         site = deployment.load_site_settings()
         for name, value in site.items():
@@ -127,22 +127,22 @@ def main(argv=None):
         fields = deployment.step_fields('configure')
         try:
             # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
-            air_gapped = ask_yes_no('Is this site air-gapped (no internet access)?',
-                                    default=bool(values['SOPHON_ACME_FILE'] and not values['SOPHON_CF_TOKEN']))
+            # Connected is the normal case; only an explicit "y" selects the pre-issued certificate path.
+            air_gapped = ask_yes_no('Is this site air-gapped (no internet access)?')
             skipped = INTERNET_ONLY if air_gapped else {'SOPHON_ACME_FILE'}
             if air_gapped:
                 values['SOPHON_CF_TOKEN'] = ''
                 if not values['SOPHON_ACME_FILE']:
                     print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
-                          'run sophon-controller again, or give the path of an acme.json already under /workspace.')
+                          'run sophon-deploy again, or give the path of an acme.json already under /workspace.')
             else:
                 values['SOPHON_ACME_FILE'] = ''
             prompt_shared_password(values, {name: field for name, field in fields.items() if name not in skipped})
             for name, (label, group, kind, default, required) in fields.items():
                 value = values[name]
                 if value and site.get(name):
-                    # Already chosen during installation (step 3); do not ask twice.
-                    print(f'{label} ({name}): {value} (from installation)')
+                    # Saved when the network was set up at the start of this step; do not ask twice.
+                    print(f'{label} ({name}): {value} (saved network)')
                     continue
                 if name in skipped:
                     continue
