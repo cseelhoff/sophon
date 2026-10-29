@@ -43,5 +43,12 @@ class UploadTests(unittest.TestCase):
             UPLOAD.upload(dict(config, filename="../escape.iso"))
 
 
+class VmTasksTests(unittest.TestCase):
+    def test_every_api_module_call_honours_proxmox_validate_certs(self):
+        text = (ROOT / "roles/proxmox/tasks/vm.yml").read_text()
+        self.assertEqual(text.count("community.proxmox.proxmox_kvm:"), 2)
+        self.assertEqual(text.count('validate_certs: "{{ proxmox_validate_certs }}"'), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

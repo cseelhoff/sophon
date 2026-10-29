@@ -89,6 +89,7 @@
         api_port: "{{ proxmox_port }}"
         api_user: "{{ proxmox_user }}"
         api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
         node: "{{ proxmox_node }}"
         vmid: "{{ infravm_nextid.json.data }}"
         name: "{{ infravm_vm_name }}"
@@ -118,6 +119,7 @@
     api_port: "{{ proxmox_port }}"
     api_user: "{{ proxmox_user }}"
     api_password: "{{ proxmox_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ infravm_named_guests[0].vmid if infravm_named_guests else infravm_nextid.json.data }}"
     state: started
