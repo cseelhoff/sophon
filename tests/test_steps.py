@@ -265,6 +265,35 @@ def test_service_resolution_probe_uses_python_and_exact_addresses():
         assert result.returncode != 0, result.stdout + result.stderr
 
 
+def test_cloudflared_connects_only_when_a_tunnel_was_found():
+    defaults = yaml.safe_load((ROOT / 'roles/cloudflared/defaults/main.yml').read_text())
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        compose = directory / 'compose.yml'
+        result, _ = run_fixture(directory, [{
+            'ansible.builtin.template': {
+                'src': str(ROOT / 'roles/cloudflared/templates/docker-compose.yml.j2'), 'dest': str(compose)},
+            'vars': dict(defaults, cloudflared_token='CONNECTOR_TOKEN'),
+        }])
+        assert result.returncode == 0, result.stdout + result.stderr
+        service = yaml.safe_load(compose.read_text())['services']['cloudflared']
+        assert service['image'] == 'docker.io/cloudflare/cloudflared:' + defaults['cloudflared_image_tag']
+        assert service['pull_policy'] == 'never' and service['networks'] == ['proxy']
+        assert service['environment'] == ['TUNNEL_TOKEN=CONNECTOR_TOKEN']
+        assert 'ports' not in service and 'labels' not in service
+        # No tunnel (no token or no egress): the role must not touch the network or Portainer.
+        result, _ = run_fixture(directory, [{
+            'ansible.builtin.include_tasks': str(ROOT / 'roles/cloudflared/tasks/main.yml'),
+            'vars': {'coredns_cf_tunnel_id': '', 'coredns_cf_account_id': '', 'coredns_cf_token': 'unused'},
+        }])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'skipped=2' in result.stdout and 'failed=0' in result.stdout
+    tasks = (ROOT / 'roles/cloudflared/tasks/main.yml').read_text()
+    assert 'no_log: true' in tasks.split('Read the tunnel connector token')[1].split('- name:')[0]
+    order = [task.get('name') for task in yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['tasks']]
+    assert order.index('Deploy Traefik') < order.index('Connect the Cloudflare tunnel')
+
+
 def test_gitea_initializer_reports_cli_failures():
     defaults = yaml.safe_load((ROOT / 'roles/gitea/defaults/main.yml').read_text())
     defaults.update(
@@ -431,6 +460,7 @@ if __name__ == '__main__':
     test_service_resolution_follows_entered_domain()
     test_service_resolution_probe_uses_python_and_exact_addresses()
     test_gitea_initializer_reports_cli_failures()
+    test_cloudflared_connects_only_when_a_tunnel_was_found()
     test_acme_backup_retries_container_replacement_race()
     test_portainer_routing_configured_with_traefik()
     print('Deployment step checks passed')

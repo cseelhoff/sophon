@@ -60,7 +60,9 @@ CoreDNS binds only `127.0.0.1:53` and `<infravm_ip>:53` for the zone, and anythi
 the operator's upstream DNS (`SOPHON_VNET_DNS`, default `1.1.1.1`; it must be a real resolver and never a machine that
 forwards its own DNS back to InfraVM, or lookups loop). Containers reach each other through aardvark-dns, which
 forwards unknown names to CoreDNS. CoreDNS is a custom build (`coredns-dockerdiscovery`) that publishes
-records from container labels and can sync Cloudflare tunnel routes. Before CoreDNS exists the runner maps
+records from container labels and can sync Cloudflare tunnel routes. A `cloudflared` container (the `cloudflared`
+role, deployed after Traefik) is the tunnel's connector: it reads the tunnel's token from the Cloudflare API and
+forwards public requests to Traefik. Without it Cloudflare answers error 1033. Before CoreDNS exists the runner maps
 the service names to InfraVM in its own `/etc/hosts` ([4-configure.yml](../4-configure.yml)); the host
 resolver and other clients are never changed.
 

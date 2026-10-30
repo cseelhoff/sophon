@@ -1,0 +1,16 @@
+services:
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:{{ cloudflared_image_tag }}
+    pull_policy: never
+    container_name: cloudflared
+    restart: always
+    security_opt:
+      - label=disable
+    networks:
+      - proxy
+    environment:
+      - TUNNEL_TOKEN={{ cloudflared_token }}
+    command: tunnel --no-autoupdate run
+networks:
+  proxy:
+    external: true

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PROJECT = (
     '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
     *(f'roles/{role}' for role in ('portainer', 'portainer_stack', 'coredns', 'traefik',
-                                   'openldap', 'keycloak', 'gitea')),
+                                   'cloudflared', 'openldap', 'keycloak', 'gitea')),
     'src/console.py', 'src/deployment.py', 'src/certificates.py',
 )
 GUEST = ('host-bootstrap.sh', 'sophon-deploy', 'sophon-network', 'sophon-set-password')

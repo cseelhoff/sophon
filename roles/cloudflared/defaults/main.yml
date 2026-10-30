@@ -1,0 +1,4 @@
+---
+cloudflared_image_tag: "2026.10.6"
+cloudflared_image_tars:
+  - "{{ sophon_containers_dir }}/cloudflare-cloudflared_{{ cloudflared_image_tag }}.tar"

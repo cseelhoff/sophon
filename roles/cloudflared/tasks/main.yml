@@ -1,0 +1,29 @@
+---
+# CoreDNS publishes the DNS records and ingress routes of an existing tunnel but
+# does not connect to it. Without a connector Cloudflare answers error 1033, so
+# run one next to Traefik. Skipped when no tunnel was found (no token or no
+# egress): coredns/tasks/main.yml leaves coredns_cf_tunnel_id empty then.
+- name: Connect the Cloudflare tunnel
+  when:
+    - coredns_cf_tunnel_id | default('', true) != ''
+    - coredns_cf_account_id | default('', true) != ''
+  block:
+    - name: Read the tunnel connector token
+      ansible.builtin.uri:
+        url: "https://api.cloudflare.com/client/v4/accounts/{{ coredns_cf_account_id }}/cfd_tunnel/{{ coredns_cf_tunnel_id }}/token"
+        headers:
+          Authorization: "Bearer {{ coredns_cf_token }}"
+        timeout: 10
+      register: cloudflared_token_response
+      failed_when: not (cloudflared_token_response.json.success | default(false))
+      changed_when: false
+      no_log: true
+
+    - name: Deploy cloudflared stack via Portainer
+      ansible.builtin.include_role:
+        name: portainer_stack
+      vars:
+        cloudflared_token: "{{ cloudflared_token_response.json.result }}"
+        portainer_stack_name: "cloudflared"
+        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        portainer_stack_image_tars: "{{ cloudflared_image_tars }}"

@@ -67,6 +67,9 @@
     - name: Deploy Traefik
       ansible.builtin.include_role:
         name: traefik
+    - name: Connect the Cloudflare tunnel
+      ansible.builtin.include_role:
+        name: cloudflared
     - name: Deploy OpenLDAP
       ansible.builtin.include_role:
         name: openldap
