@@ -345,7 +345,7 @@ class CertificateTests(unittest.TestCase):
 
         def answer(prompt):
             prompts.append(prompt)
-            return 'y' if prompt.startswith('Is this site air-gapped') else ''
+            return 'n' if prompt.startswith('Does this site have internet access?') else ''
 
         with patch.dict(os.environ, settings, clear=False), \
                 patch('console.deployment.ROOT', root), \
@@ -368,10 +368,10 @@ class CertificateTests(unittest.TestCase):
         root = self.directory / 'deployed'
         settings = service_values() | {'SOPHON_DOMAIN': 'fixture.example'}
         settings.pop('SOPHON_ACME_FILE', None)
-        replies = iter(['y', '', str(self.directory / 'nope.json'), str(self.source)])
+        replies = iter(['n', '', str(self.directory / 'nope.json'), str(self.source)])
 
         def answer(prompt):
-            return next(replies) if prompt.startswith(('Is this site', 'Pre-issued')) else ''
+            return next(replies) if prompt.startswith(('Does this site', 'Pre-issued')) else ''
 
         with patch.dict(os.environ, settings, clear=False), \
                 patch('console.deployment.ROOT', root), \

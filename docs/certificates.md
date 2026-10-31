@@ -42,7 +42,7 @@ Attach the ISO to the InfraVM as a CD/DVD: on this PC's Hyper-V `.\sophon-provis
 created while the ISO exists already has it), elsewhere through your hypervisor.
 
 `sophon-deploy` looks for a disk labelled `SOPHON_CERTS`. If it finds one it mounts it read-only, copies
-`acme.json` into the project's `imports` folder (mode 0600) and unmounts it. Answer **y** to "air-gapped" and press
+`acme.json` into the project's `imports` folder (mode 0600) and unmounts it. Answer **n** to "Does this site have internet access?" and press
 Enter at the **Pre-issued certificates file** prompt to accept that file (you can also type another path under
 `/workspace`). Sophon checks that the domain and every service name are covered by a trusted, unexpired chain whose
 key matches, then stores the file privately (mode 0600, replaced atomically), removes the copy under `imports`, and

@@ -75,7 +75,7 @@ it a real resolver (router or public). Do not use a machine that forwards its ow
 Switch address (the PC's ICS proxy) does that as soon as you point the PC at the VM, and lookups loop.
 `sophon-deploy --network` asks again later.
 
-Then it asks **whether the site is air-gapped** (default no) and whether to **use one password for all
+Then it asks **whether the site has internet access** (default yes) and whether to **use one password for all
 service accounts** (default no), then asks for:
 
 | Input | Notes |
@@ -83,7 +83,8 @@ service accounts** (default no), then asks for:
 | Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
 | ACME email | Connected sites only. A real address. |
 | Cloudflare token | Connected sites only, required. A custom token with three permissions: Zone / Zone / Read, Zone / DNS / Edit and Account / Cloudflare Tunnel / Edit (tunnel permission only if you use tunnels), scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
-| Cloudflare tunnel name | Connected sites only (default `sophon`). The tunnel must already exist (Cloudflare Zero Trust > Networks > Tunnels); `sophon-deploy` publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. If no tunnel has that name, nothing is published and no connector starts. || Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
+| Cloudflare tunnel name | Connected sites only (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
+| Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
 | Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) fills every one of these except the Cloudflare token and licence key. |
 | Portainer licence | Business Edition key (the current free program covers three nodes). |
 

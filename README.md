@@ -24,8 +24,9 @@ install media, then creates and starts a blank VM with the media attached.
 1. CoreOS installs itself and reboots. Nothing to type.
 2. When asked, choose a password for `core`, then log in as `core`.
 3. Run `sophon-deploy`. It first asks for the network (the VM starts on a DHCP lease; address, prefix and gateway
-   default to it, so Enter keeps them as a static address, and DNS defaults to `1.1.1.1`). Then answer **N** to
-   "air-gapped" unless the site has no internet, and enter your domain and credentials. It deploys CoreDNS, Traefik,
+   default to it, so Enter keeps them as a static address, and DNS defaults to `1.1.1.1`). Then answer **Y** (the
+   default) to "Does this site have internet access?" unless the site is offline, and enter your domain and credentials.
+   It deploys CoreDNS, Traefik,
    OpenLDAP, Keycloak and Gitea.
 
 **No internet at the VM's site?** Also follow [Air-gapped sites](#air-gapped-sites).
@@ -113,12 +114,12 @@ replaces Let's Encrypt.
    Run it on the same machine each time.
 2. **Attach it to the VM** as a CD/DVD (local Hyper-V: `.\sophon-provision.ps1 attach-certificates`; a new VM gets it
    automatically if the ISO exists).
-3. **On the console:** run `sophon-deploy`, answer **y** to "air-gapped", and press Enter at the certificate prompt.
+3. **On the console:** run `sophon-deploy`, answer **n** to "Does this site have internet access?", and press Enter at the certificate prompt.
 
 Without a token there is no tunnel publishing. Keep the VM's clock accurate.
 
 **Renewals (monthly).** The certificate lasts 90 days and an air-gapped VM can't renew it. Repeat steps 1-2, then run
-`sophon-deploy --refresh-certificates` (answer **y**, press Enter, re-enter your existing credentials; it reruns the
+`sophon-deploy --refresh-certificates` (answer **n** to the internet question, press Enter, re-enter your existing credentials; it reruns the
 full deployment). Eject the disk afterwards (`.\sophon-provision.ps1 detach-certificates`). Details:
 [docs/certificates.md](docs/certificates.md).
 

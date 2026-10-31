@@ -67,7 +67,7 @@ if ($manageCertificates) {
     if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing certificate ISO: $CertificatesIso (run: .\sophon-provision.ps1 certificates issue)." }
     $empty = $drives | Where-Object { -not $_.Path } | Select-Object -First 1
     if ($empty) { Set-VMDvdDrive -VMDvdDrive $empty -Path $full } else { $null = Add-VMDvdDrive -VM $vm -Path $full }
-    Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-deploy and answer y to air-gapped."
+    Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-deploy and answer n to the internet access question."
     return
 }
 

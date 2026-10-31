@@ -189,18 +189,109 @@
             - coredns_cf_discovered_account_id | default('', true) != ''
             - coredns_cf_tunnel_id | default('', true) == ''
 
+        # Only a lookup Cloudflare answered successfully with no match creates a
+        # tunnel; an API error must never make a duplicate. config_src=cloudflare
+        # makes it remotely managed, which the ingress routes CoreDNS publishes
+        # and the connector token both require.
+        - name: Create the Cloudflare tunnel when none has that name
+          ansible.builtin.uri:
+            url: "https://api.cloudflare.com/client/v4/accounts/{{ coredns_cf_discovered_account_id }}/cfd_tunnel"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            body_format: json
+            body:
+              name: "{{ coredns_cf_tunnel_name }}"
+              config_src: cloudflare
+            timeout: 10
+          register: coredns_cf_tunnel_created
+          failed_when: false
+          changed_when: coredns_cf_tunnel_created.json.success | default(false)
+          when:
+            - coredns_cf_tunnels.json.success | default(false)
+            - coredns_cf_tunnels.json.result | default([], true) | length == 0
+
+        - name: Warn that the Cloudflare tunnel could not be created
+          when:
+            - coredns_cf_tunnel_created.json is defined
+            - not (coredns_cf_tunnel_created.json.success | default(false))
+          ansible.builtin.debug:
+            msg: >-
+              Could not create the Cloudflare tunnel "{{ coredns_cf_tunnel_name }}":
+              {{ coredns_cf_tunnel_created.json.errors | default([], true) | map(attribute='message') | join('; ') | default('no error detail returned', true) }}
+
         # setup.go treats cf_account_id and cf_tunnel_id as one group: supplying
         # either without the other aborts CoreDNS at startup, taking the whole
         # site's DNS with it. So the account id is only published once a tunnel
         # id is known, and both stay empty otherwise.
         - name: Adopt the tunnel and account ids only as a matched pair
           vars:
-            _tunnel: "{{ coredns_cf_tunnels.json.result | default([], true) | first | default({}, true) }}"
+            _tunnel: "{{ coredns_cf_tunnels.json.result | default([], true) | first | default(coredns_cf_tunnel_created.json.result | default({}, true), true) }}"
             _tunnel_id: "{{ coredns_cf_tunnel_id if (coredns_cf_tunnel_id | default('', true) != '') else _tunnel.id | default('', true) }}"
           ansible.builtin.set_fact:
             coredns_cf_tunnel_id: "{{ _tunnel_id }}"
             coredns_cf_account_id: "{{ coredns_cf_discovered_account_id if _tunnel_id != '' else '' }}"
           when: coredns_cf_zones.json is defined
+
+        # CoreDNS never edits a DNS record it did not create. A CNAME left on
+        # another tunnel by an earlier setup therefore keeps the name pointing at
+        # a tunnel with no connector, and Cloudflare answers 530. Repointing it
+        # here is the project's job. Only CNAMEs aimed at a tunnel target are
+        # taken over; any other record on these names (A, MX, a CNAME to a real
+        # host) is left alone. The ownership comment hands the record to
+        # CoreDNS, which then keeps it in sync.
+        - name: Look up the CNAMEs already on the service names
+          ansible.builtin.uri:
+            url: >-
+              https://api.cloudflare.com/client/v4/zones/{{ coredns_cf_zone_id }}/dns_records?type=CNAME&name={{ item }}.{{ coredns_domain_name | lower | regex_replace('\.$', '') }}
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            timeout: 10
+          loop: "{{ coredns_published_hosts }}"
+          register: coredns_cf_existing_cnames
+          failed_when: false
+          changed_when: false
+          when: coredns_cf_tunnel_id | default('', true) != ''
+
+        - name: Repoint CNAMEs that still target another tunnel
+          vars:
+            _record: "{{ item.json.result | default([], true) | first | default({}, true) }}"
+          ansible.builtin.uri:
+            url: "https://api.cloudflare.com/client/v4/zones/{{ coredns_cf_zone_id }}/dns_records/{{ _record.id }}"
+            method: PATCH
+            headers:
+              Authorization: "Bearer {{ coredns_cf_token }}"
+            body_format: json
+            body:
+              type: CNAME
+              content: "{{ coredns_cf_tunnel_id }}.cfargotunnel.com"
+              proxied: true
+              ttl: 1
+              comment: "{{ coredns_cf_owner_comment }}"
+            timeout: 10
+          loop: "{{ coredns_cf_existing_cnames.results | default([], true) }}"
+          loop_control:
+            label: "{{ item.item }}"
+          register: coredns_cf_repointed
+          failed_when: false
+          changed_when: coredns_cf_repointed.json.success | default(false)
+          when:
+            - item.json is defined
+            - item.json.result | default([], true) | length > 0
+            - _record.content | lower is match('.*\.cfargotunnel\.com$')
+            - _record.content | lower != coredns_cf_tunnel_id | lower ~ '.cfargotunnel.com'
+
+        - name: Warn about CNAMEs that could not be repointed
+          ansible.builtin.debug:
+            msg: >-
+              Could not repoint {{ item.item }}.{{ coredns_domain_name }} to the tunnel:
+              {{ item.json.errors | default([], true) | map(attribute='message') | join('; ') | default('no error detail returned', true) }}
+          loop: "{{ coredns_cf_repointed.results | default([], true) }}"
+          loop_control:
+            label: "{{ item.item.item }}"
+          when:
+            - item.json is defined
+            - not (item.json.success | default(false))
 
         - name: Display the Cloudflare coordinates in use
           when: coredns_cf_zones.json is defined
@@ -208,8 +299,9 @@
             msg: >-
               Cloudflare zone {{ coredns_cf_zone_id }} for {{ coredns_domain_name }};
               {{ 'tunnel ' ~ coredns_cf_tunnel_id ~ ' in account ' ~ coredns_cf_account_id
+                    ~ (' (created just now)' if coredns_cf_tunnel_created is changed else '')
                  if coredns_cf_tunnel_id != ''
-                 else 'no tunnel named "' ~ coredns_cf_tunnel_name ~ '" exists, so public CNAMEs and
+                 else 'no tunnel named "' ~ coredns_cf_tunnel_name ~ '" exists or could be created, so public CNAMEs and
                       ingress routes are not published and every name must be resolved from CoreDNS
                       directly. Certificates are unaffected.' }}
 

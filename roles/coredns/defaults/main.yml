@@ -23,3 +23,8 @@ coredns_cf_tunnel_id: ""
 coredns_cf_tunnel_name: "{{ lookup('env', 'SOPHON_CF_TUNNEL_NAME') | default('sophon', true) }}"
 # Written and deleted by the preflight to prove the token holds Zone:DNS:Edit.
 coredns_cf_probe_record: "_sophon-preflight.{{ coredns_domain_name }}"
+# Service names published through the tunnel (<name>.<domain>).
+coredns_published_hosts: [traefik, auth, ldap, git, portainer, dns]
+# Must equal dnsRecordOwnerComment in coredns-dockerdiscovery: CoreDNS only
+# edits records that carry it.
+coredns_cf_owner_comment: "managed by coredns-dockerdiscovery"

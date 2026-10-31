@@ -294,6 +294,41 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
     assert order.index('Deploy Traefik') < order.index('Connect the Cloudflare tunnel')
 
 
+def test_missing_tunnel_is_created_only_after_a_successful_empty_lookup():
+    tasks = yaml.safe_load((ROOT / 'roles/coredns/tasks/main.yml').read_text())
+    preflight = tasks[0]['block'][0]['block']
+    names = [task['name'] for task in preflight]
+    create = preflight[names.index('Create the Cloudflare tunnel when none has that name')]
+    assert names.index('Look up the Cloudflare tunnel by name') < names.index(create['name']) \
+        < names.index('Adopt the tunnel and account ids only as a matched pair')
+    call = create['ansible.builtin.uri']
+    assert call['method'] == 'POST' and call['url'].endswith('/cfd_tunnel')
+    assert call['headers'] == {'Authorization': 'Bearer {{ coredns_cf_token }}'}
+    assert call['body'] == {'name': '{{ coredns_cf_tunnel_name }}', 'config_src': 'cloudflare'}
+    # An API error on the lookup must never be mistaken for "no such tunnel".
+    assert any('tunnels.json.success' in condition for condition in create['when'])
+    assert any('length == 0' in condition for condition in create['when'])
+
+
+def test_stale_tunnel_cnames_are_repointed_but_other_records_are_not():
+    tasks = yaml.safe_load((ROOT / 'roles/coredns/tasks/main.yml').read_text())
+    preflight = tasks[0]['block'][0]['block']
+    names = [task['name'] for task in preflight]
+    repoint = preflight[names.index('Repoint CNAMEs that still target another tunnel')]
+    assert names.index('Adopt the tunnel and account ids only as a matched pair') \
+        < names.index('Look up the CNAMEs already on the service names') < names.index(repoint['name']) \
+        < names.index('Display the Cloudflare coordinates in use')
+    call = repoint['ansible.builtin.uri']
+    assert call['method'] == 'PATCH' and call['headers'] == {'Authorization': 'Bearer {{ coredns_cf_token }}'}
+    assert call['body']['type'] == 'CNAME' and call['body']['proxied'] is True
+    assert call['body']['comment'] == '{{ coredns_cf_owner_comment }}'
+    conditions = ' '.join(repoint['when'])
+    assert 'cfargotunnel' in conditions and '!=' in conditions
+    defaults = yaml.safe_load((ROOT / 'roles/coredns/defaults/main.yml').read_text())
+    assert defaults['coredns_cf_owner_comment'] == 'managed by coredns-dockerdiscovery'
+    assert {'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns'} <= set(defaults['coredns_published_hosts'])
+
+
 def test_gitea_initializer_reports_cli_failures():
     defaults = yaml.safe_load((ROOT / 'roles/gitea/defaults/main.yml').read_text())
     defaults.update(
@@ -461,6 +496,8 @@ if __name__ == '__main__':
     test_service_resolution_probe_uses_python_and_exact_addresses()
     test_gitea_initializer_reports_cli_failures()
     test_cloudflared_connects_only_when_a_tunnel_was_found()
+    test_missing_tunnel_is_created_only_after_a_successful_empty_lookup()
+    test_stale_tunnel_cnames_are_repointed_but_other_records_are_not()
     test_acme_backup_retries_container_replacement_race()
     test_portainer_routing_configured_with_traefik()
     print('Deployment step checks passed')

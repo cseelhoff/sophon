@@ -112,9 +112,9 @@ class ConsoleTests(unittest.TestCase):
 
     def test_connected_site_asks_for_email_and_token_but_not_certificates(self):
         values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': '', 'SOPHON_ACME_EMAIL': ''}
-        # Inputs: air-gapped?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name.
+        # Inputs: internet access?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name.
         code, prompts, hidden, _ = self.wizard(
-            values, ['n', '', '', '', '', 'me@example.test', '', '', ''],
+            values, ['y', '', '', '', '', 'me@example.test', '', '', ''],
             ['token', 'long-enough-password', '', ''])
         self.assertEqual(code, 0)
         text = ' '.join(prompts + hidden)
@@ -126,10 +126,10 @@ class ConsoleTests(unittest.TestCase):
 
     def test_connected_is_the_default_even_when_a_certificate_file_was_found(self):
         values = service_values() | {'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_ACME_EMAIL': 'me@example.test'}
-        # Enter at the air-gapped question means "no": the certificate file is dropped and the token is asked for.
+        # Enter at the internet question means "yes": the certificate file is dropped and the token is asked for.
         code, prompts, hidden, _ = self.wizard(values, [''] * 12, ['token'] * 4)
         self.assertEqual(code, 0)
-        self.assertTrue(prompts[0].startswith('Is this site air-gapped') and prompts[0].endswith('[y/N] '), prompts[0])
+        self.assertTrue(prompts[0].startswith('Does this site have internet access?') and prompts[0].endswith('[Y/n] '), prompts[0])
         text = ' '.join(prompts + hidden)
         self.assertIn('SOPHON_CF_TOKEN', text)
         self.assertNotIn('SOPHON_ACME_FILE', text)
@@ -140,10 +140,10 @@ class ConsoleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             bad = Path(directory) / 'acme.json'
             bad.write_text('{"letsencrypt":{"Account":{}}}')
-            # Inputs: air-gapped?, then DNS, IP, domain, a missing path, the real path, realm, realm name
+            # Inputs: internet access?, then DNS, IP, domain, a missing path, the real path, realm, realm name
             # (no email, token or tunnel name).
             code, prompts, hidden, output = self.wizard(
-                values, ['y', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], ['', ''])
+                values, ['n', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], ['', ''])
         text = ' '.join(prompts + hidden)
         self.assertNotIn('SOPHON_ACME_EMAIL', text)
         self.assertNotIn('SOPHON_CF_TOKEN', text)
@@ -156,7 +156,7 @@ class ConsoleTests(unittest.TestCase):
     def test_required_values_are_asked_again_and_portainer_password_has_a_minimum(self):
         values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': ''}
         code, prompts, hidden, output = self.wizard(
-            values, ['n', '', '', '', '', 'me@example.test', '', '', ''],
+            values, ['y', '', '', '', '', 'me@example.test', '', '', ''],
             ['token', '', 'short', 'long-enough-password', '', ''])
         self.assertEqual(code, 0)
         self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt]), 3)
@@ -166,7 +166,7 @@ class ConsoleTests(unittest.TestCase):
         values = service_values() | {name: '' for name, field in deployment.step_fields('configure').items()
                                       if field[2] == 'password'}
         code, prompts, hidden, output = self.wizard(
-            values, ['n', 'y'] + [''] * 7,
+            values, ['y', 'y'] + [''] * 7,
             ['same-password-123', 'same-password-123', 'token', ''])
         self.assertEqual(code, 0, output)
         asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]

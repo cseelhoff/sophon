@@ -127,10 +127,10 @@ def main(argv=None):
         fields = deployment.step_fields('configure')
         try:
             # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
-            # Connected is the normal case; only an explicit "y" selects the pre-issued certificate path.
-            air_gapped = ask_yes_no('Is this site air-gapped (no internet access)?')
-            skipped = INTERNET_ONLY if air_gapped else {'SOPHON_ACME_FILE'}
-            if air_gapped:
+            # Connected is the normal case; only an explicit "n" selects the pre-issued certificate path.
+            has_internet = ask_yes_no('Does this site have internet access?', default=True)
+            skipped = {'SOPHON_ACME_FILE'} if has_internet else INTERNET_ONLY
+            if not has_internet:
                 values['SOPHON_CF_TOKEN'] = ''
                 if not values['SOPHON_ACME_FILE']:
                     print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
@@ -149,8 +149,8 @@ def main(argv=None):
                 if kind == 'password' and value:
                     # Supplied by the environment or the shared password; keep it without asking again.
                     continue
-                needed = required or (name == 'SOPHON_ACME_FILE' and air_gapped) or (
-                    name == 'SOPHON_CF_TOKEN' and not air_gapped)
+                needed = required or (name == 'SOPHON_ACME_FILE' and not has_internet) or (
+                    name == 'SOPHON_CF_TOKEN' and has_internet)
                 values[name] = prompt_field(name, label, kind, value, needed)
             values, error = deployment.validate_settings(values, {}, 'configure')
             if error:
