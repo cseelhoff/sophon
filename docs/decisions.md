@@ -23,8 +23,13 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    manager; reruns need the same values. Generated identity state (`acme.json`, ACME account) lives under
    `artifacts/` and is irreplaceable.
 8. **State is either reconstructible or irreplaceable.** A rerun rebuilds the Keycloak realm, seeded users and
-   routing. Gitea repositories, user-created LDAP entries and `acme.json` need a backup, which is deliberately
-   out of scope for now.
+   routing. Gitea repositories, user-created LDAP entries and `acme.json` need
+   encrypted native backups and tested restoration. Kopia is therefore a core
+   Sophon service, deployed before Gitea with its collector/recovery code and
+   offline image carried by Sophon itself. Backup discovery uses versioned
+   Sophon container labels; deployment cannot depend on the Gitea it may need
+   to recover. Restoration remains an explicit operator action, not an
+   automatic production replacement during installation.
 9. **Addresses are inputs.** The InfraVM address is confirmed at the console in step 4 (the VM starts on its DHCP
    lease, which is the default; reserve it or type a static one from outside the DHCP pool) and saved, not
    rediscovered; every service name resolves to it.

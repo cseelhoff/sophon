@@ -1,0 +1,85 @@
+services:
+  kopia:
+    image: {{ kopia_image }}
+    pull_policy: never
+    container_name: kopia
+    hostname: sophon-backup
+    user: "1000:1000"
+    restart: unless-stopped
+    stop_grace_period: 240s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["label=disable", "no-new-privileges:true"]
+    networks: [proxy]
+    environment:
+      SOURCE_ROOT: /source
+      PORTAINER_URL: ${PORTAINER_URL:?Set PORTAINER_URL}
+      PORTAINER_ENDPOINT_ID: ${PORTAINER_ENDPOINT_ID:-1}
+      PORTAINER_API_KEY: ${BACKUP_PORTAINER_API_KEY:?Set BACKUP_PORTAINER_API_KEY}
+      API_TIMEOUT: "180"
+      COMMAND_TIMEOUT: "900"
+      KOPIA_PASSWORD: ${KOPIA_PASSWORD:?Set the repository encryption password}
+      KOPIA_SERVER_USERNAME: ${KOPIA_SERVER_USERNAME:-admin}
+      KOPIA_SERVER_PASSWORD: ${KOPIA_SERVER_PASSWORD:?Set the UI password}
+      KOPIA_SFTP_HOST: ${KOPIA_SFTP_HOST:?Set the SFTP host}
+      KOPIA_SFTP_PORT: ${KOPIA_SFTP_PORT:-22}
+      KOPIA_SFTP_USERNAME: ${KOPIA_SFTP_USERNAME:?Set the SFTP username}
+      KOPIA_SFTP_PATH: ${KOPIA_SFTP_PATH:?Set the repository path}
+      KOPIA_SFTP_PRIVATE_KEY_B64: ${KOPIA_SFTP_PRIVATE_KEY_B64:?Set the base64 SSH private key}
+      KOPIA_SFTP_KNOWN_HOSTS_B64: ${KOPIA_SFTP_KNOWN_HOSTS_B64:?Set the base64 pinned known_hosts}
+      KOPIA_CLIENT_USERNAME: ${KOPIA_CLIENT_USERNAME:-backup}
+      KOPIA_CLIENT_HOSTNAME: ${KOPIA_CLIENT_HOSTNAME:-sophon}
+      KOPIA_INIT_REPOSITORY: ${KOPIA_INIT_REPOSITORY:-false}
+      KOPIA_BACKUPS_ENABLED: ${KOPIA_BACKUPS_ENABLED:-false}
+      KOPIA_SNAPSHOT_INTERVAL: ${KOPIA_SNAPSHOT_INTERVAL:-6h}
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      - ${SOPHON_PROJECT_PATH:-/var/lib/sophon/project}:/deployment:ro
+      - config:/config
+      - cache:/cache
+      - logs:/logs
+      - source:/source
+      - restore:/restore
+    healthcheck:
+      test: ["CMD", "python3", "/app/runtime.py", "health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.routers.kopia.rule: "Host(`{{ kopia_fqdn }}`)"
+      traefik.http.routers.kopia.entrypoints: websecure
+      traefik.http.routers.kopia.tls: "true"
+      traefik.http.routers.kopia.tls.certresolver: letsencrypt
+      traefik.http.routers.kopia.tls.domains[0].main: "{{ domain_name }}"
+      traefik.http.routers.kopia.tls.domains[0].sans: "*.{{ domain_name }}"
+      traefik.http.services.kopia.loadbalancer.server.port: "51515"
+      sophon.backup.version: "2"
+      sophon.backup.group: kopia
+      sophon.backup.stop-during-backup: "false"
+      sophon.backup.stop-timeout: "240"
+      sophon.backup.excludes.0.path: /config
+      sophon.backup.excludes.0.reason: Client connection is reconstructed from deployment metadata and externally retained credentials
+      sophon.backup.excludes.1.path: /cache
+      sophon.backup.excludes.1.reason: Reconstructible Kopia content/index cache
+      sophon.backup.excludes.2.path: /logs
+      sophon.backup.excludes.2.reason: Operational logs; failures are reported by Kopia
+      sophon.backup.excludes.3.path: /source
+      sophon.backup.excludes.3.reason: Temporary exports and recovery journal; never snapshot the source tree into itself
+      sophon.backup.excludes.4.path: /restore
+      sophon.backup.excludes.4.reason: Isolated restore-verification workspace; never production data
+      sophon.backup.paths.0.type: archive
+      sophon.backup.paths.0.path: /deployment/site.json
+      sophon.backup.paths.0.name: site-secrets
+networks:
+  proxy:
+    external: true
+volumes:
+  config:
+  cache:
+  logs:
+  source:
+  restore:

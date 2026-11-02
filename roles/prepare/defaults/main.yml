@@ -25,6 +25,9 @@ prepare_coredns_image: "localhost/coredns-dockerdiscovery:{{ coredns_image_tag }
 prepare_coredns_tar: "{{ sophon_containers_dir }}/coredns-dockerdiscovery_{{ coredns_image_tag }}.tar"
 prepare_coredns_version: "1.15.0"
 
+prepare_kopia_image: "{{ kopia_image }}"
+prepare_kopia_tar: "{{ sophon_containers_dir }}/{{ kopia_image_tarname }}"
+
 prepare_coreos_version: "44.20260928.3.2"
 prepare_coreos_metadata_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/{{ prepare_coreos_version }}/x86_64/meta.json"
 prepare_coreos_metadata_path: "{{ artifacts_dir }}/coreos/{{ prepare_coreos_version }}.json"

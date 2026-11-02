@@ -226,7 +226,7 @@ def test_service_resolution_follows_entered_domain():
             canonical = domain.lower().rstrip('.')
             entries = [line for line in content.splitlines() if line.startswith(ip + ' ')]
             assert entries == [f'{ip} {name + "." if name else ""}{canonical}'
-                               for name in ('', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns')]
+                               for name in ('', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns', 'kopia')]
             if canonical == 'second.example':
                 assert 'first.example' not in content and '192.0.2.3' not in content
         unchanged = hosts.read_text()
@@ -292,6 +292,29 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
     assert 'no_log: true' in tasks.split('Read the tunnel connector token')[1].split('- name:')[0]
     order = [task.get('name') for task in yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['tasks']]
     assert order.index('Deploy Traefik') < order.index('Connect the Cloudflare tunnel')
+
+
+def test_coredns_alternate_host_port_is_loopback_only():
+    defaults = yaml.safe_load((ROOT / 'roles/coredns/defaults/main.yml').read_text())
+    defaults.update(coredns_image_tag='fixture', coredns_domain_name='site.example',
+                    infravm_ip='192.0.2.3', vnet_dns='9.9.9.9')
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        compose = directory / 'compose.yml'
+        for port in (53, 1053):
+            result, _ = run_fixture(directory, [{
+                'ansible.builtin.template': {
+                    'src': str(ROOT / 'roles/coredns/templates/docker-compose.yml.j2'),
+                    'dest': str(compose)},
+                'vars': dict(defaults, coredns_dns_port=port),
+            }])
+            assert result.returncode == 0, result.stdout + result.stderr
+            service = yaml.safe_load(compose.read_text())['services']['coredns']
+            expected = [f'127.0.0.1:{port}:53/{protocol}' for protocol in ('udp', 'tcp')]
+            if port == 53:
+                expected += [f'192.0.2.3:53:53/{protocol}' for protocol in ('udp', 'tcp')]
+            assert service['ports'] == expected
+            assert service['networks'] == ['proxy']
 
 
 def test_missing_tunnel_is_created_only_after_a_successful_empty_lookup():

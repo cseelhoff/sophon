@@ -77,6 +77,7 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(self.output.read_bytes(), b'valid-iso')
         self.assertIn('project/4-configure.yml', self.captured)
         self.assertIn('project/roles/gitea/tasks/main.yml', self.captured)
+        self.assertIn('project/roles/kopia/tasks/main.yml', self.captured)
         self.assertIn('project/src/console.py', self.captured)
         for name in ('install.sh', 'runner.tar', 'tools/busybox', 'guest/sophon-deploy', 'guest/host-bootstrap.sh'):
             self.assertIn(name, self.captured)

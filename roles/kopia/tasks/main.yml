@@ -1,0 +1,120 @@
+---
+- name: Validate Kopia destination and explicit repository policy
+  ansible.builtin.assert:
+    that:
+      - kopia_sftp_host | trim | length > 0
+      - kopia_sftp_username | trim | length > 0
+      - kopia_sftp_port | int >= 1 and kopia_sftp_port | int <= 65535
+      - kopia_sftp_path is match('^/') and '..' not in kopia_sftp_path.split('/')
+      - kopia_init_repository in ['true', 'false']
+      - kopia_backups_enabled in ['true', 'false']
+    fail_msg: "Supply a valid Kopia SFTP destination and explicit true/false repository settings."
+    quiet: true
+
+- name: Read existing Kopia stack metadata
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/stacks"
+    headers:
+      Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+    validate_certs: false
+    status_code: 200
+  register: kopia_stacks
+  no_log: true
+  changed_when: false
+
+- name: Find this endpoint's existing Kopia stack
+  ansible.builtin.set_fact:
+    kopia_existing_stacks: "{{ kopia_stacks.json | selectattr('Name', 'equalto', 'kopia') | selectattr('EndpointId', 'equalto', portainer_local_endpoint_id | int) | list }}"
+  no_log: true
+
+- name: Refuse ambiguous Kopia stacks
+  ansible.builtin.assert:
+    that: kopia_existing_stacks | length <= 1
+    fail_msg: "Multiple Kopia stacks exist on this endpoint; resolve the ambiguity before deployment."
+
+- name: Preserve the existing collector token and unrelated environment
+  ansible.builtin.set_fact:
+    kopia_existing_environment: "{{ kopia_existing_stacks[0].Env if kopia_existing_stacks else [] }}"
+  no_log: true
+
+- name: Read the persisted collector token
+  ansible.builtin.set_fact:
+    kopia_api_key: "{{ (kopia_existing_environment | selectattr('name', 'equalto', 'BACKUP_PORTAINER_API_KEY') | map(attribute='value') | first) | default('') }}"
+  no_log: true
+
+- name: Create the collector's own Portainer API key
+  when: kopia_api_key | length == 0
+  block:
+    - name: Find the authenticated local administrator
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/users"
+        headers:
+          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+        validate_certs: false
+        status_code: 200
+      register: kopia_users
+      no_log: true
+      changed_when: false
+
+    - name: Issue a separately revocable collector key
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/users/{{ (kopia_users.json | selectattr('Username', 'equalto', 'admin') | first).Id }}/tokens"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+        body_format: json
+        body:
+          description: "Sophon Kopia collector"
+          password: "{{ portainer_admin_password }}"
+        validate_certs: false
+        status_code: [200, 201]
+      register: kopia_token
+      no_log: true
+
+    - name: Retain the new key for the stack
+      ansible.builtin.set_fact:
+        kopia_api_key: "{{ kopia_token.json.rawAPIKey }}"
+      no_log: true
+
+- name: Verify the collector's endpoint access
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/info"
+    headers:
+      X-API-Key: "{{ kopia_api_key }}"
+    validate_certs: false
+    status_code: 200
+  no_log: true
+  changed_when: false
+
+- name: Deploy the core Kopia stack through Portainer
+  ansible.builtin.include_role:
+    name: portainer_stack
+    apply:
+      no_log: true
+  vars:
+    portainer_stack_name: kopia
+    portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    portainer_stack_image_tars: "{{ kopia_image_tars }}"
+    portainer_stack_env_vars: "{{ (kopia_existing_environment | rejectattr('name', 'in', kopia_environment | map(attribute='name') | list) | list) + kopia_environment }}"
+    portainer_stack_deploy_timeout: 300
+  no_log: true
+
+- name: Wait for Kopia's authenticated repository-connected health check
+  ansible.builtin.uri:
+    url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/containers/kopia/json"
+    headers:
+      Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: kopia_health
+  until: >-
+    kopia_health.status == 200 and
+    kopia_health.json.State.Health.Status | default('starting') == 'healthy'
+  retries: 60
+  delay: 5
+  no_log: true
+  changed_when: false
+
+- name: Report core Kopia readiness
+  ansible.builtin.debug:
+    msg: "Kopia ready at https://{{ kopia_fqdn }}. Retain the repository password and SSH key outside the repository."

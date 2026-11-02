@@ -7,6 +7,8 @@ services:
     pull_policy: never
     container_name: keycloak
     restart: unless-stopped
+    security_opt:
+      - label=disable
     command:
       - start
       - --hostname={{ keycloak_hostname }}.{{ keycloak_domain }}
@@ -32,6 +34,16 @@ services:
       keycloak-db:
         condition: service_healthy
     labels:
+      - 'sophon.restore.version=1'
+      - 'sophon.restore.kind=keycloak'
+      - 'sophon.restore.depends-on=keycloak-db'
+      - 'sophon.restore.verify-realm={{ keycloak_realm }}'
+      - 'sophon.backup.version=2'
+      - 'sophon.backup.group=keycloak'
+      - 'sophon.backup.stop-during-backup=false'
+      - 'sophon.backup.stop-timeout=120'
+      - 'sophon.backup.excludes.0.path=/opt/keycloak/data'
+      - 'sophon.backup.excludes.0.reason=Empty transient runtime directory; realms, users, clients and credentials are in PostgreSQL'
       - "traefik.enable=true"
       - "traefik.http.routers.keycloak.entrypoints=websecure"
       - "traefik.http.routers.keycloak.rule=Host(`{{ keycloak_hostname }}.{{ keycloak_domain }}`)"
@@ -45,7 +57,45 @@ services:
     image: {{ keycloak_postgres_image }}
     pull_policy: never
     container_name: keycloak-db
+    labels:
+      - 'sophon.restore.version=1'
+      - 'sophon.restore.kind=postgres-cluster'
+      - 'sophon.restore.artifact=postgres-cluster'
+      - 'sophon.backup.version=2'
+      - 'sophon.backup.group=keycloak'
+      - 'sophon.backup.stop-during-backup=false'
+      - 'sophon.backup.stop-timeout=120'
+      - 'sophon.backup.covers.0.path=/var/lib/postgresql'
+      - 'sophon.backup.paths.0.type=archive'
+      - 'sophon.backup.paths.0.path=$${SOPHON_BACKUP_DIR}.sql'
+      - 'sophon.backup.paths.0.name=postgres-cluster'
+      - |-
+        sophon.backup.prepare.0.argv=[
+          "sh",
+          "-ec",
+          "test ! -e \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
+      - |-
+        sophon.backup.archive-pre.0.argv=[
+          "sh",
+          "-ec",
+          "umask 077; pg_dumpall -U \"$$POSTGRES_USER\" --clean --if-exists -f \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
+      - |-
+        sophon.backup.archive-post.0.argv=[
+          "sh",
+          "-ec",
+          "rm -f -- \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
+      - |-
+        sophon.backup.restore.0.argv=[
+          "sh",
+          "-ec",
+          "psql -X -U sophon_restore -d sophon_restore -v ON_ERROR_STOP=1 -f \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
     restart: unless-stopped
+    security_opt:
+      - label=disable
     environment:
       - POSTGRES_DB={{ keycloak_db_name }}
       - POSTGRES_USER={{ keycloak_db_user }}

@@ -52,8 +52,10 @@ def test_credential_inputs():
     'keycloak_db_password', 'keycloak_portainer_client_secret', 'gitea_admin_password',
     'openldap_admin_password', 'openldap_example_user_password', 'openldap_example_admin_password',
   ]
+  backup = ['kopia_password', 'kopia_server_password', 'kopia_sftp_private_key_b64', 'kopia_sftp_known_hosts_b64']
+  required += backup
   shared = ['gitea_db_password']
-  inputs = required + shared
+  inputs = [name for name in required if name not in backup] + shared + backup
   preflight = yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['pre_tasks']
   assert preflight[1]['loop'] == inputs
   preflight = preflight[:3]

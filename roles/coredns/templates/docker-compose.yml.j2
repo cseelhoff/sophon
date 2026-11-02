@@ -14,10 +14,12 @@ services:
     # for container-to-container name resolution. Two daemons can't share
     # that socket; aardvark loses and silently exits, breaking in-stack DNS.
     ports:
-      - "127.0.0.1:53:53/udp"
-      - "127.0.0.1:53:53/tcp"
+      - "127.0.0.1:{{ coredns_dns_port }}:53/udp"
+      - "127.0.0.1:{{ coredns_dns_port }}:53/tcp"
+{% if coredns_dns_port | int == 53 %}
       - "{{ infravm_ip }}:53:53/udp"
       - "{{ infravm_ip }}:53:53/tcp"
+{% endif %}
     networks:
       - proxy
     volumes:

@@ -1,4 +1,5 @@
 import contextlib
+import base64
 import io
 import json
 import os
@@ -24,7 +25,11 @@ def service_values():
     values.update({name: 'FIXTURE_SECRET_VALUE' for name, field in deployment.step_fields('configure').items()
                    if field[2] == 'password' and field[4]})
     values.update(SOPHON_DOMAIN='example.test', SOPHON_INFRAVM_IP='192.0.2.3',
-                  SOPHON_DEPLOYMENT_STEP='configure')
+                  SOPHON_DEPLOYMENT_STEP='configure',
+                  SOPHON_KOPIA_SFTP_HOST='backup.example.test', SOPHON_KOPIA_SFTP_USERNAME='backup',
+                  SOPHON_KOPIA_SFTP_PATH='/backups/sophon',
+                  SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64=base64.b64encode(b'fixture-private-key').decode(),
+                  SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64=base64.b64encode(b'fixture-known-hosts').decode())
     return values
 
 
@@ -91,7 +96,9 @@ class ConsoleTests(unittest.TestCase):
     def wizard(self, environment, answers, secrets=()):
         """Run the interactive wizard with scripted answers; returns (exit code, prompts, secret prompts, output)."""
         prompts, hidden = [], []
-        answers, secrets = iter(answers), iter(secrets)
+        backup_defaults = [''] * sum(field[1] == 'Backup' and field[2] != 'password'
+                                    for field in deployment.step_fields('configure').values())
+        answers, secrets = iter([*answers, *backup_defaults]), iter(secrets)
 
         def ask(prompt):
             prompts.append(prompt)
@@ -167,10 +174,12 @@ class ConsoleTests(unittest.TestCase):
                                       if field[2] == 'password'}
         code, prompts, hidden, output = self.wizard(
             values, ['y', 'y'] + [''] * 7,
-            ['same-password-123', 'same-password-123', 'token', ''])
+            ['same-password-123', 'same-password-123', 'token', '', 'existing-repository-password',
+             base64.b64encode(b'fixture-private-key').decode(), base64.b64encode(b'fixture-known-hosts').decode()])
         self.assertEqual(code, 0, output)
         asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]
-        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY'])
+        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_KOPIA_PASSWORD',
+                                 'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'])
 
     def test_secret_prompt_shows_asterisks_and_handles_backspace(self):
         pid, terminal = pty.fork()

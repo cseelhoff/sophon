@@ -313,6 +313,48 @@
               skipped. If this site has no egress that is expected; certificate
               renewal and tunnel publishing stay down until egress returns.
 
+    - name: Find an existing LAN DNS frontend
+      ansible.builtin.uri:
+        url: >-
+          {{ infravm_portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/containers/json?all=true&filters={{ {'label': ['sophon.dns.frontend=adguardhome']} | to_json | urlencode }}
+        headers:
+          Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+        validate_certs: false
+        status_code: 200
+      register: coredns_lan_frontends
+      changed_when: false
+      no_log: true
+
+    - name: Preserve an existing host-networked AdGuard frontend
+      when: coredns_lan_frontends.json | length > 0
+      block:
+        - name: Require exactly one LAN DNS frontend
+          ansible.builtin.assert:
+            that: coredns_lan_frontends.json | length == 1
+            fail_msg: Multiple containers are marked as the LAN DNS frontend.
+
+        - name: Inspect the LAN DNS frontend
+          ansible.builtin.uri:
+            url: >-
+              {{ infravm_portainer_url }}/api/endpoints/{{ portainer_local_endpoint_id }}/docker/containers/{{ coredns_lan_frontends.json[0].Id }}/json
+            headers:
+              Authorization: "Bearer {{ portainer_auth.json.jwt }}"
+            validate_certs: false
+            status_code: 200
+          register: coredns_lan_frontend
+          changed_when: false
+          no_log: true
+
+        - name: Require host networking for the LAN DNS frontend
+          ansible.builtin.assert:
+            that: coredns_lan_frontend.json.HostConfig.NetworkMode == 'host'
+            fail_msg: The marked LAN DNS frontend must use host networking.
+
+        - name: Keep CoreDNS behind AdGuard without a forwarding loop
+          ansible.builtin.set_fact:
+            coredns_dns_port: 1053
+            coredns_forward_dns: "9.9.9.9 149.112.112.112"
+
     - name: Deploy CoreDNS stack via Portainer
       ansible.builtin.include_role:
         name: portainer_stack
@@ -356,4 +398,6 @@
 
     - name: Display CoreDNS status
       ansible.builtin.debug:
-        msg: "CoreDNS ready at {{ infravm_ip }}:{{ coredns_dns_port }}, runner resolution verified"
+        msg: >-
+          CoreDNS ready at {{ infravm_ip if coredns_dns_port | int == 53 else '127.0.0.1' }}:{{ coredns_dns_port }},
+          runner resolution verified

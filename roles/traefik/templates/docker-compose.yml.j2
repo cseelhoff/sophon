@@ -2,6 +2,8 @@ services:
   traefik-init:
     image: docker.io/library/traefik:{{ traefik_image_tag }}
     pull_policy: never
+    security_opt:
+      - label=disable
     entrypoint:
       - /bin/sh
       - -c
@@ -57,6 +59,18 @@ services:
       - --providers.file.watch=true
       - --log.level={{ traefik_log_level }}
     labels:
+      - 'sophon.backup.version=2'
+      - 'sophon.backup.group=traefik'
+      - 'sophon.backup.stop-during-backup=false'
+      - 'sophon.backup.stop-timeout=120'
+      - 'sophon.backup.covers.0.path=/data'
+      - 'sophon.backup.covers.1.path=/etc/traefik'
+      - 'sophon.backup.paths.0.type=archive'
+      - 'sophon.backup.paths.0.path=/data'
+      - 'sophon.backup.paths.0.name=acme'
+      - 'sophon.backup.paths.1.type=archive'
+      - 'sophon.backup.paths.1.path=/etc/traefik'
+      - 'sophon.backup.paths.1.name=dynamic-config'
       - "coredns.dockerdiscovery.host={{ traefik_fqdn }}"
       - "traefik.enable=true"
       - "traefik.http.routers.dashboard.rule=Host(`{{ traefik_fqdn }}`)"

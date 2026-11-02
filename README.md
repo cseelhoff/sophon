@@ -1,6 +1,6 @@
 # Sophon
 
-Offline-capable deployment of DNS, reverse proxy, directory, SSO and Git services onto one
+Offline-capable deployment of DNS, reverse proxy, encrypted backups, directory, SSO and Git services onto one
 Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft Hyper-V. Services run as rootless Podman
 containers managed through Portainer; the Ansible runner is a container on InfraVM itself.
 
@@ -26,7 +26,7 @@ install media, then creates and starts a blank VM with the media attached.
 3. Run `sophon-deploy`. It first asks for the network (the VM starts on a DHCP lease; address, prefix and gateway
    default to it, so Enter keeps them as a static address, and DNS defaults to `1.1.1.1`). Then answer **Y** (the
    default) to "Does this site have internet access?" unless the site is offline, and enter your domain and credentials.
-   It deploys CoreDNS, Traefik,
+   It deploys CoreDNS, Traefik, Kopia,
    OpenLDAP, Keycloak and Gitea.
 
 **No internet at the VM's site?** Also follow [Air-gapped sites](#air-gapped-sites).
@@ -89,7 +89,7 @@ Later, `sophon-deploy --network` asks for the network again. Detach both ISOs on
 
 ### Using the services
 
-Portainer is at `https://portainer.<domain>` (also `traefik`, `dns`, `ldap`, `auth`, `git`). `https://<VM address>:9443`
+Portainer is at `https://portainer.<domain>` (also `traefik`, `dns`, `kopia`, `ldap`, `auth`, `git`). `https://<VM address>:9443`
 is Portainer's own self-signed bootstrap port (certificate for `localhost`): ignore it.
 
 Point clients at CoreDNS on the VM for your domain only. On Windows, in an elevated PowerShell:
@@ -101,6 +101,39 @@ Add-DnsClientNrptRule -Namespace '.example.com' -NameServers '<VM address>'; Cle
 
 Test with `Resolve-DnsName` (`nslookup` ignores these rules). Don't point a machine's whole DNS at the VM if the VM's
 upstream forwards back to it (for example the Hyper-V Default Switch address): lookups loop.
+
+### Backups
+
+Kopia is a normal core service, built during Prepare, carried on the offline
+deployment ISO and deployed before Gitea by `sophon-deploy`. Its collector and
+restore tool live in [roles/kopia](roles/kopia); no Gitea repository, runner or
+download is needed to deploy them. After a fresh install, use Kopia to run the
+documented recovery operations. There is no separate recovery mode or automatic
+production restore.
+
+Supply the external SFTP destination, pinned SSH host key, SSH private key,
+repository password and Kopia UI credentials at the console; see
+[backup inputs](docs/inputs.md#kopia-backup-inputs). Existing repositories connect
+by default, never initialize on error. Keep repository decryption credentials
+outside the encrypted repository. Scheduled backups remain an explicit setting:
+verify a first backup before enabling the six-hour schedule.
+
+Persistent core services declare the versioned
+`sophon.backup.version=2` split-label contract consumed by that
+collector. These are Sophon-specific labels, not a Docker or Kopia standard.
+Individual labels define group, pause policy, paths and ordered command
+arguments. The collector still reads the original v1 JSON labels during upgrades.
+The [role README](roles/kopia/README.md) documents SFTP configuration, native exports,
+necessary short pauses, exclusions and isolated restore procedures.
+Keep repository decryption credentials outside the encrypted repository.
+
+Keycloak/PostgreSQL additionally declare `sophon.restore.version=1` recovery
+profiles. The packaged `restore.py` validates a snapshot, provisions
+fresh isolated targets, restores the database, and requires original-admin
+login and recovered realm checks. It supports explicit snapshot approval,
+safe resume and owner-checked cleanup; it never replaces production.
+Other workloads still use the documented manual procedures. See the
+[Kopia recovery instructions](roles/kopia/README.md#automated-keycloak-recovery-profile-version-1).
 
 ### Air-gapped sites
 

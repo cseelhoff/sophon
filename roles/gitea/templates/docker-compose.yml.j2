@@ -8,6 +8,8 @@ services:
     pull_policy: never
     container_name: gitea
     restart: unless-stopped
+    security_opt:
+      - label=disable
     environment:
       - USER_UID=1000
       - USER_GID=1000
@@ -53,6 +55,14 @@ services:
       gitea-db:
         condition: service_healthy
     labels:
+      - 'sophon.backup.version=2'
+      - 'sophon.backup.group=gitea'
+      - 'sophon.backup.stop-during-backup=true'
+      - 'sophon.backup.stop-timeout=120'
+      - 'sophon.backup.covers.0.path=/data'
+      - 'sophon.backup.paths.0.type=archive'
+      - 'sophon.backup.paths.0.path=/data'
+      - 'sophon.backup.paths.0.name=repositories-lfs-config'
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.gitea.entrypoints=websecure"
@@ -71,7 +81,42 @@ services:
     image: {{ gitea_postgres_image }}
     pull_policy: never
     container_name: gitea-db
+    labels:
+      - 'sophon.backup.version=2'
+      - 'sophon.backup.group=gitea'
+      - 'sophon.backup.stop-during-backup=false'
+      - 'sophon.backup.stop-timeout=120'
+      - 'sophon.backup.covers.0.path=/var/lib/postgresql'
+      - 'sophon.backup.paths.0.type=archive'
+      - 'sophon.backup.paths.0.path=$${SOPHON_BACKUP_DIR}.sql'
+      - 'sophon.backup.paths.0.name=postgres-cluster'
+      - |-
+        sophon.backup.prepare.0.argv=[
+          "sh",
+          "-ec",
+          "test ! -e \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
+      - |-
+        sophon.backup.archive-pre.0.argv=[
+          "sh",
+          "-ec",
+          "umask 077; pg_dumpall -U \"$$POSTGRES_USER\" --clean --if-exists -f \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
+      - |-
+        sophon.backup.archive-post.0.argv=[
+          "sh",
+          "-ec",
+          "rm -f -- \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
+      - |-
+        sophon.backup.restore.0.argv=[
+          "sh",
+          "-ec",
+          "psql -X -U sophon_restore -d sophon_restore -v ON_ERROR_STOP=1 -f \"$$SOPHON_BACKUP_DIR.sql\""
+        ]
     restart: unless-stopped
+    security_opt:
+      - label=disable
     environment:
       - POSTGRES_DB={{ gitea_db_name }}
       - POSTGRES_USER={{ gitea_db_user }}
@@ -94,6 +139,8 @@ services:
     pull_policy: never
     container_name: gitea-init
     restart: "no"
+    security_opt:
+      - label=disable
     depends_on:
       gitea:
         condition: service_healthy

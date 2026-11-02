@@ -18,6 +18,15 @@ def defaults(role):
 
 
 class VersionTests(unittest.TestCase):
+    def test_kopia_binary_pin_matches_its_core_image_and_archive(self):
+        variables = yaml.safe_load((ROOT / 'group_vars/all.yml').read_text())
+        text = (ROOT / 'roles/kopia/files/Dockerfile').read_text()
+        self.assertIn('FROM docker.io/kopia/kopia:' + variables['kopia_version'] + ' AS kopia', text)
+        self.assertIn('{{ kopia_version }}', variables['kopia_image'])
+        self.assertIn('{{ kopia_version }}', variables['kopia_image_tarname'])
+        for image in re.findall(r'^FROM (\S+)', text, re.MULTILINE):
+            self.assertRegex(image.rsplit(':', 1)[1], r'^\d+\.\d+\.\d+(?:-[\w.-]+)?$')
+
     def test_prepare_caches_exactly_the_deployed_upstream_images(self):
         variables = yaml.safe_load((ROOT / 'group_vars/all.yml').read_text())
         traefik, gitea, keycloak, ldap, tunnel = map(
@@ -72,7 +81,7 @@ class VersionTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is required to resolve archive names')
     def test_every_deployed_archive_is_in_the_prepare_manifest(self):
         variables = yaml.safe_load((ROOT / 'group_vars/all.yml').read_text())
-        for role in ('prepare', 'traefik', 'cloudflared', 'gitea', 'keycloak', 'openldap', 'coredns'):
+        for role in ('prepare', 'traefik', 'cloudflared', 'gitea', 'keycloak', 'openldap', 'coredns', 'kopia'):
             variables.update(defaults(role))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -80,9 +89,9 @@ class VersionTests(unittest.TestCase):
             result = run_fixture(directory, [{
                 'ansible.builtin.copy': {
                     'dest': str(output),
-                    'content': "{{ {'prepared': prepare_image_tars + [prepare_coredns_tar | basename], "
+                    'content': "{{ {'prepared': prepare_image_tars + [prepare_coredns_tar | basename, prepare_kopia_tar | basename], "
                                "'deployed': [portainer_image_tarname] + traefik_image_tars + cloudflared_image_tars + gitea_image_tars "
-                               "+ keycloak_image_tars + openldap_image_tars + coredns_image_tars} | to_json }}",
+                               "+ keycloak_image_tars + openldap_image_tars + coredns_image_tars + kopia_image_tars} | to_json }}",
                 },
                 'vars': variables,
             }])

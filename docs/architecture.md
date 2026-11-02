@@ -39,19 +39,32 @@ Step 1 writes everything into `artifacts/` and is cached: with a complete cache 
 - Every other image is POSTed to Portainer's Docker proxy right before its stack, on every run.
   Compose files use `pull_policy: never`, so a missing archive fails by name instead of pulling silently.
 
-`prepare_container_images` in `roles/prepare/defaults/main.yml` is the complete list; keep it in step with
-each role's `*_image_tars`.
+`prepare_container_images` in `roles/prepare/defaults/main.yml` lists upstream
+images. Prepare also builds CoreDNS and the Kopia collector/recovery image from
+Sophon sources. Their archives join the same manifest and deployment ISO; keep
+that complete list in step with each role's `*_image_tars`. Kopia is rebuilt
+through the engine's content cache and its archive is replaced when the image
+ID changes, so editing the collector cannot reuse an obsolete image archive.
 
 ## Order of the services
 
 ```text
 CoreDNS resolves *.<domain> ─▶ Traefik routes by Host and gets certificates
+   ─▶ Kopia connects to its external encrypted repository
    ─▶ LDAPS at ldap.<domain> verifies ─▶ Keycloak federates OpenLDAP
    ─▶ Gitea and Portainer trust Keycloak (OIDC)
 ```
 
 Each link is load-bearing: a DNS problem shows up as Keycloak failing on an LDAPS certificate. Read
 failures from the left.
+
+Kopia is an ordinary core deployment, before Gitea. Its source, custom image,
+split-label consumer and recovery tool come from Sophon, not a Gitea project.
+It uses its own UI login and a separately revocable Portainer API key, created
+at initial deployment and reused from the existing stack on reruns. No Gitea,
+LDAP or Keycloak service is needed by Kopia. After a fresh installation,
+operators can recover application state through the existing Kopia procedures;
+the normal install does not automatically restore production data.
 
 ## DNS
 
@@ -68,6 +81,22 @@ forwards public requests to Traefik. Without it Cloudflare answers error 1033. B
 the service names to InfraVM in its own `/etc/hosts` ([4-configure.yml](../4-configure.yml)); the host
 resolver and other clients are never changed.
 
+An optional, separately deployed AdGuard Home stack can own LAN DNS instead.
+Its `sophon.dns.frontend=adguardhome` label and host networking make Configure
+retain CoreDNS on loopback TCP/UDP port 1053, with independent Quad9 upstreams.
+AdGuard serves `10.1.1.3:53` and delegates the site's domain to CoreDNS; it must
+not become CoreDNS's upstream or unknown local names can loop. Rootless bridge
+port publishing and resolver forwarding lose original LAN client addresses,
+so AdGuard must be the host-networked first hop for per-device reporting.
+Its admin HTTP listener needs a persistent host firewall restriction, while
+Traefik publishes HTTPS. The separate AdGuard repository carries that host setup;
+AdGuard is not included in the offline ISO. With this frontend, rootless bridge
+networks use Podman's host-mapped `169.254.1.2` DNS upstream: pasta clones InfraVM's
+LAN address inside its namespace, where it cannot reach the real host listener.
+A user containers.conf drop-in supplies that DNS default for future containers;
+aardvark still handles peer names. Host bootstrap preserves the proxy upstream
+instead of adding the cloned LAN IP again.
+
 ## Certificates
 
 Traefik uses one wildcard certificate (`<domain>` and `*.<domain>`, an ECDSA P-256 key) from Let's Encrypt DNS-01
@@ -80,4 +109,7 @@ names the files after the certificate's main domain (`<domain>.crt`, `<domain>.k
 
 Reconstructible state (the Keycloak realm, seeded users, routing) is rebuilt by a rerun. Irreplaceable
 state (Gitea repositories, user-created LDAP entries, `acme.json`, the ACME account) is not;
-back it up ([decisions.md](decisions.md)).
+back it up ([decisions.md](decisions.md)). Core Kopia uses the workloads' versioned
+Docker labels to obtain native export, pause/cleanup and manual restore recipes.
+The external SFTP repository is encrypted; its password and SSH recovery
+credentials must also be retained outside it. See [Kopia](../roles/kopia/README.md).

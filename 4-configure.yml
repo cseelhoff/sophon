@@ -30,6 +30,10 @@
         - openldap_example_user_password
         - openldap_example_admin_password
         - gitea_db_password
+        - kopia_password
+        - kopia_server_password
+        - kopia_sftp_private_key_b64
+        - kopia_sftp_known_hosts_b64
       tags: [always]
     - name: Validate the Portainer password length
       ansible.builtin.assert:
@@ -53,7 +57,7 @@
         marker: "# {mark} SOPHON SERVICE NAMES"
         unsafe_writes: true
         block: |
-          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns'] %}
+          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns', 'kopia'] %}
           {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
           {% endfor %}
       tags: [always]
@@ -67,6 +71,9 @@
     - name: Deploy Traefik
       ansible.builtin.include_role:
         name: traefik
+    - name: Deploy Kopia
+      ansible.builtin.include_role:
+        name: kopia
     - name: Connect the Cloudflare tunnel
       ansible.builtin.include_role:
         name: cloudflared

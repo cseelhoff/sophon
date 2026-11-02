@@ -9,8 +9,8 @@ main() {
     [[ $(id -u) == 1000 && $(id -un) == core ]] || {
         echo "Host bootstrap must run as core." >&2; return 1;
     }
-    local project=/var/lib/sophon/project image archive image_archive infravm_ip
-    local -a lines
+    local project=/var/lib/sophon/project image archive image_archive infravm_ip dns_server dns_frontend_ids
+    local -a lines dns_frontends
     rm -f /run/user/1000/sophon-ready
     mapfile -t lines < "$project/bootstrap/portainer-image"
     [[ ${#lines[@]} == 1 && ${lines[0]} =~ ^[a-zA-Z0-9][a-zA-Z0-9./:@_-]*$ ]] || {
@@ -32,10 +32,32 @@ main() {
         fi
         podman --remote=false image exists "${image_archive%%|*}"
     done
+    dns_server=$infravm_ip
+    dns_frontend_ids=$(podman --remote=false ps -a \
+        --filter label=sophon.dns.frontend=adguardhome --format '{{.ID}}') || {
+        echo "Could not inspect existing LAN DNS frontends." >&2; return 1;
+    }
+    dns_frontends=()
+    [[ -z $dns_frontend_ids ]] || mapfile -t dns_frontends <<< "$dns_frontend_ids"
+    [[ ${#dns_frontends[@]} -le 1 ]] || {
+        echo "Multiple containers are marked as the LAN DNS frontend." >&2; return 1;
+    }
+    if [[ ${#dns_frontends[@]} == 1 ]]; then
+        [[ $(podman --remote=false inspect --format '{{.HostConfig.NetworkMode}}' "${dns_frontends[0]}") == host ]] || {
+            echo "The marked LAN DNS frontend must use host networking." >&2; return 1;
+        }
+        # pasta clones the LAN IP into its namespace; only this mapped address reaches the host.
+        dns_server=169.254.1.2
+    fi
     if podman --remote=false network exists proxy; then
-        [[ -z $infravm_ip ]] || podman --remote=false network update --dns-add "$infravm_ip" proxy
+        if [[ -n $dns_server ]]; then
+            if [[ ${#dns_frontends[@]} == 1 && -n $infravm_ip ]]; then
+                podman --remote=false network update --dns-drop "$infravm_ip" proxy
+            fi
+            podman --remote=false network update --dns-add "$dns_server" proxy
+        fi
     else
-        podman --remote=false network create ${infravm_ip:+--dns "$infravm_ip"} \
+        podman --remote=false network create ${dns_server:+--dns "$dns_server"} \
             --label com.docker.compose.network=proxy proxy
     fi
     if ! podman --remote=false volume exists portainer_data; then
@@ -46,6 +68,13 @@ main() {
     else
         podman --remote=false run -d --pull never --name portainer --restart always \
             --security-opt label=disable --network proxy -p 9443:9443 \
+            --label sophon.backup.version=2 \
+            --label sophon.backup.group=portainer \
+            --label sophon.backup.stop-during-backup=false \
+            --label sophon.backup.stop-timeout=120 \
+            --label sophon.backup.covers.0.path=/data \
+            --label sophon.backup.paths.0.type=portainer-backup \
+            --label sophon.backup.paths.0.name=control-plane \
             -v /run/user/1000/podman/podman.sock:/var/run/docker.sock \
             -v portainer_data:/data:Z "$image" --http-enabled
     fi

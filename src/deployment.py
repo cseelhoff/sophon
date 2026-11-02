@@ -1,5 +1,6 @@
 """Sophon settings and the playbook launcher shared by the laptop (steps 1-2) and the installed InfraVM (step 4)."""
 import argparse
+import base64
 import ipaddress
 import json
 import os
@@ -61,15 +62,31 @@ FIELDS = {
     'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD': ('LDAP seed-user password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD': ('LDAP seed-admin password', 'Access', 'password', '', True),
     'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password (empty uses the Portainer password)', 'Access', 'password', '', False),
+    'SOPHON_KOPIA_PASSWORD': ('Existing repository encryption password', 'Backup', 'password', '', True),
+    'SOPHON_KOPIA_SERVER_USERNAME': ('Kopia UI username', 'Backup', 'text', 'admin', True),
+    'SOPHON_KOPIA_SERVER_PASSWORD': ('Kopia UI password', 'Backup', 'password', '', True),
+    'SOPHON_KOPIA_SFTP_HOST': ('SFTP host', 'Backup', 'host', '', True),
+    'SOPHON_KOPIA_SFTP_PORT': ('SFTP port', 'Backup', 'number', '22', True),
+    'SOPHON_KOPIA_SFTP_USERNAME': ('SFTP username', 'Backup', 'text', '', True),
+    'SOPHON_KOPIA_SFTP_PATH': ('Absolute SFTP repository path', 'Backup', 'text', '', True),
+    'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64': ('Base64 SSH private key', 'Backup', 'password', '', True),
+    'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64': ('Base64 verified SSH known_hosts', 'Backup', 'password', '', True),
+    'SOPHON_KOPIA_CLIENT_USERNAME': ('Backup source username', 'Backup', 'text', 'backup', True),
+    'SOPHON_KOPIA_CLIENT_HOSTNAME': ('Backup source hostname', 'Backup', 'text', 'sophon', True),
+    'SOPHON_KOPIA_INIT_REPOSITORY': ('Create a NEW empty repository (never for recovery)', 'Backup', 'choice', 'false', True),
+    'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups (after first verified backup)', 'Backup', 'choice', 'false', True),
+    'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
 }
 LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
           'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),
-          'SOPHON_INFRAVM_DISK_GB': (40, 1048576)}
+          'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
 STEPS = ('provision', 'configure')
-CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv')}
+CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
+           'SOPHON_KOPIA_INIT_REPOSITORY': ('false', 'true'),
+           'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true')}
 PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Hyper-V', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
-                    if field[2] not in ('password', 'path') and field[1] not in PROVISION_GROUPS and name != 'SOPHON_DOMAIN')
+                    if field[2] not in ('password', 'path') and field[1] not in (*PROVISION_GROUPS, 'Backup') and name != 'SOPHON_DOMAIN')
 
 
 PROVIDER_GROUPS = {'Proxmox': 'proxmox', 'Network': 'proxmox', 'vCenter': 'vcenter', 'Hyper-V': 'hyperv'}
@@ -116,7 +133,18 @@ def validate_settings(current, changes, step='provision'):
         if not value:
             continue
         try:
-            if kind == 'ipv4':
+            if kind == 'choice' and value not in CHOICES[name]:
+                return None, f'{label} ({name}) must be one of {", ".join(CHOICES[name])}.'
+            if name in ('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'):
+                if not base64.b64decode(value, validate=True).decode('utf-8').strip():
+                    return None, f'{label} ({name}) must encode nonempty UTF-8 material.'
+            elif name == 'SOPHON_KOPIA_SFTP_PATH' and (
+                    not value.startswith('/') or '..' in value.split('/')):
+                return None, f'{label} ({name}) must be absolute without parent traversal.'
+            elif name in ('SOPHON_KOPIA_CLIENT_USERNAME', 'SOPHON_KOPIA_CLIENT_HOSTNAME') and not re.fullmatch(
+                    r'[A-Za-z0-9][A-Za-z0-9_.-]*', value):
+                return None, f'{label} ({name}) must contain letters, digits, dots, underscores or hyphens.'
+            elif kind == 'ipv4':
                 ipaddress.IPv4Address(value)
             elif kind == 'number':
                 minimum, maximum = LIMITS[name]

@@ -48,6 +48,8 @@ class OpenLDAPTemplateTests(unittest.TestCase):
         self.assertNotIn('/opt/bitnami', script)
         self.assertNotIn('|| true', script)
         self.assertIn('exec /bin/bash /opt/run.sh', script)
+        self.assertEqual(self.service['security_opt'], ['label=disable'])
+        self.assertEqual(self.compose['services']['certs-dumper']['security_opt'], ['label=disable'])
         self.assertIn('groupOfUniqueNames/groupOfNames', script)
         self.assertIn('cn=portainer-admins,ou=groups,dc=site,dc=example', script)
         self.assertIn('member: uid=john.doe.admin,ou=people,dc=site,dc=example', script)
@@ -55,6 +57,22 @@ class OpenLDAPTemplateTests(unittest.TestCase):
         self.assertIn('openldap_config:/etc/ldap/slapd.d', self.service['volumes'])
         self.assertIn('openldap_data:/var/lib/sophon-legacy:ro', self.service['volumes'])
         self.assertIn('--version v3', self.compose['services']['certs-dumper']['command'][0])
+
+    def test_split_backup_labels_preserve_native_exports_and_restore(self):
+        labels = dict(value.split('=', 1) for value in self.service['labels'])
+        self.assertEqual(labels['sophon.backup.version'], '2')
+        self.assertNotIn('sophon.backup.spec', labels)
+        self.assertEqual(labels['sophon.backup.group'], 'ldap')
+        self.assertEqual(labels['sophon.backup.stop-during-backup'], 'false')
+        self.assertEqual(labels['sophon.backup.paths.2.name'], 'complete-mdb-ldif')
+        export = json.loads(labels['sophon.backup.archive-pre.0.argv'])
+        self.assertEqual(export[:2], ['sh', '-ec'])
+        self.assertIn('slapcat -n 0', export[2])
+        self.assertIn('slapcat -n 1 -s "$$LDAP_INIT_ORG_DN"', export[2])
+        self.assertEqual(labels['sophon.backup.archive-pre.0.user'], '0')
+        restore = json.loads(labels['sophon.backup.restore.0.argv'])
+        self.assertIn('slapadd -n 0', restore[2])
+        self.assertIn('slapadd -n 1', restore[2])
 
     @unittest.skipUnless(os.environ.get('SOPHON_CONTAINER_TESTS') == '1' and shutil.which('docker'),
                          'Set SOPHON_CONTAINER_TESTS=1 with the LDAP image preloaded for live tests')

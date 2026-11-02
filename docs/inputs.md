@@ -85,14 +85,50 @@ service accounts** (default no), then asks for:
 | Cloudflare token | Connected sites only, required. A custom token with three permissions: Zone / Zone / Read, Zone / DNS / Edit and Account / Cloudflare Tunnel / Edit (tunnel permission only if you use tunnels), scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
 | Cloudflare tunnel name | Connected sites only (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
-| Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) fills every one of these except the Cloudflare token and licence key. |
+| Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, licence key, existing Kopia repository password and SSH material. |
 | Portainer licence | Business Edition key (the current free program covers three nodes). |
+| Kopia | External SFTP destination, existing repository password, base64 SSH key/verified host keys and backup policy; details below. |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
 (passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
 
-Service names (`traefik`, `portainer`, `dns`, `ldap`, `auth`, `git` under your domain) must
+Service names (`traefik`, `portainer`, `dns`, `kopia`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.
+
+### Kopia backup inputs
+
+Kopia is deployed normally before Gitea, with no recovery mode, Gitea runner,
+or runtime source download. Its collector API key is created through Portainer
+and persisted in the Kopia stack environment; reruns reuse it and verify access.
+There is no need to supply a Gitea/deployment token.
+
+These are Configure inputs on InfraVM, not laptop `.env` settings:
+
+| Variable | Meaning |
+|---|---|
+| `SOPHON_KOPIA_PASSWORD` | Required existing repository encryption password; never replaced by "same password for all". Retain outside the repository. |
+| `SOPHON_KOPIA_SERVER_USERNAME`, `_SERVER_PASSWORD` | Independent UI login; username defaults to `admin`. |
+| `SOPHON_KOPIA_SFTP_HOST`, `_SFTP_PORT` | Required reachable SFTP host; port defaults to `22`. |
+| `SOPHON_KOPIA_SFTP_USERNAME`, `_SFTP_PATH` | Required account and absolute repository path, without `..` components. |
+| `SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64` | Required single-line base64 SSH private key. Encoding is not encryption. |
+| `SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64` | Required single-line base64 of independently verified/pinned `known_hosts`; include `[host]:port` for a nonstandard port. |
+| `SOPHON_KOPIA_CLIENT_USERNAME`, `_CLIENT_HOSTNAME` | Stable snapshot source identity, default `backup@sophon`. Preserve it on reruns/recovery. |
+| `SOPHON_KOPIA_INIT_REPOSITORY` | `false` by default: connect only. Explicit `true` creates a new empty repository; never use for recovery. Reset to `false` immediately after initial creation. |
+| `SOPHON_KOPIA_BACKUPS_ENABLED` | `false` until a first full backup is verified. Set `true` to enable scheduled backups; keep the existing value on reruns. |
+| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h` when scheduling is enabled. |
+
+Keep supplying the same destination, password, identity, SSH material and policy
+when reconfiguring an existing instance. The role reuses the `kopia` stack and
+its five persistent volumes; preparing new media alone changes no installed VM.
+An unreachable repository, invalid key/password or revoked collector token
+fails deployment explicitly. To rotate the collector token, remove its old
+`BACKUP_PORTAINER_API_KEY` stack environment entry and rerun Configure, then
+revoke the retired key in Portainer.
+
+The [role documentation](../roles/kopia/README.md) records the split labels,
+backup/restore commands and tested limits. Only PostgreSQL/Keycloak recovery
+has an automated profile; Gitea and other workloads use the documented native
+recovery procedures after the normal fresh installation.
 
 ## Upgrading from the previous pins
 
