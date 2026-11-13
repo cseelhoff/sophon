@@ -78,6 +78,8 @@ services:
       - 'sophon.backup.group=ldap'
       - 'sophon.backup.stop=false'
       - 'sophon.backup.dumps.0.name=directory.ldif'
+      - 'sophon.backup.dumps.0.restore=ldap-subtree'
+      - 'sophon.backup.dumps.0.base={{ openldap_base_dn }}'
       - 'sophon.backup.dumps.0.argv=["sh","-ec","exec slapcat -n 1 -s \"$$LDAP_INIT_ORG_DN\""]'
       - 'sophon.backup.dumps.0.user=0'
       - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"

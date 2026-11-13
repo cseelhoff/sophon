@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -24,6 +25,12 @@ PREFIX = "sophon.backup."
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 IDENTITY = re.compile(r"[a-f0-9]{64}\Z")
 CHUNK = 65536
+
+
+class EngineError(RuntimeError):
+    def __init__(self, method, path, status):
+        self.status = status
+        super().__init__(f"Engine {method} {path} failed: HTTP {status}")
 
 
 def fail(message):
@@ -84,15 +91,19 @@ def engine_api(url, timeout=900):
 def engine(api, method, path, body=None, stream=False):
     if api.get("transport"):
         return api["transport"](method, path, body, stream)
-    connection = http.client.HTTPConnection(api["host"], api["port"], timeout=api["timeout"])
+    connection = http.client.HTTPConnection(api.get("host", "localhost"), api.get("port", 2375), timeout=api["timeout"])
     keep_open = False
     try:
+        if "socket" in api:
+            connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.sock.settimeout(api["timeout"])
+            connection.sock.connect(api["socket"])
         connection.request(method, "/v1.41" + path, body=None if body is None else json.dumps(body),
                            headers={"Content-Type": "application/json"})
         response = connection.getresponse()
         if not 200 <= response.status < 300 and not (
                 response.status == 304 and method == "POST" and path.split("?", 1)[0].endswith(("/start", "/stop"))):
-            fail(f"Engine {method} {path} failed: HTTP {response.status}")
+            raise EngineError(method, path, response.status)
         if stream:
             deadline = time.monotonic() + api["timeout"]
 
@@ -164,8 +175,12 @@ def parse_spec(container):
                         fail("INI selection must list explicit section.key names")
                     record["ini"] = keys
             else:
-                if set(record) - {"name", "argv", "user"} or "argv" not in record:
+                if set(record) - {"name", "argv", "user", "restore", "base"} or "argv" not in record:
                     fail("Dump labels require name and argv")
+                if record.get("restore") not in (None, "postgres-cluster", "ldap-subtree"):
+                    fail("Unsupported declared native restore type")
+                if record.get("restore") == "ldap-subtree" and not record.get("base"):
+                    fail("LDAP restoration requires the configured base DN")
                 argv = json.loads(record["argv"])
                 if (not isinstance(argv, list) or not argv or any(
                         not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv)):
@@ -442,6 +457,8 @@ def select_ini(path, keys):
 
 
 def collect(api, volumes, root, version):
+    if (root / "restore.json").exists() or (root / "restore.json").is_symlink():
+        fail("Operator restoration is pending; resume or explicitly clean up its recovery state before backing up")
     recover(api, root)
     if not version.strip():
         fail("Sophon version is required")

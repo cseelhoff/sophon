@@ -56,6 +56,7 @@ def bundle(media):
         "project/src/console.py": "print('console')",
         "project/site.json": '{"SOPHON_INFRAVM_IP":"10.0.60.2"}',
         "guest/sophon-deploy": (SCRIPTS / "sophon-deploy").read_text(),
+        "guest/sophon-restore": (SCRIPTS / "sophon-restore").read_text(),
         "guest/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
         "guest/sophon-network": NETWORK.read_text(),
         "guest/sophon-set-password": (SCRIPTS / "sophon-set-password").read_text(),

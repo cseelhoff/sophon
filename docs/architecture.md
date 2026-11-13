@@ -130,7 +130,17 @@ The journal and per-run report are outside snapshot staging.
 
 Portainer is recreated from IaC, not restored. Retain external inputs and the
 SFTP repository password/key/pins outside the encrypted repository. Restoration
-is explicit, never invoked by Configure; M2's new group restore/drill is separate
-from the M1 collector. Old snapshots require `kopia-legacy`, not a v3 shim.
+is explicit, never invoked by Configure. The console's `sophon-restore` runs a
+one-shot coordinator from the offline Kopia image using Podman alone, independently
+of Portainer, Gitea and the Kopia UI. It validates a snapshot/group against fresh
+IaC, waits for explicit approval, stops that group, replaces declared files with
+numeric ownership preserved, imports native exports using isolated matching-image
+helpers, then starts producers before consumers. Failures leave the group stopped
+with a durable helper journal for retry/explicit cleanup. Planning shares the
+backup lock; a durable hold prevents scheduled backups of partial recovery state
+after interruption until success or explicit abandonment. The operator coordinator
+temporarily gets the full rootless socket; the primary proxy remains restricted.
+Decrypted recovery staging lives only in a private, labelled recovery volume and
+must be cleaned explicitly. Old snapshots require `kopia-legacy`, not a v3 shim.
 See the [operator guide](../roles/kopia/README.md) and
 [outside-workload migration](kopia-v3-migration.md).

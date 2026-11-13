@@ -132,8 +132,24 @@ key/pin preparation with console pairing and confirmed missing-repository creati
 The [operator guide](../roles/kopia/README.md) defines v3 labels, console backup
 commands, partial-run reports and interruption recovery. No v1/v2 labels or
 old manifests are interpreted. [Migrate outside workloads](kopia-v3-migration.md)
-before expecting them to be protected. M2's explicit group restore/drill is not
-implemented in M1; Configure never restores state.
+before expecting them to be protected. Configure never restores state.
+
+### Console recovery inputs
+
+`sophon-restore plan --group GROUP --snapshot latest` uses the existing `kopia`
+container's connection settings, or the same `SOPHON_KOPIA_*` destination,
+password/key/pins and stable source identity overrides above when it is absent.
+It never uses Portainer or Gitea. Supply `SOPHON_RESTORE_SOURCE_VOLUME` when the
+backup container is absent (normally `kopia_source-v3`, retained to coordinate
+backup/recovery), and optionally `SOPHON_KOPIA_RESTORE_IMAGE` for an already loaded
+custom recovery image. `--state-volume NAME` selects a private labelled staging
+volume; default `sophon-restore-v3`.
+
+Apply requires the planned group, exact printed snapshot ID and `--approve`.
+The fresh deployment must use matching image IDs and current native import
+declarations. Failed groups are not restored from an older snapshot implicitly.
+Keep decrypted staging private and run `cleanup --approve` after success or
+deliberate abandonment. See the [recovery procedure](../roles/kopia/README.md#explicit-group-restoration).
 
 ## Upgrading from the previous pins
 

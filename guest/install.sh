@@ -158,6 +158,7 @@ WantedBy=multi-user.target
     ignition_file /var/lib/systemd/linger/core 420 ''; printf ','
     ignition_file /etc/issue.d/sophon.issue 420 $'Sophon: log in as core, then run sophon-deploy (it asks for the network).\nIf setup failed: sudo systemctl restart sophon-host-bootstrap\nIf firmware boots the live ISO again, select the installed disk; do not reinstall.\n'; printf ','
     ignition_file /usr/local/bin/sophon-deploy 493 "$(cat "$media/guest/sophon-deploy")"; printf ','
+    ignition_file /usr/local/bin/sophon-restore 493 "$(cat "$media/guest/sophon-restore")"; printf ','
     ignition_file /usr/local/libexec/sophon-host-bootstrap 493 "$(cat "$media/guest/host-bootstrap.sh")"; printf ','
     ignition_file /usr/local/libexec/sophon-network 493 "$(cat "$media/guest/sophon-network")"; printf ','
     ignition_file /usr/local/libexec/sophon-set-password 493 "$(cat "$media/guest/sophon-set-password")"

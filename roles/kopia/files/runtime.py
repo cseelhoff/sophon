@@ -20,9 +20,9 @@ def required(environment, name):
     return value
 
 
-def kopia(environment, *arguments):
+def kopia(environment, *arguments, timeout=180):
     result = subprocess.run(["kopia", "--file-log-level=info", "--disable-content-log", *arguments],
-                            env=environment, capture_output=True, timeout=180)
+                            env=environment, capture_output=True, timeout=timeout)
     if result.returncode:
         detail = result.stderr.decode(errors="replace")
         for name in ("KOPIA_PASSWORD", "KOPIA_SERVER_PASSWORD", "KOPIA_SFTP_PRIVATE_KEY_B64"):
@@ -49,9 +49,8 @@ def health(environment):
     print("Repository connected")
 
 
-def start(environment):
+def connect(environment):
     required(environment, "KOPIA_PASSWORD")
-    required(environment, "KOPIA_SERVER_PASSWORD")
     host = required(environment, "KOPIA_SFTP_HOST")
     user = required(environment, "KOPIA_SFTP_USERNAME")
     path = required(environment, "KOPIA_SFTP_PATH")
@@ -70,6 +69,11 @@ def start(environment):
           "--username=" + user, "--path=" + path, "--keyfile=/tmp/credentials/id_ed25519",
           "--known-hosts=/tmp/credentials/known_hosts", "--no-embed-credentials",
           "--no-persist-credentials", "--no-use-keyring", "--no-check-for-updates")
+
+
+def start(environment):
+    required(environment, "KOPIA_SERVER_PASSWORD")
+    connect(environment)
     client_user = required(environment, "KOPIA_CLIENT_USERNAME")
     client_host = required(environment, "KOPIA_CLIENT_HOSTNAME")
     if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) for value in (client_user, client_host)):

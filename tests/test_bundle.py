@@ -305,7 +305,7 @@ class PrepareTests(unittest.TestCase):
             '#!/bin/sh',
             'case "$1 $2" in',
             f'  "image inspect") if [ "$5" = "localhost/sophon-kopia:0.23.1" ]; then echo sha256:cached-kopia; else cat "{image_id}"; fi; exit 0 ;;',
-            '  "build "*) exit 0 ;;',
+            '  "build "*) for last do :; done; if [ "$last" = "-" ]; then cat >/dev/null; fi; exit 0 ;;',
             'esac',
             f'echo "$1" >> "{attempted}"',
             'exit 99', '']))
