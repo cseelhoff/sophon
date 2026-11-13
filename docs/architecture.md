@@ -17,7 +17,7 @@ Every play targets `localhost`. The laptop only creates a blank VM; it never rea
 installer). The `core` password is chosen at the first boot, the network, domain and all service credentials in step 4.
 See [decisions.md](decisions.md).
 
-Three surfaces do all the work; knowing which one is in play explains most failures:
+These surfaces explain deployment and backup failures:
 
 1. **The hypervisor API** (steps 1-2 only). Proxmox: REST ticket + `community.proxmox`. vCenter: `govc`
    with verified HTTPS and environment-only credentials. Hyper-V: PowerShell over WinRM (`pypsrp`); every value
@@ -27,8 +27,12 @@ Three surfaces do all the work; knowing which one is in play explains most failu
    the deployment ISO; it verifies the media checksums, requires exactly one unpartitioned disk with no filesystem
    signatures, renders Ignition locally and runs `coreos-installer --offline`.
 3. **The Portainer API** (step 4). Stacks, image loads and volume seeding all go through Portainer's HTTP
-   API; there is no other path into InfraVM ([decisions.md](decisions.md)).
+   API for deployment mutations ([decisions.md](decisions.md)).
    If Portainer is down, fix it by hand, then rerun.
+4. **The backup data path** (normal container stack). Declared source volumes are
+   read-only mounts in Kopia. Its private, unpublished HAProxy service exposes only
+   list/inspect/exec/stop/start on the existing rootless Podman socket. Native dumps
+   stream stdout, not archives. Portainer is absent from this path.
 
 ## Artifacts
 
@@ -40,31 +44,39 @@ Step 1 writes everything into `artifacts/` and is cached: with a complete cache 
   Compose files use `pull_policy: never`, so a missing archive fails by name instead of pulling silently.
 
 `prepare_container_images` in `roles/prepare/defaults/main.yml` lists upstream
-images. Prepare also builds CoreDNS and the Kopia collector/recovery image from
+images. Prepare also builds CoreDNS and the Kopia collector image from
 Sophon sources. Their archives join the same manifest and deployment ISO; keep
 that complete list in step with each role's `*_image_tars`. Kopia is rebuilt
 through the engine's content cache and its archive is replaced when the image
 ID changes, so editing the collector cannot reuse an obsolete image archive.
+The pinned HAProxy image joins the same offline manifest. Bundle creation hashes
+the copied IaC sources into `bootstrap/sophon-version`, which snapshots record
+alongside the workload image references and immutable IDs.
 
 ## Order of the services
 
 ```text
 CoreDNS resolves *.<domain> ─▶ Traefik routes by Host and gets certificates
-   ─▶ Kopia connects to its external encrypted repository
    ─▶ LDAPS at ldap.<domain> verifies ─▶ Keycloak federates OpenLDAP
    ─▶ Gitea and Portainer trust Keycloak (OIDC)
+   ─▶ Kopia mounts the now-existing declared source volumes
 ```
 
 Each link is load-bearing: a DNS problem shows up as Keycloak failing on an LDAPS certificate. Read
 failures from the left.
 
-Kopia is an ordinary core deployment, before Gitea. Its source, custom image,
-split-label consumer and recovery tool come from Sophon, not a Gitea project.
-It uses its own UI login and a separately revocable Portainer API key, created
-at initial deployment and reused from the existing stack on reruns. No Gitea,
-LDAP or Keycloak service is needed by Kopia. After a fresh installation,
-operators can recover application state through the existing Kopia procedures;
-the normal install does not automatically restore production data.
+Kopia is deployed last so external named-volume mounts already exist. Its code
+and images come from Sophon, not a Gitea project. Backups and their supervisor
+operate without Portainer, Gitea or the Kopia UI. The UI remains a repository
+browser, not the collector trigger. A console command stages a uniquely named
+immutable run, resumes writers, then uploads with a stable logical source
+identity (`backup@sophon:/sophon-state`). Partial runs upload successful groups
+and report failure; every report includes undeclared volumes.
+
+The supervisor runs scheduled backups only when explicitly enabled. Its own
+Kopia server child handles browsing; native snapshot scheduling stays disabled
+to prevent snapshots bypassing the collector. No host backup timer or unit is
+created. The primary stack never mounts the whole volumes directory.
 
 ## DNS
 
@@ -109,7 +121,16 @@ names the files after the certificate's main domain (`<domain>.crt`, `<domain>.k
 
 Reconstructible state (the Keycloak realm, seeded users, routing) is rebuilt by a rerun. Irreplaceable
 state (Gitea repositories, user-created LDAP entries, `acme.json`, the ACME account) is not;
-back it up ([decisions.md](decisions.md)). Core Kopia uses the workloads' versioned
-Docker labels to obtain native export, pause/cleanup and manual restore recipes.
-The external SFTP repository is encrypted; its password and SSH recovery
-credentials must also be retained outside it. See [Kopia](../roles/kopia/README.md).
+back it up ([decisions.md](decisions.md)). V3 labels declare irreproducible paths,
+native stdout dumps and stopped writers. Only declared named volumes are mounted;
+native database exports do not require exposing database directories.
+Snapshots contain real files, dumps and a v3 manifest, never tar artifacts,
+container environments, Portainer state, images or reconstructible configuration.
+The journal and per-run report are outside snapshot staging.
+
+Portainer is recreated from IaC, not restored. Retain external inputs and the
+SFTP repository password/key/pins outside the encrypted repository. Restoration
+is explicit, never invoked by Configure; M2's new group restore/drill is separate
+from the M1 collector. Old snapshots require `kopia-legacy`, not a v3 shim.
+See the [operator guide](../roles/kopia/README.md) and
+[outside-workload migration](kopia-v3-migration.md).

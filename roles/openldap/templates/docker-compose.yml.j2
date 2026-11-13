@@ -12,12 +12,9 @@ services:
       - acme_data:/data:ro
       - ldap_certs:/output
     labels:
-      - 'sophon.backup.version=2'
+      - 'sophon.backup.version=3'
       - 'sophon.backup.group=traefik'
-      - 'sophon.backup.stop-during-backup=false'
-      - 'sophon.backup.stop-timeout=120'
-      - 'sophon.backup.excludes.0.path=/output'
-      - 'sophon.backup.excludes.0.reason=Derived certificates and private keys reconstructed from protected ACME state'
+      - 'sophon.backup.stop=false'
       - "traefik.enable=true"
       - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
       - "traefik.http.routers.ldap-certs.entrypoints=websecure"
@@ -77,54 +74,12 @@ services:
       SOPHON_USER_PASSWORD: {{ openldap_example_user_password | replace('$', '$$') | to_json }}
       SOPHON_ADMIN_PASSWORD: {{ openldap_example_admin_password | replace('$', '$$') | to_json }}
     labels:
-      - 'sophon.backup.version=2'
+      - 'sophon.backup.version=3'
       - 'sophon.backup.group=ldap'
-      - 'sophon.backup.stop-during-backup=false'
-      - 'sophon.backup.stop-timeout=120'
-      - 'sophon.backup.covers.0.path=/var/lib/ldap'
-      - 'sophon.backup.covers.1.path=/etc/ldap/slapd.d'
-      - 'sophon.backup.covers.2.path=/var/lib/sophon-legacy'
-      - 'sophon.backup.excludes.0.path=/run/secrets/ldap'
-      - 'sophon.backup.excludes.0.reason=Certificates and keys reconstructed by certs-dumper from the protected Traefik ACME state'
-      - 'sophon.backup.paths.0.type=archive'
-      - 'sophon.backup.paths.0.path=$${SOPHON_BACKUP_DIR}-config.ldif'
-      - 'sophon.backup.paths.0.name=config-ldif'
-      - 'sophon.backup.paths.1.type=archive'
-      - 'sophon.backup.paths.1.path=$${SOPHON_BACKUP_DIR}-data.ldif'
-      - 'sophon.backup.paths.1.name=database-ldif'
-      - 'sophon.backup.paths.2.type=archive'
-      - 'sophon.backup.paths.2.path=$${SOPHON_BACKUP_DIR}-full.ldif'
-      - 'sophon.backup.paths.2.name=complete-mdb-ldif'
-      - 'sophon.backup.paths.3.type=archive'
-      - 'sophon.backup.paths.3.path=/var/lib/sophon-legacy'
-      - 'sophon.backup.paths.3.name=legacy-migration-guard'
-      - |-
-        sophon.backup.prepare.0.argv=[
-          "sh",
-          "-ec",
-          "test ! -e \"$$SOPHON_BACKUP_DIR-config.ldif\"; test ! -e \"$$SOPHON_BACKUP_DIR-data.ldif\"; test ! -e \"$$SOPHON_BACKUP_DIR-full.ldif\""
-        ]
-      - |-
-        sophon.backup.archive-pre.0.argv=[
-          "sh",
-          "-ec",
-          "umask 077; slapcat -n 0 -l \"$$SOPHON_BACKUP_DIR-config.ldif\"; slapcat -n 1 -s \"$$LDAP_INIT_ORG_DN\" -l \"$$SOPHON_BACKUP_DIR-data.ldif\"; slapcat -n 1 -l \"$$SOPHON_BACKUP_DIR-full.ldif\""
-        ]
-      - 'sophon.backup.archive-pre.0.user=0'
-      - |-
-        sophon.backup.archive-post.0.argv=[
-          "sh",
-          "-ec",
-          "rm -f -- \"$$SOPHON_BACKUP_DIR-config.ldif\" \"$$SOPHON_BACKUP_DIR-data.ldif\" \"$$SOPHON_BACKUP_DIR-full.ldif\""
-        ]
-      - 'sophon.backup.archive-post.0.user=0'
-      - |-
-        sophon.backup.restore.0.argv=[
-          "sh",
-          "-ec",
-          "slapadd -n 0 -F /etc/ldap/slapd.d -l \"$$SOPHON_BACKUP_DIR-config.ldif\"; slapadd -n 1 -F /etc/ldap/slapd.d -l \"$$SOPHON_BACKUP_DIR-data.ldif\""
-        ]
-      - 'sophon.backup.restore.0.user=0'
+      - 'sophon.backup.stop=false'
+      - 'sophon.backup.dumps.0.name=directory.ldif'
+      - 'sophon.backup.dumps.0.argv=["sh","-ec","exec slapcat -n 1 -s \"$$LDAP_INIT_ORG_DN\""]'
+      - 'sophon.backup.dumps.0.user=0'
       - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
     volumes:
       - openldap_database:/var/lib/ldap

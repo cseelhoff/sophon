@@ -71,9 +71,6 @@
     - name: Deploy Traefik
       ansible.builtin.include_role:
         name: traefik
-    - name: Deploy Kopia
-      ansible.builtin.include_role:
-        name: kopia
     - name: Connect the Cloudflare tunnel
       ansible.builtin.include_role:
         name: cloudflared
@@ -86,6 +83,9 @@
     - name: Deploy Gitea
       ansible.builtin.include_role:
         name: gitea
+    - name: Deploy Kopia after source volumes exist
+      ansible.builtin.include_role:
+        name: kopia
     - name: Finish service deployment
       ansible.builtin.debug:
         msg: "Deployment complete. Portainer: {{ infravm_portainer_url }}. Retain credentials in your password manager."

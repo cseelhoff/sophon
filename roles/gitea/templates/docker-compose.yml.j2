@@ -55,14 +55,52 @@ services:
       gitea-db:
         condition: service_healthy
     labels:
-      - 'sophon.backup.version=2'
+      - 'sophon.backup.version=3'
       - 'sophon.backup.group=gitea'
-      - 'sophon.backup.stop-during-backup=true'
-      - 'sophon.backup.stop-timeout=120'
-      - 'sophon.backup.covers.0.path=/data'
-      - 'sophon.backup.paths.0.type=archive'
-      - 'sophon.backup.paths.0.path=/data'
-      - 'sophon.backup.paths.0.name=repositories-lfs-config'
+      - 'sophon.backup.stop=true'
+      - 'sophon.backup.paths.0.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.0.path=gitea/conf/app.ini'
+      - 'sophon.backup.paths.0.name=identity.ini'
+      - 'sophon.backup.paths.0.ini=["security.SECRET_KEY","security.INTERNAL_TOKEN","server.LFS_JWT_SECRET","oauth2.JWT_SECRET"]'
+      - 'sophon.backup.paths.1.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.1.path=git/repositories'
+      - 'sophon.backup.paths.1.name=repositories'
+      - 'sophon.backup.paths.1.optional=true'
+      - 'sophon.backup.paths.2.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.2.path=git/lfs'
+      - 'sophon.backup.paths.2.name=lfs'
+      - 'sophon.backup.paths.2.optional=true'
+      - 'sophon.backup.paths.3.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.3.path=gitea/attachments'
+      - 'sophon.backup.paths.3.name=attachments'
+      - 'sophon.backup.paths.3.optional=true'
+      - 'sophon.backup.paths.4.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.4.path=gitea/avatars'
+      - 'sophon.backup.paths.4.name=avatars'
+      - 'sophon.backup.paths.4.optional=true'
+      - 'sophon.backup.paths.5.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.5.path=gitea/repo-avatars'
+      - 'sophon.backup.paths.5.name=repo-avatars'
+      - 'sophon.backup.paths.5.optional=true'
+      - 'sophon.backup.paths.6.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.6.path=gitea/packages'
+      - 'sophon.backup.paths.6.name=packages'
+      - 'sophon.backup.paths.6.optional=true'
+      - 'sophon.backup.paths.7.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.7.path=gitea/jwt'
+      - 'sophon.backup.paths.7.name=jwt-keys'
+      - 'sophon.backup.paths.7.optional=true'
+{% for kind in ['ed25519', 'rsa', 'ecdsa'] %}
+{% set index = 8 + loop.index0 * 2 %}
+      - 'sophon.backup.paths.{{ index }}.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.{{ index }}.path=ssh/ssh_host_{{ kind }}_key'
+      - 'sophon.backup.paths.{{ index }}.name=ssh-{{ kind }}-private'
+      - 'sophon.backup.paths.{{ index }}.optional=true'
+      - 'sophon.backup.paths.{{ index + 1 }}.volume=gitea_gitea_data'
+      - 'sophon.backup.paths.{{ index + 1 }}.path=ssh/ssh_host_{{ kind }}_key.pub'
+      - 'sophon.backup.paths.{{ index + 1 }}.name=ssh-{{ kind }}-public'
+      - 'sophon.backup.paths.{{ index + 1 }}.optional=true'
+{% endfor %}
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.gitea.entrypoints=websecure"
@@ -82,38 +120,11 @@ services:
     pull_policy: never
     container_name: gitea-db
     labels:
-      - 'sophon.backup.version=2'
+      - 'sophon.backup.version=3'
       - 'sophon.backup.group=gitea'
-      - 'sophon.backup.stop-during-backup=false'
-      - 'sophon.backup.stop-timeout=120'
-      - 'sophon.backup.covers.0.path=/var/lib/postgresql'
-      - 'sophon.backup.paths.0.type=archive'
-      - 'sophon.backup.paths.0.path=$${SOPHON_BACKUP_DIR}.sql'
-      - 'sophon.backup.paths.0.name=postgres-cluster'
-      - |-
-        sophon.backup.prepare.0.argv=[
-          "sh",
-          "-ec",
-          "test ! -e \"$$SOPHON_BACKUP_DIR.sql\""
-        ]
-      - |-
-        sophon.backup.archive-pre.0.argv=[
-          "sh",
-          "-ec",
-          "umask 077; pg_dumpall -U \"$$POSTGRES_USER\" --clean --if-exists -f \"$$SOPHON_BACKUP_DIR.sql\""
-        ]
-      - |-
-        sophon.backup.archive-post.0.argv=[
-          "sh",
-          "-ec",
-          "rm -f -- \"$$SOPHON_BACKUP_DIR.sql\""
-        ]
-      - |-
-        sophon.backup.restore.0.argv=[
-          "sh",
-          "-ec",
-          "psql -X -U sophon_restore -d sophon_restore -v ON_ERROR_STOP=1 -f \"$$SOPHON_BACKUP_DIR.sql\""
-        ]
+      - 'sophon.backup.stop=false'
+      - 'sophon.backup.dumps.0.name=postgres-cluster.sql'
+      - 'sophon.backup.dumps.0.argv=["sh","-ec","exec pg_dumpall -U \"$$POSTGRES_USER\" --clean --if-exists"]'
     restart: unless-stopped
     security_opt:
       - label=disable
@@ -145,6 +156,10 @@ services:
       gitea:
         condition: service_healthy
     user: "1000:1000"
+    labels:
+      - sophon.backup.version=3
+      - sophon.backup.group=gitea
+      - sophon.backup.stop=false
     environment:
       - GITEA_WORK_DIR=/data/gitea
       - GITEA_CUSTOM=/data/gitea

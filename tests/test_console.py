@@ -51,7 +51,8 @@ class ConsoleTests(unittest.TestCase):
 
     def test_invalid_run_does_not_launch_or_expose_secret(self):
         for updates in ({'SOPHON_PORTAINER_ADMIN_PASSWORD': 'short'}, {'SOPHON_DOMAIN': ''},
-                        {'SOPHON_INFRAVM_IP': '999.0.0.1'}):
+                        {'SOPHON_INFRAVM_IP': '999.0.0.1'},
+                        {'SOPHON_KOPIA_SNAPSHOT_INTERVAL': '0s'}):
             with self.subTest(updates=updates), patch.dict(os.environ, service_values() | updates, clear=True), \
                     patch('console.deployment.load_site_settings', return_value={}), \
                     patch('console.deployment.main') as run, \

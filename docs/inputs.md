@@ -97,10 +97,10 @@ resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on
 
 ### Kopia backup inputs
 
-Kopia is deployed normally before Gitea, with no recovery mode, Gitea runner,
-or runtime source download. Its collector API key is created through Portainer
-and persisted in the Kopia stack environment; reruns reuse it and verify access.
-There is no need to supply a Gitea/deployment token.
+Kopia deploys last, after core source volumes exist. Its backup operation needs
+no Portainer/Gitea token, stack definitions or environment capture. The collector
+uses a restricted engine proxy and explicitly mounted read-only source volumes.
+Keep stack definitions in IaC and supplied secrets outside Portainer.
 
 These are Configure inputs on InfraVM, not laptop `.env` settings:
 
@@ -113,22 +113,27 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 | `SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64` | Required single-line base64 SSH private key. Encoding is not encryption. |
 | `SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64` | Required single-line base64 of independently verified/pinned `known_hosts`; include `[host]:port` for a nonstandard port. |
 | `SOPHON_KOPIA_CLIENT_USERNAME`, `_CLIENT_HOSTNAME` | Stable snapshot source identity, default `backup@sophon`. Preserve it on reruns/recovery. |
-| `SOPHON_KOPIA_INIT_REPOSITORY` | `false` by default: connect only. Explicit `true` creates a new empty repository; never use for recovery. Reset to `false` immediately after initial creation. |
+| `SOPHON_KOPIA_EXTRA_VOLUMES` | Site workload volume names as a JSON array, default `[]`. Core roles declare their own list. These become read-only mounts, not host paths. Retain the list in site IaC and redeploy after changes. |
 | `SOPHON_KOPIA_BACKUPS_ENABLED` | `false` until a first full backup is verified. Set `true` to enable scheduled backups; keep the existing value on reruns. |
-| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h` when scheduling is enabled. |
+| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix. The container supervisor schedules collector runs, not raw filesystem snapshots. |
 
 Keep supplying the same destination, password, identity, SSH material and policy
 when reconfiguring an existing instance. The role reuses the `kopia` stack and
-its five persistent volumes; preparing new media alone changes no installed VM.
-An unreachable repository, invalid key/password or revoked collector token
-fails deployment explicitly. To rotate the collector token, remove its old
-`BACKUP_PORTAINER_API_KEY` stack environment entry and rerun Configure, then
-revoke the retired key in Portainer.
+its v3 config/cache/log/staging volumes; preparing new media alone changes no
+installed VM. An unreachable repository or invalid key/password fails startup.
+There is no collector API key to supply, persist or rotate. Revoke a retired
+legacy collector key after finishing legacy recovery and quiescing its schedule.
 
-The [role documentation](../roles/kopia/README.md) records the split labels,
-backup/restore commands and tested limits. Only PostgreSQL/Keycloak recovery
-has an automated profile; Gitea and other workloads use the documented native
-recovery procedures after the normal fresh installation.
+M1 expects an already initialized SFTP repository: create it explicitly with a
+separate Kopia client and the intended password. `SOPHON_KOPIA_INIT_REPOSITORY`
+has been removed; startup never creates on error. M3 will replace manual client
+key/pin preparation with console pairing and confirmed missing-repository creation.
+
+The [operator guide](../roles/kopia/README.md) defines v3 labels, console backup
+commands, partial-run reports and interruption recovery. No v1/v2 labels or
+old manifests are interpreted. [Migrate outside workloads](kopia-v3-migration.md)
+before expecting them to be protected. M2's explicit group restore/drill is not
+implemented in M1; Configure never restores state.
 
 ## Upgrading from the previous pins
 

@@ -58,21 +58,19 @@ class OpenLDAPTemplateTests(unittest.TestCase):
         self.assertIn('openldap_data:/var/lib/sophon-legacy:ro', self.service['volumes'])
         self.assertIn('--version v3', self.compose['services']['certs-dumper']['command'][0])
 
-    def test_split_backup_labels_preserve_native_exports_and_restore(self):
+    def test_v3_backup_exports_only_the_native_site_directory(self):
         labels = dict(value.split('=', 1) for value in self.service['labels'])
-        self.assertEqual(labels['sophon.backup.version'], '2')
+        self.assertEqual(labels['sophon.backup.version'], '3')
         self.assertNotIn('sophon.backup.spec', labels)
         self.assertEqual(labels['sophon.backup.group'], 'ldap')
-        self.assertEqual(labels['sophon.backup.stop-during-backup'], 'false')
-        self.assertEqual(labels['sophon.backup.paths.2.name'], 'complete-mdb-ldif')
-        export = json.loads(labels['sophon.backup.archive-pre.0.argv'])
+        self.assertEqual(labels['sophon.backup.stop'], 'false')
+        self.assertEqual(labels['sophon.backup.dumps.0.name'], 'directory.ldif')
+        export = json.loads(labels['sophon.backup.dumps.0.argv'])
         self.assertEqual(export[:2], ['sh', '-ec'])
-        self.assertIn('slapcat -n 0', export[2])
         self.assertIn('slapcat -n 1 -s "$$LDAP_INIT_ORG_DN"', export[2])
-        self.assertEqual(labels['sophon.backup.archive-pre.0.user'], '0')
-        restore = json.loads(labels['sophon.backup.restore.0.argv'])
-        self.assertIn('slapadd -n 0', restore[2])
-        self.assertIn('slapadd -n 1', restore[2])
+        self.assertEqual(labels['sophon.backup.dumps.0.user'], '0')
+        self.assertFalse(any(key.startswith('sophon.backup.paths.') for key in labels))
+        self.assertNotIn('slapcat -n 0', export[2])
 
     @unittest.skipUnless(os.environ.get('SOPHON_CONTAINER_TESTS') == '1' and shutil.which('docker'),
                          'Set SOPHON_CONTAINER_TESTS=1 with the LDAP image preloaded for live tests')

@@ -178,6 +178,12 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
         metadata.mkdir()
         (metadata / 'portainer-image').write_text(portainer_image + '\n')
         (metadata / 'portainer-archive').write_text(portainer_archive + '\n')
+        version = hashlib.sha256()
+        for path in sorted(project.rglob('*')):
+            if path.is_file():
+                version.update(path.relative_to(project).as_posix().encode() + b'\0')
+                version.update(path.read_bytes())
+        (metadata / 'sophon-version').write_text('source-sha256:' + version.hexdigest() + '\n')
         container_dir = project / 'artifacts' / 'containers'
         container_dir.mkdir(parents=True)
         known = {}

@@ -30,3 +30,13 @@
 **Site egress**: internet access available to services at runtime. Expected normally; its absence is a supported, degraded mode (no tunnel publishing, no self-renewal).
 
 **Reconstructible / irreplaceable state**: what a rerun rebuilds, versus what only a backup can restore.
+
+**Backup group**: v3-labelled workloads whose writers pause together while declared
+irreproducible paths are cloned and native dumps are captured. Writers resume before upload.
+
+**Primary snapshot**: real irreproducible files, native dumps and a v3 manifest
+with workload images and Sophon source version; not a system or Portainer backup.
+
+**Engine proxy**: the unpublished allowlisted socket proxy used by the backup
+container, separate from Portainer. The primary collector has named read-only
+volume mounts, not the engine socket or whole volumes directory.
