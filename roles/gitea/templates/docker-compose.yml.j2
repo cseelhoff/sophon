@@ -124,6 +124,7 @@ services:
       - 'sophon.backup.group=gitea'
       - 'sophon.backup.stop=false'
       - 'sophon.backup.dumps.0.name=postgres-cluster.sql'
+      - 'sophon.backup.dumps.0.restore=postgres-cluster'
       - 'sophon.backup.dumps.0.argv=["sh","-ec","exec pg_dumpall -U \"$$POSTGRES_USER\" --clean --if-exists"]'
     restart: unless-stopped
     security_opt:
