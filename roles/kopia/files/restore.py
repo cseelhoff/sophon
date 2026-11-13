@@ -293,6 +293,17 @@ def state_file(root):
     return state
 
 
+def pending_restore(source, state, volume):
+    path = source / "restore.json"
+    if path.is_symlink():
+        backup.fail("Pending restore journal is a symlink")
+    if path.exists():
+        value = json.loads(path.read_text())
+        if state is None or value != {"version": 3, "owner": state["owner"], "volume": volume}:
+            backup.fail("Another operator restoration is pending; resume or clean up its original state volume")
+    return path
+
+
 def helper(api, root, state, image, binds, command, entrypoint, env=(), database=False):
     name = "sophon-restore-" + state["owner"][:12] + "-" + str(len(state["resources"]))
     record = {"name": name, "id": None, "image": image, "binds": binds}
@@ -375,6 +386,8 @@ SQL
 fi
 psql -X -U "$temp" -d "$database" -v ON_ERROR_STOP=1 -v system="$system" <<'SQL'
 SELECT format('ALTER ROLE %I RENAME TO %I', rolname, :'system') FROM pg_roles WHERE oid=10 AND rolname<>:'system' \gexec
+SELECT format('CREATE DATABASE postgres WITH TEMPLATE template0 OWNER %I', :'system') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='postgres') \gexec
+SELECT format('CREATE DATABASE template1 WITH TEMPLATE template0 OWNER %I IS_TEMPLATE true', :'system') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='template1') \gexec
 SELECT format('ALTER DATABASE %I OWNER TO %I', datname, :'system') FROM pg_database WHERE datname<>current_database() \gexec
 SQL
 for target in postgres template1; do
@@ -613,26 +626,34 @@ def main():
         api = {"socket": "/socket/podman.sock", "timeout": 3600}
         environment = connection_environment(args.connection_stdin)
         with backup.locked(root):
-            if args.action == "cleanup":
-                if not args.approve:
-                    backup.fail("Cleanup requires explicit approval (--approve)")
-                state = state_file(root)
-                remove_helpers(api, root, state)
-                for name in ("snapshot", "imports", "state.json"):
-                    remove_path(root / name)
-                print("Recovery helpers and staged secrets removed; workload running state was not changed")
-                return 0
-            state = plan(api, root, environment, args.snapshot, args.group)
-            if args.action == "apply":
-                if not args.approve:
-                    backup.fail("Restore requires explicit approval (--approve)")
-                marker = Path("/source/.collector.lock")
-                if marker.is_symlink() or not marker.is_file():
-                    backup.fail("The source volume is not an initialized backup coordination volume")
-                with backup.locked("/source") as source:
-                    if (source / "journal.json").exists():
-                        backup.fail("Finish pending backup stop recovery before restoring")
+            if args.action in ("apply", "cleanup") and not args.approve:
+                backup.fail("Destructive recovery actions require explicit approval (--approve)")
+            marker = Path("/source/.collector.lock")
+            if marker.is_symlink() or not marker.is_file():
+                backup.fail("The source volume is not an initialized backup coordination volume")
+            with backup.locked("/source") as source:
+                existing = state_file(root) if (root / "state.json").exists() else None
+                journal = pending_restore(source, existing, args.state_volume)
+                if args.action == "cleanup":
+                    state = state_file(root)
+                    if state["phase"] not in ("complete", "planned", "downloading"):
+                        print("WARNING abandoning incomplete restoration: workloads stay stopped; "
+                              "cleanup releases the backup hold", file=sys.stderr)
+                    remove_helpers(api, root, state)
+                    journal.unlink(missing_ok=True)
+                    for name in ("snapshot", "imports", "state.json"):
+                        remove_path(root / name)
+                    print("Recovery helpers/staging and backup hold removed; workload running state was not changed")
+                    return 0
+                if (source / "journal.json").exists():
+                    backup.fail("Finish pending backup stop recovery before restoring")
+                state = plan(api, root, environment, args.snapshot, args.group)
+                if args.action == "apply":
+                    if state["phase"] == "complete":
+                        backup.fail("This restore already completed; inspect it or clean up its state")
+                    backup.write_json(journal, {"version": 3, "owner": state["owner"], "volume": args.state_volume})
                     state = apply(api, root, args.approve, args.image, args.state_volume)
+                    journal.unlink()
             print(json.dumps({"snapshot": state["snapshot"], "phase": state["phase"], "plan": state["plan"]}))
         return 0
     except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:

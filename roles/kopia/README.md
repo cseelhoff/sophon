@@ -158,6 +158,9 @@ containers are never guessed by name. Manual retry is:
 podman exec kopia python3 /app/backup.py recover
 ```
 
+An interrupted or failed operator restore leaves a durable `restore.json` hold:
+the collector refuses to snapshot possibly partial recovery state. Resume that
+restore or deliberately abandon it using its explicit cleanup command.
 Do not delete an unresolved journal to make a run appear successful. Full
 failed-run reports live outside immutable snapshot staging.
 
@@ -244,6 +247,11 @@ Helpers mount only planned named volumes. Files use the primary three
 capabilities; PostgreSQL additionally needs `SETUID`/`SETGID` for its vendor
 entrypoint to drop to the database OS user. No helper is privileged or host root.
 
+Planning also holds the backup coordination lock, so a scheduled backup cannot
+temporarily stop a workload while its planned running state is being recorded.
+Approval persists a backup hold before any stop; it survives coordinator death
+and clears only on successful restoration or explicit abandonment.
+
 The default private state volume is `sophon-restore-v3`; use
 `--state-volume NAME` for separate group plans. It contains decrypted staging and
 a durable helper journal. **On failure/interruption the group stays stopped.**
@@ -252,7 +260,10 @@ cause, then retry the same state/group/exact snapshot with `--approve`. A retry
 settles owned helpers before repeating replacement/import; it never guesses
 replacement containers by name. `cleanup --approve` removes owned helpers,
 staging and the journal but **does not resume workloads**. Run it after success
-or deliberate abandonment, including interrupted planning, then remove the empty
+or deliberate abandonment, including interrupted planning. Cleanup of a failed
+restore releases the backup hold but does not validate partial state: disable
+scheduling before abandonment until you have rebuilt or validated that state.
+Then remove the empty
 state volume if desired:
 
 ```sh

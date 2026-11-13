@@ -136,7 +136,9 @@ of Portainer, Gitea and the Kopia UI. It validates a snapshot/group against fres
 IaC, waits for explicit approval, stops that group, replaces declared files with
 numeric ownership preserved, imports native exports using isolated matching-image
 helpers, then starts producers before consumers. Failures leave the group stopped
-with a durable helper journal for retry/explicit cleanup. The operator coordinator
+with a durable helper journal for retry/explicit cleanup. Planning shares the
+backup lock; a durable hold prevents scheduled backups of partial recovery state
+after interruption until success or explicit abandonment. The operator coordinator
 temporarily gets the full rootless socket; the primary proxy remains restricted.
 Decrypted recovery staging lives only in a private, labelled recovery volume and
 must be cleaned explicitly. Old snapshots require `kopia-legacy`, not a v3 shim.

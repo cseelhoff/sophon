@@ -67,5 +67,7 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     one-shot coordinator may create no-network helpers through the full rootless
     socket; that privilege is never given to the scheduled collector. Failed
     imports/restarts leave the group stopped and retain owned-helper recovery
-    state. Explicit cleanup removes decrypted staging without guessing whether
+    state. A durable coordination-volume hold blocks backups of partial recovery
+    state even after coordinator death. Explicit cleanup removes that hold and
+    decrypted staging without guessing whether
     partial state is safe to start. There is no automatic cross-image migration.

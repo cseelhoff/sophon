@@ -457,6 +457,8 @@ def select_ini(path, keys):
 
 
 def collect(api, volumes, root, version):
+    if (root / "restore.json").exists() or (root / "restore.json").is_symlink():
+        fail("Operator restoration is pending; resume or explicitly clean up its recovery state before backing up")
     recover(api, root)
     if not version.strip():
         fail("Sophon version is required")
