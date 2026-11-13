@@ -1,4 +1,5 @@
 ---
+gitea_backup_volumes: [gitea_gitea_data]
 # Gitea role defaults
 
 # Image

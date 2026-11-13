@@ -1,12 +1,10 @@
 ---
+kopia_backup_volumes: []
 kopia_fqdn: "kopia.{{ domain_name }}"
-kopia_portainer_url: "https://portainer.{{ domain_name }}"
 kopia_image_tars:
   - "{{ sophon_containers_dir }}/{{ kopia_image_tarname }}"
+  - "{{ sophon_containers_dir }}/{{ kopia_proxy_image_tarname }}"
 kopia_environment:
-  - {name: PORTAINER_URL, value: "{{ kopia_portainer_url }}"}
-  - {name: PORTAINER_ENDPOINT_ID, value: "{{ portainer_local_endpoint_id | string }}"}
-  - {name: BACKUP_PORTAINER_API_KEY, value: "{{ kopia_api_key }}"}
   - {name: KOPIA_PASSWORD, value: "{{ kopia_password }}"}
   - {name: KOPIA_SERVER_USERNAME, value: "{{ kopia_server_username }}"}
   - {name: KOPIA_SERVER_PASSWORD, value: "{{ kopia_server_password }}"}
@@ -18,6 +16,5 @@ kopia_environment:
   - {name: KOPIA_SFTP_KNOWN_HOSTS_B64, value: "{{ kopia_sftp_known_hosts_b64 }}"}
   - {name: KOPIA_CLIENT_USERNAME, value: "{{ kopia_client_username }}"}
   - {name: KOPIA_CLIENT_HOSTNAME, value: "{{ kopia_client_hostname }}"}
-  - {name: KOPIA_INIT_REPOSITORY, value: "{{ kopia_init_repository | string }}"}
   - {name: KOPIA_BACKUPS_ENABLED, value: "{{ kopia_backups_enabled | string }}"}
   - {name: KOPIA_SNAPSHOT_INTERVAL, value: "{{ kopia_snapshot_interval }}"}

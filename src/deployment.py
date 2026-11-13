@@ -73,7 +73,7 @@ FIELDS = {
     'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64': ('Base64 verified SSH known_hosts', 'Backup', 'password', '', True),
     'SOPHON_KOPIA_CLIENT_USERNAME': ('Backup source username', 'Backup', 'text', 'backup', True),
     'SOPHON_KOPIA_CLIENT_HOSTNAME': ('Backup source hostname', 'Backup', 'text', 'sophon', True),
-    'SOPHON_KOPIA_INIT_REPOSITORY': ('Create a NEW empty repository (never for recovery)', 'Backup', 'choice', 'false', True),
+    'SOPHON_KOPIA_EXTRA_VOLUMES': ('Additional site workload volumes (JSON array)', 'Backup', 'text', '[]', False),
     'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups (after first verified backup)', 'Backup', 'choice', 'false', True),
     'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
 }
@@ -82,7 +82,6 @@ LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), '
           'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
-           'SOPHON_KOPIA_INIT_REPOSITORY': ('false', 'true'),
            'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true')}
 PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Hyper-V', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
@@ -133,6 +132,14 @@ def validate_settings(current, changes, step='provision'):
         if not value:
             continue
         try:
+            if name == 'SOPHON_KOPIA_SNAPSHOT_INTERVAL' and not re.fullmatch(r'[1-9][0-9]*(s|m|h|d)', value):
+                return None, 'Snapshot interval must be a positive integer followed by s, m, h or d.'
+            if name == 'SOPHON_KOPIA_EXTRA_VOLUMES':
+                volumes = json.loads(value)
+                if not isinstance(volumes, list) or any(
+                        not isinstance(volume, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)
+                        for volume in volumes) or len(volumes) != len(set(volumes)):
+                    return None, 'Additional backup volumes must be a JSON array of unique volume names.'
             if kind == 'choice' and value not in CHOICES[name]:
                 return None, f'{label} ({name}) must be one of {", ".join(CHOICES[name])}.'
             if name in ('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'):

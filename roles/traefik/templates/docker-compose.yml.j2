@@ -12,6 +12,10 @@ services:
         printf 'http:\n  services:\n    portainer:\n      loadBalancer:\n        servers:\n          - url: "http://portainer:9000"\n' > /etc/traefik/portainer.yml
     volumes:
       - traefik_config:/etc/traefik
+    labels:
+      - sophon.backup.version=3
+      - sophon.backup.group=traefik
+      - sophon.backup.stop=false
 
   traefik:
     image: docker.io/library/traefik:{{ traefik_image_tag }}
@@ -59,18 +63,13 @@ services:
       - --providers.file.watch=true
       - --log.level={{ traefik_log_level }}
     labels:
-      - 'sophon.backup.version=2'
+      - 'sophon.backup.version=3'
       - 'sophon.backup.group=traefik'
-      - 'sophon.backup.stop-during-backup=false'
-      - 'sophon.backup.stop-timeout=120'
-      - 'sophon.backup.covers.0.path=/data'
-      - 'sophon.backup.covers.1.path=/etc/traefik'
-      - 'sophon.backup.paths.0.type=archive'
-      - 'sophon.backup.paths.0.path=/data'
+      - 'sophon.backup.stop=true'
+      - 'sophon.backup.paths.0.volume=traefik_traefik_data'
+      - 'sophon.backup.paths.0.path=acme.json'
       - 'sophon.backup.paths.0.name=acme'
-      - 'sophon.backup.paths.1.type=archive'
-      - 'sophon.backup.paths.1.path=/etc/traefik'
-      - 'sophon.backup.paths.1.name=dynamic-config'
+      - 'sophon.backup.paths.0.optional=true'
       - "coredns.dockerdiscovery.host={{ traefik_fqdn }}"
       - "traefik.enable=true"
       - "traefik.http.routers.dashboard.rule=Host(`{{ traefik_fqdn }}`)"

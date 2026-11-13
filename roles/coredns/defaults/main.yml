@@ -1,4 +1,5 @@
 ---
+coredns_backup_volumes: []
 # CoreDNS is a custom build (coredns-dockerdiscovery) made by the prepare role.
 coredns_image_tars:
   - "{{ sophon_containers_dir }}/coredns-dockerdiscovery_{{ coredns_image_tag }}.tar"

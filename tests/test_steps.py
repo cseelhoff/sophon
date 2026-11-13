@@ -280,7 +280,9 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
         assert service['image'] == 'docker.io/cloudflare/cloudflared:' + defaults['cloudflared_image_tag']
         assert service['pull_policy'] == 'never' and service['networks'] == ['proxy']
         assert service['environment'] == ['TUNNEL_TOKEN=CONNECTOR_TOKEN']
-        assert 'ports' not in service and 'labels' not in service
+        assert 'ports' not in service
+        assert set(service['labels']) == {
+            'sophon.backup.version=3', 'sophon.backup.group=cloudflared', 'sophon.backup.stop=false'}
         # No tunnel (no token or no egress): the role must not touch the network or Portainer.
         result, _ = run_fixture(directory, [{
             'ansible.builtin.include_tasks': str(ROOT / 'roles/cloudflared/tasks/main.yml'),

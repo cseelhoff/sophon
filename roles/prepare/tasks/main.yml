@@ -55,7 +55,7 @@
         argv: [docker, save, -o, "{{ prepare_coredns_tar }}", "{{ prepare_coredns_image }}"]
       changed_when: true
 
-- name: Build the core Kopia collector and recovery image
+- name: Build the core Kopia collector image
   ansible.builtin.command:
     argv: [docker, build, -t, "{{ prepare_kopia_image }}", "{{ playbook_dir }}/roles/kopia/files"]
   changed_when: false

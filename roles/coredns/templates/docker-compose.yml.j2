@@ -37,6 +37,9 @@ services:
       - FORWARD_DNS={{ coredns_forward_dns }}
       - CACHE_TTL=30
     labels:
+      - sophon.backup.version=3
+      - sophon.backup.group=coredns
+      - sophon.backup.stop=false
       - traefik.enable=true
       - traefik.http.routers.coredns.rule=Host(`dns.{{ coredns_domain_name }}`)
       - traefik.http.routers.coredns.entrypoints=websecure

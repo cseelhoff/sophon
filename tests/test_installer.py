@@ -127,10 +127,23 @@ elif name == "podman":
         status = int(not state["container"])
     elif args[0] == "run":
         state["container"] = True
+        state["label_version"] = "3"
         if os.environ.get("SOPHON_PORTAINER_SETUP_TOKEN"):
             (root / "received-setup-token").write_text(os.environ["SOPHON_PORTAINER_SETUP_TOKEN"])
+    elif args[0] == "rm":
+        state["container"] = False
     elif args[0] == "inspect":
-        print("true")
+        expression = args[2]
+        if "sophon.backup.version" in expression:
+            print(state.get("label_version", "3"))
+        elif ".Mounts" in expression:
+            print(state.get("data_volume", "portainer_data"))
+        elif expression == "{{.Image}}":
+            print(state.get("image", "sha256:" + "a" * 64))
+        elif ".ExitCode" in expression:
+            print("0")
+        else:
+            print("true")
     elif args[0] == "logs":
         print("setup_token=first-fixture-token\n\x1b[36msetup_token=\x1b[0mlatest-fixture-token", file=sys.stderr)
     statefile.write_text(json.dumps(state))
@@ -619,6 +632,36 @@ udevadm() { [[ $1 == settle ]]; }
             self.assertFalse(ready.exists())
             self.assertNotIn("Log in as core", result.stdout)
             self.assertIn("retry", result.stderr)
+
+    def test_existing_portainer_labels_refresh_without_changing_image_or_deleting_data(self):
+        for volume in ("portainer_data", "unmanaged"):
+            with self.subTest(volume=volume), fixture() as directory:
+                bundle(directory / "media")
+                data = directory / "persistent"
+                shutil.copytree(directory / "media/project", data / "project")
+                (data / "runner.tar").write_text("runner")
+                script = directory / "host-bootstrap"
+                script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
+                                  .replace("/var/lib/sophon", str(data))
+                                  .replace("/run/user/1000/sophon-ready", str(directory / "ready")))
+                original_image = "sha256:" + "a" * 64
+                (directory / "state").write_text(json.dumps({
+                    "images": ["sophon:latest", "docker.io/portainer/portainer-ee:3.0.0"],
+                    "network": True, "container": True, "volume": True, "label_version": "2",
+                    "image": original_image, "data_volume": volume}))
+                result = subprocess.run(["bash", str(script)], env=tools(directory), text=True, capture_output=True)
+                commands = calls(directory, "podman")
+                if volume == "unmanaged":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(any(call[2] in ("stop", "rm", "run") for call in commands))
+                else:
+                    self.assert_success(result)
+                    creation, = [call for call in commands if call[2] == "run"]
+                    self.assertIn(original_image, creation)
+                    self.assertIn("portainer_data:/data:Z", creation)
+                    self.assertIn("sophon.backup.version=3", creation)
+                    self.assertIn(["podman", "--remote=false", "rm", "portainer"], commands)
+                    self.assertFalse(any(call[2:4] == ["volume", "rm"] for call in commands))
 
     def test_metadata_is_data_not_shell(self):
         with fixture() as directory:

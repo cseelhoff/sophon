@@ -11,6 +11,10 @@ services:
     environment:
       - TUNNEL_TOKEN={{ cloudflared_token }}
     command: tunnel --no-autoupdate run
+    labels:
+      - sophon.backup.version=3
+      - sophon.backup.group=cloudflared
+      - sophon.backup.stop=false
 networks:
   proxy:
     external: true

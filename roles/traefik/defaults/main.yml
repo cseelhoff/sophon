@@ -1,4 +1,5 @@
 ---
+traefik_backup_volumes: [traefik_traefik_data]
 traefik_image_tag: "v3.7.16"
 traefik_image_tars:
   - "{{ sophon_containers_dir }}/library-traefik_{{ traefik_image_tag }}.tar"

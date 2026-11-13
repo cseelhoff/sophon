@@ -10,6 +10,7 @@ main() {
         echo "Host bootstrap must run as core." >&2; return 1;
     }
     local project=/var/lib/sophon/project image archive image_archive infravm_ip dns_server dns_frontend_ids
+    local existing_image existing_volume
     local -a lines dns_frontends
     rm -f /run/user/1000/sophon-ready
     mapfile -t lines < "$project/bootstrap/portainer-image"
@@ -64,17 +65,30 @@ main() {
         podman --remote=false volume create portainer_data
     fi
     if podman --remote=false container exists portainer; then
-        podman --remote=false restart portainer
-    else
+        if [[ $(podman --remote=false inspect --format '{{index .Config.Labels "sophon.backup.version"}}' portainer) != 3 ]]; then
+            existing_volume=$(podman --remote=false inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' portainer)
+            existing_image=$(podman --remote=false inspect --format '{{.Image}}' portainer)
+            [[ $existing_volume == portainer_data && $existing_image =~ ^(sha256:)?[a-f0-9]{64}$ ]] || {
+                echo "Refusing to refresh unmanaged Portainer: expected the portainer_data named volume and an immutable image." >&2
+                return 1
+            }
+            podman --remote=false stop --time 120 portainer
+            [[ $(podman --remote=false inspect --format '{{.State.ExitCode}}' portainer) != 137 ]] || {
+                echo "Portainer did not stop gracefully; inspect it before refreshing its labels." >&2
+                return 1
+            }
+            podman --remote=false rm portainer
+            image=$existing_image
+        else
+            podman --remote=false restart portainer
+        fi
+    fi
+    if ! podman --remote=false container exists portainer; then
         podman --remote=false run -d --pull never --name portainer --restart always \
             --security-opt label=disable --network proxy -p 9443:9443 \
-            --label sophon.backup.version=2 \
+            --label sophon.backup.version=3 \
             --label sophon.backup.group=portainer \
-            --label sophon.backup.stop-during-backup=false \
-            --label sophon.backup.stop-timeout=120 \
-            --label sophon.backup.covers.0.path=/data \
-            --label sophon.backup.paths.0.type=portainer-backup \
-            --label sophon.backup.paths.0.name=control-plane \
+            --label sophon.backup.stop=false \
             -v /run/user/1000/podman/podman.sock:/var/run/docker.sock \
             -v portainer_data:/data:Z "$image" --http-enabled
     fi

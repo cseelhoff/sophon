@@ -293,6 +293,9 @@ class PrepareTests(unittest.TestCase):
         self.write('artifacts/bootstrap/busybox-1.38.0-musl', 'cached-helper')
         for name in ('portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'):
             self.write('artifacts/containers/' + name, name)
+        self.write('artifacts/containers/library-haproxy_3.2.6-alpine.tar', 'cached-proxy')
+        self.write('artifacts/containers/sophon-kopia_0.23.1.tar', 'cached-kopia')
+        self.write('artifacts/containers/sophon-kopia_0.23.1.tar.id', 'sha256:cached-kopia')
         # Building and inspecting the local runner image is allowed; pulls, saves and git are not.
         forbidden = self.root / 'fake-bin'
         forbidden.mkdir()
@@ -301,7 +304,7 @@ class PrepareTests(unittest.TestCase):
         (forbidden / 'docker').write_text('\n'.join([
             '#!/bin/sh',
             'case "$1 $2" in',
-            f'  "image inspect") cat "{image_id}"; exit 0 ;;',
+            f'  "image inspect") if [ "$5" = "localhost/sophon-kopia:0.23.1" ]; then echo sha256:cached-kopia; else cat "{image_id}"; fi; exit 0 ;;',
             '  "build "*) exit 0 ;;',
             'esac',
             f'echo "$1" >> "{attempted}"',
@@ -322,9 +325,12 @@ class PrepareTests(unittest.TestCase):
                 'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-deployment.iso'),
                 'portainer_image': 'docker.io/portainer/portainer-ee:3.0.0',
                 'portainer_image_tarname': 'portainer-portainer-ee_3.0.0.tar',
+                'kopia_image': 'localhost/sophon-kopia:0.23.1',
+                'kopia_image_tarname': 'sophon-kopia_0.23.1.tar',
                 'prepare_coredns_tar': str(self.root / 'artifacts/containers/coredns-dockerdiscovery.tar'),
                 'prepare_container_images': [
-                    'docker.io/portainer/portainer-ee:3.0.0', 'quay.io/keycloak/keycloak:26.8.1'],
+                    'docker.io/portainer/portainer-ee:3.0.0', 'quay.io/keycloak/keycloak:26.8.1',
+                    'docker.io/library/haproxy:3.2.6-alpine'],
             },
             'tasks': [{'ansible.builtin.import_role': {'name': 'prepare'}}],
         }]))
@@ -344,7 +350,8 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(live_iso.read_text(), 'cached-stock-live-iso', 'the stock ISO must stay unchanged')
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())
         self.assertEqual([Path(path).name for path in manifest], [
-            'portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'])
+            'portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar',
+            'library-haproxy_3.2.6-alpine.tar', 'coredns-dockerdiscovery.tar', 'sophon-kopia_0.23.1.tar'])
         # A changed runner image must be re-saved (saving is the only thing that should be attempted).
         image_id.write_text('sha256:rebuilt')
         changed = run()

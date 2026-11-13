@@ -104,12 +104,12 @@ upstream forwards back to it (for example the Hyper-V Default Switch address): l
 
 ### Backups
 
-Kopia is a normal core service, built during Prepare, carried on the offline
-deployment ISO and deployed before Gitea by `sophon-deploy`. Its collector and
-restore tool live in [roles/kopia](roles/kopia); no Gitea repository, runner or
-download is needed to deploy them. After a fresh install, use Kopia to run the
-documented recovery operations. There is no separate recovery mode or automatic
-production restore.
+Kopia is built during Prepare, carried offline and deployed after the core
+source volumes exist. Its [v3 collector](roles/kopia) operates without Portainer,
+Gitea or a management API key: named read-only mounts supply irreproducible
+files, native tools export databases through a restricted engine proxy.
+Writers resume before upload. Snapshots contain files, dumps and a versioned
+manifest, not images, caches, container environments or a system copy.
 
 Supply the external SFTP destination, pinned SSH host key, SSH private key,
 repository password and Kopia UI credentials at the console; see
@@ -118,22 +118,22 @@ by default, never initialize on error. Keep repository decryption credentials
 outside the encrypted repository. Scheduled backups remain an explicit setting:
 verify a first backup before enabling the six-hour schedule.
 
-Persistent core services declare the versioned
-`sophon.backup.version=2` split-label contract consumed by that
-collector. These are Sophon-specific labels, not a Docker or Kopia standard.
-Individual labels define group, pause policy, paths and ordered command
-arguments. The collector still reads the original v1 JSON labels during upgrades.
-The [role README](roles/kopia/README.md) documents SFTP configuration, native exports,
-necessary short pauses, exclusions and isolated restore procedures.
-Keep repository decryption credentials outside the encrypted repository.
+Core roles use only `sophon.backup.version=3` labels. Outside workloads need
+[explicit migration](docs/kopia-v3-migration.md) and a site volume list.
+Undeclared volumes are reported, not automatically copied. Failed groups do
+not block successful groups' uploads, but the result is explicitly partial
+and returns nonzero. Run from the console:
 
-Keycloak/PostgreSQL additionally declare `sophon.restore.version=1` recovery
-profiles. The packaged `restore.py` validates a snapshot, provisions
-fresh isolated targets, restores the database, and requires original-admin
-login and recovered realm checks. It supports explicit snapshot approval,
-safe resume and owner-checked cleanup; it never replaces production.
-Other workloads still use the documented manual procedures. See the
-[Kopia recovery instructions](roles/kopia/README.md#automated-keycloak-recovery-profile-version-1).
+```bash
+podman exec kopia python3 /app/backup.py run
+podman exec kopia cat /source/last-run.json
+```
+
+Portainer is reconstructible: nothing may exist only in its UI. Rebuild means
+rerun Configure, then explicitly restore state. The old tool is retained by
+`kopia-legacy`; there are no v1/v2 compatibility shims. **M2's new group restore
+and rebuild drill are not part of M1**, and Configure never restores application
+state. See the [operator guide](roles/kopia/README.md).
 
 ### Air-gapped sites
 
