@@ -54,5 +54,16 @@ Examples requiring workload-specific decisions:
   recovered production runner identities in dev.
 
 There is deliberately no automatic interpretation of old exclusions, empty
-restore-command lists or deployment-environment metadata. M2 will provide the
-explicit new group restore; do not substitute historical recovery recipes.
+restore-command lists or deployment-environment metadata. The explicit
+`sophon-restore` command accepts native profiles declared by **current IaC**:
+`dumps.N.restore=postgres-cluster`, or `ldap-subtree` with
+`dumps.N.base=dc=site,dc=example`. Its PostgreSQL profile requires the current
+`/var/lib/postgresql` named-volume layout and matching image; LDAP requires the
+matching image, named MDB/config/certificate mounts and freshly configured schema.
+File-only groups need no import profile.
+
+Other native export formats remain valid backups, but automatic group restoration
+fails closed until an appropriate native import profile is implemented and tested.
+Document/test their manual native import procedure; do not substitute a generic
+shell restore label or historical archive recipe. The core profiles never execute
+snapshot-supplied shell commands or restore container environments.

@@ -2,7 +2,7 @@ FROM docker.io/kopia/kopia:0.23.1 AS kopia
 FROM docker.io/library/python:3.14.10-slim-trixie
 COPY --from=kopia /bin/kopia /usr/local/bin/kopia
 WORKDIR /app
-COPY --chmod=755 backup.py runtime.py /app/
+COPY --chmod=755 backup.py runtime.py restore.py /app/
 RUN mkdir -p /config /cache /logs /source /restore \
     && chmod 0700 /config /cache /logs /source /restore
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/config \

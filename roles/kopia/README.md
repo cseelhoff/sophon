@@ -106,6 +106,7 @@ labels:
   sophon.backup.group: application
   sophon.backup.stop: "false"
   sophon.backup.dumps.0.name: database.sql
+  sophon.backup.dumps.0.restore: postgres-cluster
   sophon.backup.dumps.0.argv: '["sh","-ec","exec pg_dumpall -U \"$POSTGRES_USER\" --clean --if-exists"]'
 ```
 
@@ -191,10 +192,90 @@ The source-content version is generated into `bootstrap/sophon-version` when
 building the deployment ISO. Direct development deployments must supply an
 explicit `sophon_version`.
 
-**M2's explicit group-restore command and rebuild drill are not implemented by
-M1. Configure never restores application state.** Native Kopia restore to an
-isolated inspection directory is possible, but is not a tested production
-cutover procedure.
+## Explicit group restoration
+
+Configure **never** invokes restoration. First rerun Configure with the original
+external inputs and the **same workload image IDs** as the snapshot. Automatic
+cross-version database/application migration is not supported. Stop any
+independently deployed writers sharing the group's state and do not run
+Configure or other engine mutations concurrently with recovery.
+
+On the console, as the rootless Podman owner (`core`, never `sudo`):
+
+```sh
+sophon-restore plan --group gitea --snapshot latest
+sophon-restore apply --group gitea --snapshot SNAPSHOT_ID --approve
+sophon-restore status
+sophon-restore cleanup --approve
+```
+
+Replace `SNAPSHOT_ID` with the exact ID printed by `plan`. A plan downloads real
+files and verifies the group's membership, image IDs, declarations and export
+checksums without modifying workloads. `latest` means the latest snapshot of the
+configured stable source, not a silent fallback to an older successful group.
+A failed/missing group is refused; inspect reports and choose another explicit ID.
+Plans bind to the fresh container IDs/mounts and hash staged contents/metadata.
+Changing targets or staging requires a new plan, not an override.
+
+Approval authorizes destructive replacement of **only the declared paths** and
+native database import. Generated INI identity fields merge into fresh settings;
+the snapshot never replaces externally configured database/server settings.
+Optional paths absent from the source remove corresponding fresh paths. Numeric
+ownership, permissions and symlinks are retained; symlink destination parents are
+refused. Producers start before consumers. Members originally stopped stay stopped.
+
+Native exports are **trusted executable input**: PostgreSQL dumps execute SQL as
+a temporary database superuser. Only restore from your authenticated repository.
+`postgres-cluster` imports with the matching PostgreSQL image and an isolated
+Unix socket, not a live data-directory copy. PostgreSQL's non-droppable initial
+superuser is renamed to an owner-specific `sophon_system_*` role and disabled
+(`NOLOGIN`, password cleared); temporary login/database resources are removed.
+`ldap-subtree` requires `dumps.N.base` to equal the configured MDB suffix
+(the dc-style site DN). It reconstructs MDB from that site's export using
+`slapadd` and validates against freshly configured schema. Invalid vendor seed
+entries outside that naming context are not reimported. Partial-suffix merges
+are refused; custom schemas/ACLs belong in IaC.
+
+The one-shot coordinator uses Podman alone: no Portainer, Gitea, Kopia UI or
+running backup stack is required. It temporarily mounts the **full rootless
+engine socket** to create/remove no-network native/file helpers. This is an
+explicit operator privilege, never an expansion of the primary proxy allowlist.
+Helpers mount only planned named volumes. Files use the primary three
+capabilities; PostgreSQL additionally needs `SETUID`/`SETGID` for its vendor
+entrypoint to drop to the database OS user. No helper is privileged or host root.
+
+The default private state volume is `sophon-restore-v3`; use
+`--state-volume NAME` for separate group plans. It contains decrypted staging and
+a durable helper journal. **On failure/interruption the group stays stopped.**
+Inspect `sophon-restore status` and the named helper's logs. Correct the external
+cause, then retry the same state/group/exact snapshot with `--approve`. A retry
+settles owned helpers before repeating replacement/import; it never guesses
+replacement containers by name. `cleanup --approve` removes owned helpers,
+staging and the journal but **does not resume workloads**. Run it after success
+or deliberate abandonment, including interrupted planning, then remove the empty
+state volume if desired:
+
+```sh
+podman volume rm sophon-restore-v3
+```
+
+If `kopia` exists, the launcher reads its current connection settings without
+printing/persisting its environment. Otherwise export the Configure
+`SOPHON_KOPIA_PASSWORD`, SFTP key/pin/destination and stable client identity
+variables, plus `SOPHON_RESTORE_SOURCE_VOLUME` (normally `kopia_source-v3`).
+`SOPHON_KOPIA_RESTORE_IMAGE` optionally selects an already loaded custom recovery
+image; the launcher resolves it to an immutable local ID and never pulls.
+Retain the backup coordination volume even when removing the UI/backup stack.
+It serializes backup/recovery; pending backup stop journals must be recovered
+before restoring. Run `backup.py recover` with the existing backup configuration
+if needed, rather than deleting a pending journal.
+
+The disposable [M2 drill](../../tests/spikes/kopia_m2.py) rebuilds application
+containers/volumes from rendered repository templates and compares native
+Keycloak realm exports, LDAP entries, Gitea commits/SSH identity and certificate
+state. Its dev-only profile disables tunnels, runners, ACME and external OIDC,
+uses synthetic certificates, and deliberately injects a post-import start failure
+to exercise stopped-group retry. It is not a production rebuild command.
 
 Old snapshots remain usable only with the locally tagged `kopia-legacy` tool.
 [Historical evidence](../../docs/kopia-legacy-evidence.md) describes that old

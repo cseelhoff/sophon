@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $(podman --remote=false info --format '{{.Host.Security.Rootless}}') == true ]] || {
+    echo "Run sophon-restore as the rootless Podman owner, never with sudo." >&2; exit 1;
+}
+state=sophon-restore-v3
+forwarded=()
+while (( $# )); do
+    if [[ $1 == --state-volume ]]; then
+        [[ $# -ge 2 ]] || { echo "--state-volume needs a name." >&2; exit 1; }
+        state=$2; shift 2
+    else
+        forwarded+=("$1"); shift
+    fi
+done
+[[ $state =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "Invalid state volume name." >&2; exit 1; }
+image=${SOPHON_KOPIA_RESTORE_IMAGE:-localhost/sophon-kopia:0.23.1}
+image=$(podman --remote=false image inspect --format '{{.Id}}' "$image")
+[[ $image =~ ^(sha256:)?[a-f0-9]{64}$ ]] || { echo "Recovery image is not available by immutable ID." >&2; exit 1; }
+source=${SOPHON_RESTORE_SOURCE_VOLUME:-}
+connection='[]'
+if podman --remote=false container exists kopia; then
+    connection=$(podman --remote=false inspect --format '{{json .Config.Env}}' kopia)
+    if [[ -z $source ]]; then
+        source=$(podman --remote=false inspect --format '{{range .Mounts}}{{if eq .Destination "/source"}}{{.Name}}{{end}}{{end}}' kopia)
+    fi
+fi
+[[ $source =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ && $source != "$state" ]] || {
+    echo "Supply the configured backup coordination volume with SOPHON_RESTORE_SOURCE_VOLUME." >&2; exit 1;
+}
+podman --remote=false volume exists "$source" || {
+    echo "Configured backup source/coordination volume is missing." >&2; exit 1;
+}
+if podman --remote=false volume exists "$state"; then
+    [[ $(podman --remote=false volume inspect --format '{{index .Labels "sophon.restore.state"}}' "$state") == 3 ]] || {
+        echo "Refusing an unowned recovery state volume." >&2; exit 1;
+    }
+else
+    podman --remote=false volume create --label sophon.restore.state=3 "$state" >/dev/null
+fi
+args=(--remote=false run --rm -i --pull never --network host --read-only --user 0:0
+      --cap-drop ALL --cap-add DAC_OVERRIDE --cap-add CHOWN --cap-add FOWNER
+      --security-opt label=disable --security-opt no-new-privileges
+      --tmpfs /tmp:rw,mode=1777 -v "$state:/restore" -v "$source:/source"
+      -v "${XDG_RUNTIME_DIR:?}/podman/podman.sock:/socket/podman.sock:ro"
+      --entrypoint python3)
+for name in SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT \
+    SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PATH SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 \
+    SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME; do
+    [[ ! -v $name ]] || args+=(--env "$name")
+done
+printf '%s' "$connection" | podman "${args[@]}" "$image" /app/restore.py \
+    "${forwarded[@]}" --connection-stdin --state-volume "$state" --image "$image"
