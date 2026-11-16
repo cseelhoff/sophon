@@ -1,25 +1,30 @@
 ---
-- name: Deploy Gitea stack via Portainer
+- name: Deploy Gitea Compose stack
   ansible.builtin.include_role:
-    name: portainer_stack
+    name: compose_stack
   vars:
-    portainer_stack_name: "gitea"
-    portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
-    portainer_stack_image_tars: "{{ gitea_image_tars }}"
-    portainer_stack_deploy_timeout: 300
+    compose_stack_name: "gitea"
+    compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    compose_stack_image_tars: "{{ gitea_image_tars }}"
+    compose_stack_deploy_timeout: 300
 
 - name: Wait for Gitea initialization to finish
-  ansible.builtin.uri:
-    url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_stack_endpoint_id }}/docker/containers/gitea-init/json"
-    headers:
-      Authorization: "Bearer {{ portainer_stack_auth_token }}"
-    validate_certs: "{{ portainer_stack_validate_certs | default(false) }}"
-    status_code: [200, 404]
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+      - container
+      - inspect
+      - --format
+      - "{{ '{{.State.Status}} {{.State.ExitCode}}' }}"
+      - gitea-init
   register: gitea_init_inspect
   changed_when: false
+  failed_when: false
   until: >-
-    gitea_init_inspect.status == 200 and
-    gitea_init_inspect.json.State.Status in ['exited', 'dead']
+    gitea_init_inspect.rc == 0 and
+    (gitea_init_inspect.stdout | trim).split(' ')[0] in ['exited', 'dead']
   retries: 60
   delay: 5
   no_log: true
@@ -27,11 +32,11 @@
 - name: Require successful Gitea initialization
   ansible.builtin.assert:
     that:
-      - gitea_init_inspect.json.State.Status == 'exited'
-      - gitea_init_inspect.json.State.ExitCode | int == 0
+      - gitea_init_inspect.rc == 0
+      - (gitea_init_inspect.stdout | trim) == 'exited 0'
     fail_msg: >-
-      Gitea initialization failed (exit {{ gitea_init_inspect.json.State.ExitCode }}).
-      Check the gitea-init container logs in Portainer, correct the failure,
+      Gitea initialization failed ({{ gitea_init_inspect.stdout | default('missing') | trim }}).
+      Check the gitea-init container logs in Arcane or via podman logs gitea-init, correct the failure,
       and re-run service deployment.
 
 - name: Display Gitea status

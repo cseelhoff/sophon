@@ -4,11 +4,15 @@
 # Build it with:  docker build -t sophon-tools -f Containerfile .   (README). Versions are pinned; bump them here and rebuild.
 # Nothing is copied from the build context, so .dockerignore excludes everything.
 
+FROM docker.io/library/docker:29.9.2-cli AS docker-cli
+
 FROM docker.io/library/python:3.14.10-slim-trixie AS runner
 RUN pip install --no-cache-dir ansible-core==2.21.5 cryptography==50.0.2 requests==2.34.2 paramiko==4.0.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-client \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 COPY --from=docker.io/kopia/kopia:0.23.1 /bin/kopia /usr/local/bin/kopia
 WORKDIR /workspace
 
@@ -26,8 +30,7 @@ RUN apt-get update \
 COPY --from=coreos-installer /out/bin/coreos-installer /usr/local/bin/coreos-installer
 RUN pip install --no-cache-dir proxmoxer==2.3.0 pypsrp==0.9.1 \
  && ansible-galaxy collection install community.proxmox:==2.1.0 -p /usr/share/ansible/collections
-# docker drives the host engine through its socket; traefik issues certificates offline-capable.
-COPY --from=docker.io/library/docker:29.9.2-cli /usr/local/bin/docker /usr/local/bin/docker
+# docker and docker compose are inherited from runner; traefik issues certificates offline-capable.
 COPY --from=docker.io/library/traefik:v3.7.16 /usr/local/bin/traefik /usr/local/bin/traefik
 ARG GOVC_VERSION=0.56.2
 ARG GOVC_SHA256=12889f30e42e868487041f6628e9789606c80e13a194fb37c099abffc92d5a59

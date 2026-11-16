@@ -2,9 +2,9 @@
 
 Sophon backs up application state, not the system. Rebuild by rerunning Configure,
 then explicitly restore state. Images, binaries, caches and Configure-generated
-configuration are not primary backups. **Nothing may exist only in Portainer:**
+configuration are not primary backups. **Nothing may exist only in Arcane:**
 keep every stack definition in IaC and externally supplied secrets in a password
-manager. The backup never requests Portainer's backup, stacks, environments or
+manager. The backup never requests Arcane's database, stacks, environments or
 an administrator API key.
 
 ## Deploy and operate
@@ -20,11 +20,6 @@ not update an installed VM. For an explicitly managed in-place update, carry the
 new runner archive and load it as `core` with
 `podman load -i /path/to/updated/runner.tar` before running the updated console;
 an existing `sophon:latest` tag is not proof that its dependencies are current.
-
-On an existing managed InfraVM, host bootstrap refreshes immutable Portainer
-labels by recreating only its container with the same image ID and
-`portainer_data` volume. It never deletes that volume or upgrades the image
-as part of this metadata refresh; an unexpected data mount is refused.
 
 Supply the SFTP host/account/path, repository password and UI credentials through
 [Configure inputs](../../docs/inputs.md#kopia-backup-inputs). The server/account
@@ -90,7 +85,7 @@ maintenance intervals are 24/168 hours.
 | Gitea | Native PostgreSQL export; repositories, LFS, attachments, avatars, packages, generated JWT and SSH identity keys. From `app.ini`, only declared generated identity keys are copied to `identity.ini`. Gitea stops while cloning/exporting. | Database directory, indexes, logs, sessions, uploads-in-progress, temporary worktrees, regenerated SSH configuration and externally supplied configuration/passwords in `app.ini`. |
 | CoreDNS | None: DNS records/configuration are reconstructed from IaC, labels and retained external Cloudflare inputs. | Binary, cache and transient inventory. |
 | cloudflared | None: Configure reconnects the named tunnel using externally retained Cloudflare access. | Connector/token environment and image. No duplicate production connector is needed for restore. |
-| Portainer | None: Configure recreates the management plane and its declarative stacks. | Its database, native backup, stack/environment capture and collector token. UI-only configuration is unsupported. |
+| Arcane | None: Configure recreates the management UI and reconciles declarative Compose stacks directly under `/var/lib/sophon/stacks/`. | Its SQLite database, local encryption key (`credentials/arcane/`), stack/environment capture and admin credentials. UI-only configuration is unsupported. |
 | Kopia/proxy | None: repository connection, policy and proxy config are reconstructed from deployment inputs. | Config/cache/log volumes, staging, recovery journal and the repository itself. Keep repository decryption credentials outside it. |
 
 Full native database exports necessarily contain related roles/schema and
@@ -187,7 +182,7 @@ Recovery from this layer is explicit, offline/operator-controlled and requires
 matching application images and validation. It is not accepted by v3 group
 restore or called by Configure. Prefer rebuilding from IaC, then restoring chosen
 application `_data` contents only. **Do not blindly overwrite Podman volume
-metadata, Portainer state or Kopia config/cache/coordination volumes**: rebuild
+metadata, Arcane state or Kopia config/cache/coordination volumes**: rebuild
 those, especially stale copied stop/restore/coarse holds. Retain external inputs
 and repository credentials separately.
 
@@ -359,7 +354,7 @@ superuser is renamed to an owner-specific `sophon_system_*` role and disabled
 entries outside that naming context are not reimported. Partial-suffix merges
 are refused; custom schemas/ACLs belong in IaC.
 
-The one-shot coordinator uses Podman alone: no Portainer, Gitea, Kopia UI or
+The one-shot coordinator uses Podman alone: no Arcane, Gitea, Kopia UI or
 running backup stack is required. It temporarily mounts the **full rootless
 engine socket** to create/remove no-network native/file helpers. This is an
 explicit operator privilege, never an expansion of the primary proxy allowlist.

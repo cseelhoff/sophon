@@ -1,0 +1,38 @@
+---
+- name: Deploy Arcane container management UI stack
+  ansible.builtin.include_role:
+    name: compose_stack
+    apply:
+      no_log: true
+  vars:
+    compose_stack_name: "arcane"
+    compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    compose_stack_image_tars: "{{ arcane_image_tars }}"
+    compose_stack_env_vars: "{{ arcane_environment }}"
+  no_log: true
+
+- name: Wait for Arcane health check
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+      - container
+      - inspect
+      - --format
+      - "{{ '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' }}"
+      - arcane
+  register: arcane_health
+  changed_when: false
+  until: arcane_health.rc == 0 and (arcane_health.stdout | trim) in ['healthy', 'unhealthy']
+  failed_when: arcane_health.rc == 0 and (arcane_health.stdout | trim) == 'unhealthy'
+  retries: 30
+  delay: 3
+
+- name: Display Arcane status
+  ansible.builtin.debug:
+    msg: |
+      Arcane deployed at https://{{ arcane_fqdn }}
+      Local fallback admin: admin
+      Admin password:       {{ arcane_admin_password }}
+      OIDC SSO:             enabled (Keycloak realm {{ keycloak_realm }}, group arcane-admins -> role_admin)

@@ -1,0 +1,87 @@
+---
+# Render a declarative Compose project on disk and reconcile it directly against
+# the rootless Podman socket (decoupled from any management GUI).
+
+- name: Load the stack's offline images
+  ansible.builtin.include_tasks: load_images.yml
+
+- name: Ensure stack project directory exists
+  ansible.builtin.file:
+    path: "{{ compose_stacks_dir }}/{{ compose_stack_name }}"
+    state: directory
+    mode: "0700"
+
+- name: Write Compose file
+  ansible.builtin.copy:
+    content: "{{ compose_stack_content }}"
+    dest: "{{ compose_stacks_dir }}/{{ compose_stack_name }}/compose.yaml"
+    mode: "0600"
+
+- name: Write private stack .env file when environment variables are supplied
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import json, os, re, sys
+        dest = sys.argv[1]
+        items = json.load(sys.stdin)
+        lines = []
+        for item in items:
+            name = item.get("name", "")
+            value = str(item.get("value", ""))
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or "\n" in value or "\r" in value:
+                raise SystemExit(f"Invalid stack environment variable: {name!r}")
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+            lines.append(f'{name}="{escaped}"\n')
+        content = "".join(lines).encode("utf-8")
+        if os.path.exists(dest) and not os.path.islink(dest):
+            with open(dest, "rb") as current:
+                if current.read() == content:
+                    os.chmod(dest, 0o600)
+                    raise SystemExit(0)
+        tmp = dest + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, dest)
+        print("changed")
+      - "{{ compose_stacks_dir }}/{{ compose_stack_name }}/.env"
+    stdin: "{{ compose_stack_env_vars | to_json }}"
+  register: compose_stack_dotenv
+  changed_when: "'changed' in (compose_stack_dotenv.stdout | default(''))"
+  when: compose_stack_env_vars | length > 0
+  no_log: true
+
+- name: Remove stale stack .env file when no environment variables are supplied
+  ansible.builtin.file:
+    path: "{{ compose_stacks_dir }}/{{ compose_stack_name }}/.env"
+    state: absent
+  when: compose_stack_env_vars | length == 0
+
+- name: Reconcile Compose stack with orphan cleanup and offline images only
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host }}"
+      - compose
+      - --project-name
+      - "{{ compose_stack_name }}"
+      - --project-directory
+      - "{{ compose_stacks_dir }}/{{ compose_stack_name }}"
+      - -f
+      - "{{ compose_stacks_dir }}/{{ compose_stack_name }}/compose.yaml"
+      - up
+      - -d
+      - --remove-orphans
+      - --pull
+      - never
+  register: compose_stack_up
+  changed_when: >-
+    ('Creating' in (compose_stack_up.stderr | default(''))) or
+    ('Recreating' in (compose_stack_up.stderr | default(''))) or
+    ('Starting' in (compose_stack_up.stderr | default(''))) or
+    ('Removed' in (compose_stack_up.stderr | default('')))

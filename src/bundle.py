@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Only what step 4 runs; hypervisor roles and credentials never reach the VM.
 PROJECT = (
     '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
-    *(f'roles/{role}' for role in ('portainer', 'portainer_stack', 'coredns', 'traefik',
+    *(f'roles/{role}' for role in ('compose_stack', 'arcane', 'coredns', 'traefik',
                                    'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea')),
     'src/console.py', 'src/deployment.py', 'src/certificates.py', 'src/backup_destination.py',
 )
@@ -114,13 +114,13 @@ def project_files(source):
                 yield Path(directory) / name
 
 
-def fingerprint(root, output, runner, containers, tools, portainer_image, portainer_archive):
+def fingerprint(root, output, runner, containers, tools):
     """Digest of every bundle input, or None if it cannot be computed (then the bundle is simply rebuilt).
 
     Small files are hashed by content; the large archives by name, size and mtime so no gigabytes are read.
     """
     try:
-        summary = hashlib.sha256(json.dumps([portainer_image, portainer_archive, str(output)]).encode())
+        summary = hashlib.sha256(json.dumps([str(output)]).encode())
         small = [Path(__file__).resolve(), root / 'guest/install.sh',
                  *(root / 'guest' / name for name in GUEST)]
         for name in PROJECT:
@@ -137,9 +137,7 @@ def fingerprint(root, output, runner, containers, tools, portainer_image, portai
         return None
 
 
-def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
-                  portainer_image='docker.io/portainer/portainer-ee:3.0.0',
-                  portainer_archive='portainer-portainer-ee_3.0.0.tar'):
+def create_bundle(root, output, runner, containers, *, bootstrap_tools=None):
     root = regular_path(root, directory=True)
     for name in (*PROJECT, *(f'guest/{name}' for name in (*GUEST, 'install.sh'))):
         path = root / name
@@ -153,9 +151,6 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
         raise ValueError('Container archive basenames must be unique')
     if any(not path.name.endswith('.tar') for path in containers):
         raise ValueError('Container archives must use their versioned .tar filenames')
-    if (not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9./_:@-]+', portainer_image)
-            or portainer_archive not in {path.name for path in containers}):
-        raise ValueError('Portainer metadata must identify a supplied image archive')
     output = Path(os.path.abspath(output))
     if output in (runner, tools) or output in containers:
         raise ValueError('ISO output must not overwrite an input')
@@ -176,8 +171,6 @@ def create_bundle(root, output, runner, containers, *, bootstrap_tools=None,
                 shutil.copy2(source, project / name)
         metadata = project / 'bootstrap'
         metadata.mkdir()
-        (metadata / 'portainer-image').write_text(portainer_image + '\n')
-        (metadata / 'portainer-archive').write_text(portainer_archive + '\n')
         version = hashlib.sha256()
         for path in sorted(project.rglob('*')):
             if path.is_file():
@@ -233,8 +226,6 @@ def main(argv=None):
     parser.add_argument('--output', type=Path)
     parser.add_argument('--runner', type=Path)
     parser.add_argument('--bootstrap-tools', type=Path)
-    parser.add_argument('--portainer-image', default='docker.io/portainer/portainer-ee:3.0.0')
-    parser.add_argument('--portainer-archive', default='portainer-portainer-ee_3.0.0.tar')
     parser.add_argument('--container', type=Path, action='append',
                         help='Expected container archive; repeat for every required image')
     parser.add_argument('--manifest', type=Path,
@@ -254,15 +245,14 @@ def main(argv=None):
         runner = args.runner or root / 'artifacts/bootstrap/runner.tar'
         tools = args.bootstrap_tools or root / 'artifacts/bootstrap/busybox-1.38.0-musl'
         stamp = output.with_name(output.name + '.stamp')
-        current = fingerprint(root, output, runner, containers, tools, args.portainer_image, args.portainer_archive)
+        current = fingerprint(root, output, runner, containers, tools)
         if (current and not args.force and output.is_file() and stamp.is_file()
                 and stamp.read_text().strip() == current):
             print(f'Deployment ISO is up to date (inputs unchanged): {output}')
             return 0
         output = create_bundle(
             root, output, runner, containers,
-            bootstrap_tools=args.bootstrap_tools, portainer_image=args.portainer_image,
-            portainer_archive=args.portainer_archive,
+            bootstrap_tools=args.bootstrap_tools,
         )
         if current:
             stamp.write_text(current + '\n')

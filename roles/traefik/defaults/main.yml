@@ -18,7 +18,7 @@ traefik_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
 traefik_acme_artifacts_dir: "{{ playbook_dir }}/artifacts/traefik"
 traefik_acme_backup_path: "{{ traefik_acme_artifacts_dir }}/acme.json"
 
-# Portainer names the volume <stack>_<volume>.
+# Compose names the volume <stack>_<volume>.
 traefik_compose_project: "traefik"
 traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
 
@@ -26,6 +26,6 @@ traefik_acme_volume_name: "{{ traefik_compose_project }}_traefik_data"
 # sets this to replace it with the imported certificate file.
 traefik_acme_replace_existing: false
 
-# Short-lived helper that mounts the data volume so acme.json can be moved in and
-# out through Portainer's Docker API. Reuses the already-loaded Traefik image.
+# Stopped helper container that mounts the data volume so acme.json can be copied
+# in and out over the container engine socket. Reuses the loaded Traefik image.
 traefik_acme_helper_image: "docker.io/library/traefik:{{ traefik_image_tag }}"

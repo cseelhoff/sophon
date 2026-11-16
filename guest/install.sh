@@ -32,8 +32,7 @@ verify_bundle() {
     (cd "$media" && sha256sum --strict --check SHA256SUMS) ||
         die "Artifact checksum verification failed; do not install."
     for path in install.sh runner.tar tools/busybox project/src/console.py \
-        guest/sophon-deploy guest/host-bootstrap.sh guest/sophon-network guest/sophon-set-password \
-        project/bootstrap/portainer-image project/bootstrap/portainer-archive; do
+        guest/sophon-deploy guest/host-bootstrap.sh guest/sophon-network guest/sophon-set-password; do
         [[ -v 'listed[$path]' && -f $media/$path ]] || die "Missing required artifact: $path"
     done
 }
@@ -111,7 +110,7 @@ Description=Sophon offline host bootstrap
 After=network-online.target user@1000.service
 Wants=network-online.target
 Requires=user@1000.service
-ConditionPathExists=/var/lib/sophon/project/bootstrap/portainer-image
+ConditionPathExists=/var/lib/sophon/runner.tar
 
 [Service]
 Type=oneshot

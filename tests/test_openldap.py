@@ -51,7 +51,7 @@ class OpenLDAPTemplateTests(unittest.TestCase):
         self.assertEqual(self.service['security_opt'], ['label=disable'])
         self.assertEqual(self.compose['services']['certs-dumper']['security_opt'], ['label=disable'])
         self.assertIn('groupOfUniqueNames/groupOfNames', script)
-        self.assertIn('cn=portainer-admins,ou=groups,dc=site,dc=example', script)
+        self.assertIn('cn=arcane-admins,ou=groups,dc=site,dc=example', script)
         self.assertIn('member: uid=john.doe.admin,ou=people,dc=site,dc=example', script)
         self.assertNotIn('Fixture-user-password!', script)
         self.assertIn('openldap_config:/etc/ldap/slapd.d', self.service['volumes'])
@@ -85,7 +85,7 @@ class OpenLDAPTemplateTests(unittest.TestCase):
             container, 'ldapsearch', '-LLL', '-o', 'ldif-wrap=no',
             '-D', 'cn=admin,dc=site,dc=example', '-w', 'Fixture-root-password!',
             '-b', 'uid=john.doe.admin,ou=people,dc=site,dc=example', 'memberOf', 'userPassword').stdout
-        self.assertIn('memberOf: cn=portainer-admins,ou=groups,dc=site,dc=example', entries)
+        self.assertIn('memberOf: cn=arcane-admins,ou=groups,dc=site,dc=example', entries)
         encoded = next(line.removeprefix('userPassword:: ') for line in entries.splitlines()
                        if line.startswith('userPassword:: '))
         self.assertTrue(base64.b64decode(encoded).startswith(b'{ARGON2}'))

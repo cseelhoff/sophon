@@ -12,113 +12,124 @@
 - name: Seed a new certificate volume or explicitly refresh an existing one
   when: _traefik_acme_local.stat.exists
   block:
-    - name: Authenticate with Portainer (acme restore)
-      ansible.builtin.include_tasks: _portainer_auth.yml
-
     - name: Load the seed helper image from the offline archives
       ansible.builtin.include_role:
-        name: portainer_stack
+        name: compose_stack
         tasks_from: load_images
       vars:
-        portainer_stack_name: "{{ traefik_compose_project }}"
-        portainer_stack_image_tars: "{{ traefik_image_tars }}"
-        portainer_stack_endpoint_id: "{{ _traefik_portainer_endpoint_id }}"
-        portainer_stack_auth_token: "{{ _traefik_portainer_token }}"
+        compose_stack_name: "{{ traefik_compose_project }}"
+        compose_stack_image_tars: "{{ traefik_image_tars }}"
 
-    - name: Create private temporary certificate archive
+    - name: Create private temporary certificate staging directory
       ansible.builtin.tempfile:
-        state: file
-        suffix: .tar
+        state: directory
         prefix: sophon-acme-restore-
-      register: _traefik_acme_tar
+      register: _traefik_acme_stage
       changed_when: false
 
     - name: Inspect and seed the certificate volume
       block:
         - name: Remove any previous seed helper container
-          ansible.builtin.uri:
-            url: "{{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed?force=true"
-            method: DELETE
-            headers: {Authorization: "Bearer {{ _traefik_portainer_token }}"}
-            validate_certs: false
-            status_code: [204, 404]
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+              - rm
+              - -f
+              - traefik-acme-seed
+          failed_when: false
           changed_when: false
 
         - name: Create stopped certificate seed helper
-          ansible.builtin.uri:
-            url: "{{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/create?name=traefik-acme-seed"
-            method: POST
-            headers: {Authorization: "Bearer {{ _traefik_portainer_token }}"}
-            body_format: json
-            body:
-              Image: "{{ traefik_acme_helper_image }}"
-              Entrypoint: ["/bin/true"]
-              Cmd: []
-              HostConfig:
-                Binds: ["{{ traefik_acme_volume_name }}:/data"]
-                AutoRemove: false
-            validate_certs: false
-            status_code: [201]
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+              - create
+              - --name
+              - traefik-acme-seed
+              - -v
+              - "{{ traefik_acme_volume_name }}:/data"
+              - "{{ traefik_acme_helper_image }}"
+              - /bin/true
           changed_when: false
 
         - name: Check for an existing live certificate store
-          ansible.builtin.uri:
-            url: >-
-              {{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed/archive?path=/data/acme.json
-            method: GET
-            headers: {Authorization: "Bearer {{ _traefik_portainer_token }}"}
-            validate_certs: false
-            status_code: [200, 404]
-            dest: "{{ _traefik_acme_tar.path }}"
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+              - cp
+              - traefik-acme-seed:/data/acme.json
+              - "{{ _traefik_acme_stage.path }}/live-acme.json"
           register: _traefik_acme_live
+          failed_when: >-
+            _traefik_acme_live.rc != 0 and
+            not ((_traefik_acme_live.stderr | default('') | lower) is search('could not find|no such|not exist|stat'))
           changed_when: false
           no_log: true
 
         - name: Preserve the existing live store on normal reruns
           ansible.builtin.debug:
             msg: "Keeping live certificates; use sophon-deploy --refresh-certificates for an intentional replacement."
-          when: _traefik_acme_live.status == 200 and not traefik_acme_replace_existing | bool
+          when: _traefik_acme_live.rc == 0 and not traefik_acme_replace_existing | bool
 
         - name: Restore the certificate handoff
-          when: _traefik_acme_live.status == 404 or traefik_acme_replace_existing | bool
+          when: _traefik_acme_live.rc != 0 or traefik_acme_replace_existing | bool
           block:
             - name: Stop Traefik before explicitly replacing its in-memory certificate state
-              ansible.builtin.uri:
-                url: "{{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik/stop?t=30"
-                method: POST
-                headers: {Authorization: "Bearer {{ _traefik_portainer_token }}"}
-                validate_certs: false
-                status_code: [204, 304, 404]
+              ansible.builtin.command:
+                argv:
+                  - docker
+                  - --host
+                  - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+                  - stop
+                  - -t
+                  - "30"
+                  - traefik
+              register: _traefik_stop
+              failed_when: >-
+                _traefik_stop.rc != 0 and
+                not ((_traefik_stop.stderr | default('') | lower) is search('no such container|not found'))
               when: traefik_acme_replace_existing | bool
 
-            - name: Pack the local certificate store
-              ansible.builtin.command:
-                argv: [tar, -cf, "{{ _traefik_acme_tar.path }}", -C, "{{ traefik_acme_artifacts_dir }}", acme.json]
+            - name: Stage private certificate store with mode 0600
+              ansible.builtin.copy:
+                src: "{{ traefik_acme_backup_path }}"
+                dest: "{{ _traefik_acme_stage.path }}/acme.json"
+                mode: "0600"
               changed_when: false
+              no_log: true
 
-            - name: Upload the certificate store through Portainer
-              ansible.builtin.uri:
-                url: "{{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed/archive?path=/data"
-                method: PUT
-                headers:
-                  Authorization: "Bearer {{ _traefik_portainer_token }}"
-                  Content-Type: application/x-tar
-                body_format: raw
-                src: "{{ _traefik_acme_tar.path }}"
-                validate_certs: false
-                status_code: [200]
+            - name: Copy the certificate store into the Traefik volume
+              ansible.builtin.command:
+                argv:
+                  - docker
+                  - --host
+                  - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+                  - cp
+                  - --archive
+                  - "{{ _traefik_acme_stage.path }}/acme.json"
+                  - traefik-acme-seed:/data/acme.json
               changed_when: true
+              no_log: true
       always:
         - name: Remove the stopped seed helper
-          ansible.builtin.uri:
-            url: "{{ infravm_portainer_url }}/api/endpoints/{{ _traefik_portainer_endpoint_id }}/docker/containers/traefik-acme-seed?force=true"
-            method: DELETE
-            headers: {Authorization: "Bearer {{ _traefik_portainer_token }}"}
-            validate_certs: false
-            status_code: [204, 404]
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+              - rm
+              - -f
+              - traefik-acme-seed
+          failed_when: false
           changed_when: false
-        - name: Remove the private temporary certificate archive
+        - name: Remove the private temporary certificate staging directory
           ansible.builtin.file:
-            path: "{{ _traefik_acme_tar.path }}"
+            path: "{{ _traefik_acme_stage.path }}"
             state: absent
           changed_when: false

@@ -19,11 +19,11 @@
       changed_when: false
       no_log: true
 
-    - name: Deploy cloudflared stack via Portainer
+    - name: Deploy cloudflared Compose stack
       ansible.builtin.include_role:
-        name: portainer_stack
+        name: compose_stack
       vars:
         cloudflared_token: "{{ cloudflared_token_response.json.result }}"
-        portainer_stack_name: "cloudflared"
-        portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
-        portainer_stack_image_tars: "{{ cloudflared_image_tars }}"
+        compose_stack_name: "cloudflared"
+        compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+        compose_stack_image_tars: "{{ cloudflared_image_tars }}"

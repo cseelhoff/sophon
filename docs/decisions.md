@@ -8,13 +8,16 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    booting it again cannot reinstall. No guest agent, SSH, disk conversion, controller VM or NFS. The `core`
    password is chosen at the first boot (the account is locked until then, so no default password exists) and the
    static network in step 4. Site data and secrets never enter either ISO.
-2. **The runner lives on InfraVM.** A container that sees only Portainer's HTTP API: no hypervisor
-   credentials, guest SSH, host root or Podman socket. It also checks the explicitly
+2. **The runner lives on InfraVM.** A container that reconciles Compose stacks directly over the rootless Podman socket:
+   no hypervisor credentials, guest SSH or host root. It also checks the explicitly
    declared SFTP destination before any stack deployment. Step 4 needs nothing from the laptop.
-3. **Portainer is the deployment substrate.** Stacks, image loads and volume seeding all go through its API.
-   If Portainer is down, fix it by hand and rerun. It is reconstructible, not a backup target.
-   Nothing may exist only in Portainer: keep definitions in IaC and supplied credentials externally.
-   Backup operation has no Portainer API key or dependency on the management UI.
+3. **Deployment is decoupled from the container GUI.** Configure writes declarative Compose projects under
+   `/var/lib/sophon/stacks/` and reconciles them directly over the rootless Podman socket (`compose_stack`).
+   Arcane (`arcane.<domain>`) mounts `/var/lib/sophon/stacks/` and the rootless Podman socket purely as an
+   open-source management GUI with native Keycloak OIDC RBAC (`arcane-admins` -> `role_admin`), requiring no
+   commercial license key or expiring first-run setup token. Arcane is reconstructible, not a backup target
+   (its local SQLite encryption key is generated under `credentials/arcane/`). Nothing may exist only in Arcane:
+   keep definitions in IaC and supplied credentials externally. Backup operation has no dependency on the UI.
 4. **Deploy fetches nothing.** Step 1 caches every artifact; compose files use `pull_policy: never`; a missing
    archive fails by name. Internet at the site is normal but optional.
 5. **Egress is a degraded mode, not a different product.** Without it Cloudflare tunnel publishing and
@@ -24,9 +27,9 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    that machine. See [certificates.md](certificates.md).
 7. **Passwords are never generated or stored.** The operator supplies each and keeps it in a password
    manager; reruns need the same values. Generated identity state (`acme.json`, ACME account) lives under
-   `artifacts/` and is irreplaceable. The replaceable SFTP client key is the
-   exception: Configure generates ed25519 under project `credentials/kopia`,
-   excluded from Git, media and primary backups. Rebuilds can authorize a new key;
+   `artifacts/` and is irreplaceable.    The replaceable SFTP client key and Arcane local SQLite encryption key are the
+   exceptions: Configure generates them under project `credentials/`,
+   excluded from Git, media and primary backups. Rebuilds can authorize a new SFTP key and recreate Arcane;
    the repository password still must be retained externally.
 8. **State is either reconstructible or irreplaceable.** A rerun rebuilds the Keycloak realm, seeded users and
    routing. Gitea repositories, user-created LDAP entries and `acme.json` need

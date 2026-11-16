@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import subprocess
 import sys
 from urllib.parse import urlsplit
@@ -50,18 +51,17 @@ FIELDS = {
     'SOPHON_ACME_FILE': ('Pre-issued certificates file on this VM (air-gapped sites; the secret disk is read automatically)',
                          'Site', 'path', '', False),
     'SOPHON_CF_TUNNEL_NAME': ('Cloudflare tunnel name', 'Site', 'text', 'sophon', False),
-    'SOPHON_PORTAINER_ADMIN_PASSWORD': ('Portainer admin password (12+ characters)', 'Access', 'password', '', True),
-    'SOPHON_PORTAINER_LICENSE_KEY': ('Portainer licence key', 'Access', 'password', '', False),
+    'SOPHON_ARCANE_ADMIN_PASSWORD': ('Arcane admin password (12+ characters)', 'Access', 'password', '', True),
     'SOPHON_KEYCLOAK_REALM': ('Keycloak realm', 'Access', 'text', 'sophon', False),
     'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME': ('Realm display name', 'Access', 'text', '', False),
     'SOPHON_KEYCLOAK_ADMIN_PASSWORD': ('Keycloak admin password', 'Access', 'password', '', True),
     'SOPHON_KEYCLOAK_DB_PASSWORD': ('Keycloak database password', 'Access', 'password', '', True),
-    'SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET': ('Portainer OIDC client secret', 'Access', 'password', '', True),
+    'SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET': ('Arcane OIDC client secret', 'Access', 'password', '', True),
     'SOPHON_GITEA_ADMIN_PASSWORD': ('Gitea admin password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_ADMIN_PASSWORD': ('LDAP admin password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD': ('LDAP seed-user password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD': ('LDAP seed-admin password', 'Access', 'password', '', True),
-    'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password (empty uses the Portainer password)', 'Access', 'password', '', False),
+    'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password (empty uses the Arcane password)', 'Access', 'password', '', False),
     'SOPHON_KOPIA_PASSWORD': ('Repository encryption password (new or existing; retain in your password manager)', 'Backup', 'password', '', True),
     'SOPHON_KOPIA_SERVER_USERNAME': ('Kopia UI username', 'Backup', 'text', 'admin', True),
     'SOPHON_KOPIA_SERVER_PASSWORD': ('Kopia UI password', 'Backup', 'password', '', True),
@@ -135,7 +135,7 @@ def validate_settings(current, changes, step='provision'):
             return None, f'{group}: {label} ({name}) is required.'
         if kind == 'password' and value and not value.strip():
             return None, f'{label} ({name}) must not contain only whitespace.'
-        if name == 'SOPHON_PORTAINER_ADMIN_PASSWORD' and len(value) < 12:
+        if name == 'SOPHON_ARCANE_ADMIN_PASSWORD' and len(value) < 12:
             return None, f'{label} ({name}) must contain at least 12 characters.'
         if not value:
             continue
@@ -199,6 +199,30 @@ def validate_settings(current, changes, step='provision'):
     return values, None
 
 
+def ensure_arcane_encryption_key(root=ROOT):
+    """Create or reuse Arcane's local encryption key under project credentials/arcane."""
+    root = Path(root)
+    for part in (root, root / 'credentials', root / 'credentials/arcane', root / 'credentials/arcane/encryption_key'):
+        if part.is_symlink():
+            raise ValueError(f'Refusing symlinked Arcane credential path: {part}')
+    directory = root / 'credentials/arcane'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    key_file = directory / 'encryption_key'
+    if key_file.exists():
+        value = key_file.read_text(encoding='utf-8').strip()
+        if not re.fullmatch(r'hex:[0-9a-f]{64}', value):
+            raise ValueError('Stored Arcane encryption key is malformed.')
+        return value
+    value = 'hex:' + secrets.token_hex(32)
+    descriptor = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+        stream.write(value + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    return value
+
+
 def stage_certificates(values):
     """Move a pre-issued certificate file into Traefik's seed location, then remove the copy it came from."""
     values = dict(values)
@@ -256,7 +280,7 @@ def main(argv=None):
         parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
     allowed = set(step_fields(options.step))
     if options.step == 'configure':
-        allowed.add('SOPHON_PORTAINER_SETUP_TOKEN')
+        allowed.add('SOPHON_ARCANE_ENCRYPTION_KEY')
         allowed.add('SOPHON_KOPIA_PREFLIGHT_COMPLETE')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in allowed:

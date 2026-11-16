@@ -52,7 +52,7 @@ keycloak_realm_display_name: >-
   {{ lookup('env', 'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME') | default(keycloak_realm, true) }}
 keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') }}"
 keycloak_db_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_DB_PASSWORD') }}"
-keycloak_portainer_client_secret: "{{ lookup('env', 'SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET') }}"
+keycloak_arcane_client_secret: "{{ lookup('env', 'SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET') }}"
 gitea_admin_password: "{{ lookup('env', 'SOPHON_GITEA_ADMIN_PASSWORD') }}"
 openldap_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_ADMIN_PASSWORD') }}"
 openldap_example_user_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD') }}"
@@ -60,15 +60,13 @@ openldap_example_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_ADMI
 openldap_example_user_uid: "john.doe"
 openldap_example_admin_uid: "john.doe.admin"
 
-portainer_image_repo: "docker.io/portainer/portainer-ee"
-portainer_image_tag: "3.0.0"
-portainer_image: "{{ portainer_image_repo }}:{{ portainer_image_tag }}"
-# Business Edition 3.0 STS; the free licence covers three nodes, not an LTS release.
-portainer_license_key: "{{ lookup('env', 'SOPHON_PORTAINER_LICENSE_KEY') | default('', true) }}"
-portainer_admin_password: "{{ lookup('env', 'SOPHON_PORTAINER_ADMIN_PASSWORD') }}"
-portainer_setup_token: "{{ lookup('env', 'SOPHON_PORTAINER_SETUP_TOKEN') }}"
+arcane_image_repo: "ghcr.io/getarcaneapp/manager"
+arcane_image_tag: "v3.0.1"
+arcane_image: "{{ arcane_image_repo }}:{{ arcane_image_tag }}"
+arcane_admin_password: "{{ lookup('env', 'SOPHON_ARCANE_ADMIN_PASSWORD') }}"
+arcane_encryption_key: "{{ lookup('env', 'SOPHON_ARCANE_ENCRYPTION_KEY') }}"
 # Existing deployments must keep supplying the same database password.
-gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(portainer_admin_password, true) }}"
+gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(arcane_admin_password, true) }}"
 
 kopia_version: "0.23.1"
 kopia_image: "localhost/sophon-kopia:{{ kopia_version }}"
@@ -101,14 +99,11 @@ coreos_iso_path: "{{ artifacts_dir }}/coreos/fedora-coreos-live.iso"
 # The stock live ISO above, plus the unattended installer; this is the one every hypervisor boots.
 installer_iso_path: "{{ artifacts_dir }}/coreos/sophon-installer.iso"
 bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
-# <vendor>-<image>_<tag>.tar, e.g. portainer-portainer-ee_3.0.0.tar
+# <vendor>-<image>_<tag>.tar, e.g. getarcaneapp-manager_v3.0.1.tar
 sophon_containers_dir: "{{ artifacts_dir }}/containers"
-portainer_image_tarname: "{{ (portainer_image_repo.split('/')[-2:] | join('-')) }}_{{ portainer_image_tag }}.tar"
+arcane_image_tarname: "{{ (arcane_image_repo.split('/')[-2:] | join('-')) }}_{{ arcane_image_tag }}.tar"
 
 coredns_plugin_revision: "961da07798aef59715f7d8f8802185863a3909c8"
 coredns_image_tag: "1.15.0-{{ coredns_plugin_revision[:12] }}"
 
-# Addressed by IP: the runner is local to InfraVM and no DNS exists yet when it
-# first talks to Portainer. Users reach portainer.<domain> through Traefik.
-infravm_portainer_port: 9443
-infravm_portainer_url: "https://{{ infravm_ip }}:{{ infravm_portainer_port }}"
+arcane_url: "https://arcane.{{ domain_name | lower | regex_replace('\\.$', '') }}"

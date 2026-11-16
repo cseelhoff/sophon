@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installed console entry point. The runner has HTTP access, not host privileges.
+# Installed console entry point. The runner deploys Compose stacks directly over the rootless Podman socket.
 set -euo pipefail
 
 if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
@@ -23,8 +23,8 @@ if (( redo_network )) ||
     /usr/local/libexec/sophon-network "$site"
     network_changed=1
 fi
-# Host setup (loading the images, starting Portainer) begins at boot; wait for it, and redo it once the address is known
-# so the services' DNS points at this machine.
+# Host setup (loading the runner image, starting Podman socket) begins at boot; wait for it, and redo it once the
+# address is known so the services' DNS points at this machine.
 if (( network_changed )) || [[ ! -f /run/user/1000/sophon-ready ]]; then
     echo "Finishing host setup (this can take a few minutes the first time)..."
     sudo systemctl start sophon-host-bootstrap || true
@@ -36,22 +36,14 @@ if [[ ! -f /run/user/1000/sophon-ready ]]; then
     exit 1
 fi
 
-# First-run Portainer setup requires the one-time token from its local logs.
-if [[ -z ${SOPHON_PORTAINER_SETUP_TOKEN:-} ]]; then
-    if ! portainer_logs=$(podman --remote=false logs portainer 2>&1); then
-        echo "Cannot read Portainer's setup token. Check host setup and retry." >&2
-        exit 1
-    fi
-    export SOPHON_PORTAINER_SETUP_TOKEN
-    SOPHON_PORTAINER_SETUP_TOKEN=$(printf '%s\n' "$portainer_logs" |
-        sed $'s/\033\\[[0-9;]*m//g' |
-        sed -nE 's/.*setup_token=([A-Za-z0-9_-]+).*/\1/p' | tail -n 1)
-    unset portainer_logs
-fi
+install -d -m 0700 /var/lib/sophon/stacks
 
 args=(
     --remote=false run --rm --network host --pull never
+    --security-opt label=disable
     --label sophon.deployment=configure
+    -v /run/user/1000/podman/podman.sock:/var/run/docker.sock
+    -v /var/lib/sophon/stacks:/var/lib/sophon/stacks
     -v /var/lib/sophon/project:/workspace:Z --workdir /workspace
     --env SOPHON_DEPLOYMENT_STEP=configure
 )
@@ -82,11 +74,10 @@ for name in \
     SOPHON_ACME_FILE SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
     SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_NAME SOPHON_KEYCLOAK_REALM \
     SOPHON_KEYCLOAK_REALM_DISPLAY_NAME SOPHON_KEYCLOAK_ADMIN_PASSWORD \
-    SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET \
+    SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET \
     SOPHON_GITEA_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
     SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD \
-    SOPHON_PORTAINER_LICENSE_KEY SOPHON_PORTAINER_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD \
-    SOPHON_PORTAINER_SETUP_TOKEN \
+    SOPHON_ARCANE_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD \
     SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SERVER_USERNAME SOPHON_KOPIA_SERVER_PASSWORD \
     SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PATH \
     SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 \

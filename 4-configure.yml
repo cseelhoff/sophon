@@ -1,6 +1,6 @@
 ---
 # Step 4 - runs inside the InfraVM's runner container (via sophon-deploy).
-# Deploys services through Portainer's HTTP API; no hypervisor access, no SSH.
+# Deploys Compose stacks directly over the rootless Podman socket; no hypervisor access, no SSH.
 - name: Deploy services from InfraVM
   hosts: localhost
   gather_facts: false
@@ -22,24 +22,25 @@
         fail_msg: "Supply SOPHON_{{ item | upper }} through sophon-deploy on InfraVM."
         quiet: true
       loop:
-        - portainer_admin_password
+        - arcane_admin_password
         - keycloak_admin_password
         - keycloak_db_password
-        - keycloak_portainer_client_secret
+        - keycloak_arcane_client_secret
         - gitea_admin_password
         - openldap_admin_password
         - openldap_example_user_password
         - openldap_example_admin_password
         - gitea_db_password
+        - arcane_encryption_key
         - kopia_password
         - kopia_server_password
         - kopia_sftp_private_key_b64
         - kopia_sftp_known_hosts_b64
       tags: [always]
-    - name: Validate the Portainer password length
+    - name: Validate the Arcane password length
       ansible.builtin.assert:
-        that: portainer_admin_password | length >= 12
-        fail_msg: "SOPHON_PORTAINER_ADMIN_PASSWORD must contain at least 12 characters."
+        that: arcane_admin_password | length >= 12
+        fail_msg: "SOPHON_ARCANE_ADMIN_PASSWORD must contain at least 12 characters."
       tags: [always]
     - name: Validate domain and InfraVM address
       ansible.builtin.assert:
@@ -58,14 +59,11 @@
         marker: "# {mark} SOPHON SERVICE NAMES"
         unsafe_writes: true
         block: |
-          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns', 'kopia'] %}
+          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia'] %}
           {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
           {% endfor %}
       tags: [always]
   tasks:
-    - name: Initialize Portainer
-      ansible.builtin.include_role:
-        name: portainer
     - name: Deploy CoreDNS
       ansible.builtin.include_role:
         name: coredns
@@ -84,9 +82,12 @@
     - name: Deploy Gitea
       ansible.builtin.include_role:
         name: gitea
+    - name: Deploy Arcane
+      ansible.builtin.include_role:
+        name: arcane
     - name: Deploy Kopia after source volumes exist
       ansible.builtin.include_role:
         name: kopia
     - name: Finish service deployment
       ansible.builtin.debug:
-        msg: "Deployment complete. Portainer: {{ infravm_portainer_url }}. Retain credentials in your password manager."
+        msg: "Deployment complete. Arcane: {{ arcane_url }}. Retain credentials in your password manager."

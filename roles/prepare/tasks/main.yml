@@ -185,9 +185,7 @@
           '--output', bundle_iso_path,
           '--runner', prepare_runner_path,
           '--bootstrap-tools', prepare_busybox_path,
-          '--manifest', prepare_manifest_path,
-          '--portainer-image', portainer_image,
-          '--portainer-archive', portainer_image_tarname]
+          '--manifest', prepare_manifest_path]
          + (['--force'] if prepare_force | bool else []) }}
   register: prepare_bundle
   changed_when: "'up to date' not in prepare_bundle.stdout"
