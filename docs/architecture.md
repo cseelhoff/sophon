@@ -88,6 +88,18 @@ Kopia server child handles browsing; native snapshot scheduling stays disabled
 to prevent snapshots bypassing the collector. No host backup timer or unit is
 created. The primary stack never mounts the whole volumes directory.
 
+An opt-in `coarse` service uses the same image but a separate internal
+`coarse-proxy` limited to native container list and ID-specific stop/start.
+Only that proxy mounts the socket. The coarse service sees the whole volumes
+directory read-only; its dedicated host working bind is physically disjoint on
+the same filesystem. Its small shared coordination mount is used only for the
+normal backup lock/hold, not staging. Application IDs are journaled before stops;
+strict reflinks complete and sync before those IDs restart, without ordering.
+Upload follows restart and lock release. Its `/sophon-coarse` source keeps four,
+separately from primary retention. No filesystem snapshots or host units are added.
+This layer includes reconstructible/raw database state intentionally as a
+last-resort exception, never the default native-export restore path.
+
 ## DNS
 
 Two resolvers share port 53 on InfraVM. Podman's aardvark-dns serves `10.89.0.1:53` for container names;

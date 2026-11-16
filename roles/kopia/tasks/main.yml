@@ -1,4 +1,16 @@
 ---
+- name: Validate optional coarse backup host paths
+  ansible.builtin.assert:
+    that:
+      - kopia_coarse_volumes_dir is match('^/[A-Za-z0-9_./-]+$') and kopia_coarse_volumes_dir != '/'
+      - kopia_coarse_work_dir is match('^/[A-Za-z0-9_./-]+$') and kopia_coarse_work_dir != '/'
+      - "'..' not in kopia_coarse_volumes_dir.split('/') and '..' not in kopia_coarse_work_dir.split('/')"
+      - kopia_coarse_volumes_dir != kopia_coarse_work_dir
+      - not kopia_coarse_volumes_dir.startswith(kopia_coarse_work_dir.rstrip('/') ~ '/')
+      - not kopia_coarse_work_dir.startswith(kopia_coarse_volumes_dir.rstrip('/') ~ '/')
+    fail_msg: "Coarse backups need disjoint absolute host volume/work directories on the same filesystem."
+  when: kopia_coarse_enabled | bool
+
 - name: Validate the site backup volume list
   ansible.builtin.assert:
     that:

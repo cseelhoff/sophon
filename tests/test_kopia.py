@@ -17,6 +17,34 @@ from test_console import service_values
 
 
 class KopiaRoleTests(unittest.TestCase):
+    def test_optional_coarse_stack_has_isolated_control_and_readonly_volume_tree(self):
+        variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
+        variables.update(yaml.safe_load((ROOT / "roles/kopia/defaults/main.yml").read_text()))
+        variables.update(domain_name="dev.invalid", sophon_version="fixture", kopia_volume_names=[],
+                         kopia_coarse_volumes_dir="/srv/podman/volumes", kopia_coarse_work_dir="/srv/coarse")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for enabled in (False, True):
+                variables["kopia_coarse_enabled"] = enabled
+                result = run_fixture(directory, [{"ansible.builtin.template": {
+                    "src": str(ROOT / "roles/kopia/templates/docker-compose.yml.j2"),
+                    "dest": str(directory / "compose.yml")}, "vars": variables}])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                services = yaml.safe_load((directory / "compose.yml").read_text())["services"]
+                if not enabled:
+                    self.assertNotIn("coarse", services)
+                    self.assertNotIn("coarse-proxy", services)
+                    continue
+                worker, proxy = services["coarse"], services["coarse-proxy"]
+                self.assertEqual(worker["image"], services["kopia"]["image"])
+                self.assertNotIn("backup-engine", worker["networks"])
+                self.assertEqual(proxy["networks"], ["coarse-engine"])
+                self.assertFalse(proxy.get("ports"))
+                self.assertEqual(worker["volumes"][0], {
+                    "type": "bind", "source": "/srv/podman/volumes", "target": "/volumes", "read_only": True})
+                self.assertEqual(worker["volumes"][1]["source"], "/srv/coarse")
+                self.assertFalse(any("podman.sock" in str(mount) for mount in worker["volumes"]))
+
     def test_configure_refuses_to_deploy_without_console_preflight(self):
         guard = yaml.safe_load((ROOT / "4-configure.yml").read_text())[0]["pre_tasks"][0]
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
