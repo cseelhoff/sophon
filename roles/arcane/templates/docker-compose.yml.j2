@@ -1,0 +1,63 @@
+services:
+  arcane:
+    image: {{ arcane_image }}
+    pull_policy: never
+    container_name: arcane
+    restart: unless-stopped
+    security_opt:
+      - label=disable
+    cgroup: host
+    networks:
+      - proxy
+    volumes:
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+      - arcane_data:/app/data
+      - {{ arcane_stacks_dir }}:{{ arcane_stacks_dir }}
+    environment:
+      PUID: "0"
+      PGID: "0"
+      ARCANE_APP_URL: "https://{{ arcane_fqdn }}"
+      ARCANE_PROJECTS_DIRECTORY: "{{ arcane_stacks_dir }}"
+      ARCANE_TRUSTED_PROXIES: "10.88.0.0/16,10.89.0.0/16,172.16.0.0/12,127.0.0.0/8,::1/128"
+      ARCANE_ENCRYPTION_KEY: "${ARCANE_ENCRYPTION_KEY}"
+      ARCANE_DEFAULT_ADMIN_USERNAME: "${ARCANE_DEFAULT_ADMIN_USERNAME}"
+      ARCANE_DEFAULT_ADMIN_PASSWORD: "${ARCANE_DEFAULT_ADMIN_PASSWORD}"
+      ARCANE_ANALYTICS_ENABLED: "false"
+      ARCANE_UPDATE_CHECK_ENABLED: "false"
+      ARCANE_POLLING_ENABLED: "false"
+      ARCANE_IMAGE_EVENT_WATCHER_ENABLED: "false"
+      ARCANE_APNS_ENABLED: "false"
+      ARCANE_OIDC_ENABLED: "true"
+      ARCANE_OIDC_PROVIDER_NAME: "Keycloak"
+      ARCANE_OIDC_CLIENT_ID: "arcane"
+      ARCANE_OIDC_CLIENT_SECRET: "${ARCANE_OIDC_CLIENT_SECRET}"
+      ARCANE_OIDC_ISSUER_URL: "{{ arcane_oidc_issuer_url }}"
+      ARCANE_OIDC_SCOPES: "openid email profile groups"
+      ARCANE_OIDC_GROUPS_CLAIM: "groups"
+      ARCANE_OIDC_ROLE_MAPPINGS: "${ARCANE_OIDC_ROLE_MAPPINGS}"
+    healthcheck:
+      test: ["CMD", "./arcane", "health", "--timeout", "2s"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    labels:
+      - 'sophon.backup.version=3'
+      - 'sophon.backup.group=arcane'
+      - 'sophon.backup.stop=false'
+      - "coredns.dockerdiscovery.host={{ arcane_fqdn }}"
+      - "traefik.enable=true"
+      - "traefik.http.routers.arcane.rule=Host(`{{ arcane_fqdn }}`)"
+      - "traefik.http.routers.arcane.entrypoints=websecure"
+      - "traefik.http.routers.arcane.tls=true"
+      - "traefik.http.routers.arcane.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.arcane.tls.domains[0].main={{ domain_name | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.routers.arcane.tls.domains[0].sans=*.{{ domain_name | lower | regex_replace('\\.$', '') }}"
+      - "traefik.http.services.arcane.loadbalancer.server.port={{ arcane_port }}"
+
+volumes:
+  arcane_data:
+
+networks:
+  proxy:
+    external: true

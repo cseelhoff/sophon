@@ -1,12 +1,12 @@
 ---
-- name: Deploy OpenLDAP stack via Portainer
+- name: Deploy OpenLDAP Compose stack
   ansible.builtin.include_role:
-    name: portainer_stack
+    name: compose_stack
   vars:
-    portainer_stack_name: "openldap"
-    portainer_stack_compose_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
-    portainer_stack_image_tars: "{{ openldap_image_tars }}"
+    compose_stack_name: "openldap"
+    compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    compose_stack_image_tars: "{{ openldap_image_tars }}"
 
 - name: Display OpenLDAP status
   ansible.builtin.debug:
-    msg: "OpenLDAP ready - LDAP at {{ infravm_ip }}:{{ openldap_port_ldap }}"
+    msg: "OpenLDAP ready - LDAPS at {{ infravm_ip }}:{{ openldap_port_ldaps }}"

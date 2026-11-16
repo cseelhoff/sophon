@@ -439,90 +439,57 @@ class CertificateTests(unittest.TestCase):
 class AcmeRestoreTests(unittest.TestCase):
     def exercise(self, live_exists, replace):
         from test_deployment import run_fixture
-        calls = []
-        live = io.BytesIO()
-        with tarfile.open(fileobj=live, mode='w') as archive:
-            data = b'newer live certificate store'
-            info = tarfile.TarInfo('acme.json')
-            info.size = len(data)
-            archive.addfile(info, io.BytesIO(data))
-
-        class Handler(BaseHTTPRequestHandler):
-            def respond(self, status, value=None):
-                body = value if isinstance(value, bytes) else json.dumps(value).encode()
-                self.send_response(status)
-                self.send_header('Content-Type', 'application/octet-stream' if isinstance(value, bytes) else 'application/json')
-                self.end_headers()
-                self.wfile.write(body)
-
-            def do_POST(self):
-                body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
-                calls.append(('POST', self.path, body))
-                if self.path == '/api/auth':
-                    self.respond(200, {'jwt': 'fixture-token'})
-                elif self.path.endswith('/images/load'):
-                    self.respond(200, {'stream': 'Loaded offline image'})
-                elif self.path.endswith('/containers/create?name=traefik-acme-seed'):
-                    self.respond(201, {'Id': 'seed'})
-                elif '/containers/traefik/stop?' in self.path:
-                    self.respond(204)
-                else:
-                    self.respond(500, {'message': 'Unexpected network operation'})
-
-            def do_GET(self):
-                calls.append(('GET', self.path, b''))
-                if self.path == '/api/endpoints':
-                    self.respond(200, [{'Id': 1}])
-                else:
-                    self.respond(200 if live_exists else 404, live.getvalue() if live_exists else {'message': 'No file'})
-
-            def do_PUT(self):
-                body = self.rfile.read(int(self.headers['Content-Length']))
-                calls.append(('PUT', self.path, body))
-                self.respond(200)
-
-            def do_DELETE(self):
-                calls.append(('DELETE', self.path, b''))
-                self.respond(204)
-
-            def log_message(self, *args):
-                pass
-
-        with tempfile.TemporaryDirectory() as temporary, HTTPServer(('127.0.0.1', 0), Handler) as server:
+        with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             source = directory / 'acme.json'
             source.write_text('local carried certificate store')
             image = directory / 'traefik.tar'
             image.write_bytes(b'prestaged image archive')
-            thread = threading.Thread(target=server.serve_forever)
-            thread.start()
-            try:
-                with patch.dict(os.environ, ANSIBLE_ROLES_PATH=str(ROOT / 'roles')):
-                    result = run_fixture(directory, [
-                        {'ansible.builtin.set_fact': {
-                            'infravm_portainer_url': f'http://127.0.0.1:{server.server_port}',
-                            'portainer_admin_password': 'fixture-password',
-                            'traefik_acme_backup_path': str(source),
-                            'traefik_acme_artifacts_dir': str(directory),
-                            'traefik_image_tars': [str(image)],
-                            'traefik_acme_replace_existing': replace,
-                        }},
-                        {'ansible.builtin.include_role': {'name': 'traefik', 'tasks_from': 'restore_acme'}},
-                    ])
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            finally:
-                server.shutdown()
-                thread.join()
-        self.assertFalse(any('/images/create' in path for _, path, _ in calls))
-        self.assertTrue(any(path.endswith('/images/load') for _, path, _ in calls))
-        puts = [body for method, _, body in calls if method == 'PUT']
-        self.assertEqual(len(puts), int(not live_exists or replace))
-        if puts:
-            with tarfile.open(fileobj=io.BytesIO(puts[0])) as archive:
-                self.assertEqual(archive.extractfile('acme.json').read(), b'local carried certificate store')
-        stops = [path for _, path, _ in calls if '/containers/traefik/stop?' in path]
-        self.assertEqual(len(stops), int(replace))
-        self.assertEqual(calls[-1][0], 'DELETE')
+            uploaded = directory / 'uploaded-acme.json'
+            calls = directory / 'docker-calls.jsonl'
+            docker = directory / 'bin/docker'
+            docker.parent.mkdir()
+            docker.write_text(
+                f'#!{sys.executable}\n'
+                'import json, pathlib, shutil, stat, sys\n'
+                'args = sys.argv[1:]\n'
+                f'with open({str(calls)!r}, "a") as out:\n'
+                '    out.write(json.dumps(args) + "\\n")\n'
+                'if "cp" in args:\n'
+                '    src, dst = args[-2], args[-1]\n'
+                '    if src.startswith("traefik-acme-seed:"):\n'
+                f'        if {live_exists!r}:\n'
+                '            pathlib.Path(dst).write_text("newer live certificate store")\n'
+                '            sys.exit(0)\n'
+                '        sys.stderr.write("Error: Could not find the file /data/acme.json\\n")\n'
+                '        sys.exit(1)\n'
+                '    assert stat.S_IMODE(pathlib.Path(src).stat().st_mode) == 0o600\n'
+                f'    shutil.copy2(src, {str(uploaded)!r})\n'
+            )
+            docker.chmod(0o755)
+            env = dict(os.environ, PATH=str(docker.parent) + os.pathsep + os.environ['PATH'],
+                       ANSIBLE_ROLES_PATH=str(ROOT / 'roles'))
+            with patch.dict(os.environ, env, clear=True):
+                result = run_fixture(directory, [
+                    {'ansible.builtin.set_fact': {
+                        'compose_engine_host': 'unix:///fixture/podman.sock',
+                        'traefik_acme_backup_path': str(source),
+                        'traefik_acme_artifacts_dir': str(directory),
+                        'traefik_image_tars': [str(image)],
+                        'traefik_acme_replace_existing': replace,
+                    }},
+                    {'ansible.builtin.include_role': {'name': 'traefik', 'tasks_from': 'restore_acme'}},
+                ])
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            recorded = [json.loads(line) for line in calls.read_text().splitlines()]
+            self.assertFalse(any('pull' in cmd for cmd in recorded))
+            self.assertTrue(any(cmd[2:4] == ['image', 'load'] for cmd in recorded))
+            self.assertEqual(uploaded.exists(), not live_exists or replace)
+            if uploaded.exists():
+                self.assertEqual(uploaded.read_bytes(), b'local carried certificate store')
+            stops = [cmd for cmd in recorded if 'stop' in cmd and 'traefik' in cmd]
+            self.assertEqual(len(stops), int(replace))
+            self.assertEqual(recorded[-1][2:], ['rm', '-f', 'traefik-acme-seed'])
 
     def test_fresh_offline_volume_is_seeded_without_registry_access(self):
         self.exercise(False, False)

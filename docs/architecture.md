@@ -7,7 +7,7 @@ How the pieces fit and what breaks what. Vocabulary is in [../CONTEXT.md](../CON
 ```text
 laptop ── hypervisor API ──▶ blank InfraVM + installer and deployment ISOs   (steps 1-2)
 installer ISO ── install.sh --auto ──▶ persistent CoreOS    (step 3, unattended)
-InfraVM: rootless Portainer + runner container ──▶ services (step 4)
+InfraVM: rootless Podman socket + runner container ──▶ Compose stacks + Arcane GUI (step 4)
 ```
 
 Every play targets `localhost`. The laptop only creates a blank VM; it never reaches into the guest
@@ -26,13 +26,15 @@ These surfaces explain deployment and backup failures:
 2. **The live system** (step 3). `guest/sophon-autoinstall` (baked into the installer ISO) starts `guest/install.sh --auto` from
    the deployment ISO; it verifies the media checksums, requires exactly one unpartitioned disk with no filesystem
    signatures, renders Ignition locally and runs `coreos-installer --offline`.
-3. **The Portainer API** (step 4). Stacks, image loads and volume seeding all go through Portainer's HTTP
-   API for deployment mutations ([decisions.md](decisions.md)).
-   If Portainer is down, fix it by hand, then rerun.
+3. **The rootless Podman socket & Compose substrate** (step 4). `guest/host-bootstrap.sh` starts `podman.socket`,
+   loads the offline runner image and prepares `/var/lib/sophon/stacks`. The runner loads offline image archives and
+   reconciles Compose projects directly over the rootless Podman socket (`roles/compose_stack`), completely decoupled
+   from the management UI ([decisions.md](decisions.md)). Arcane mounts `/var/lib/sophon/stacks` and the Podman socket
+   as a reconstructible OIDC-enabled GUI (`arcane.<domain>`).
 4. **The backup data path** (normal container stack). Declared source volumes are
    read-only mounts in Kopia. Its private, unpublished HAProxy service exposes only
    list/inspect/exec/stop/start on the existing rootless Podman socket. Native dumps
-   stream stdout, not archives. Portainer is absent from this path.
+   stream stdout, not archives. Arcane is absent from this path.
 
 Before deploying any stacks, the console runner pairs/preflights the explicitly
 declared SFTP destination directly. Prepare includes Kopia 0.23.1, OpenSSH client
@@ -48,9 +50,8 @@ redacted failure on an unhealthy/restarting service, not raw secret-bearing logs
 
 Step 1 writes everything into `artifacts/` and is cached: with a complete cache it touches no network.
 
-- Portainer's own image is loaded by `guest/host-bootstrap.sh` from the persistent project directory,
-  because Portainer cannot deliver itself.
-- Every other image is POSTed to Portainer's Docker proxy right before its stack, on every run.
+- The runner image (`sophon:latest`) is loaded by `guest/host-bootstrap.sh` from `/var/lib/sophon/runner.tar`.
+- Every service image (including Arcane) is loaded into the local Podman engine right before its Compose stack.
   Compose files use `pull_policy: never`, so a missing archive fails by name instead of pulling silently.
 
 `prepare_container_images` in `roles/prepare/defaults/main.yml` lists upstream
@@ -68,7 +69,7 @@ alongside the workload image references and immutable IDs.
 ```text
 CoreDNS resolves *.<domain> ─▶ Traefik routes by Host and gets certificates
    ─▶ LDAPS at ldap.<domain> verifies ─▶ Keycloak federates OpenLDAP
-   ─▶ Gitea and Portainer trust Keycloak (OIDC)
+   ─▶ Gitea and Arcane trust Keycloak (OIDC)
    ─▶ Kopia mounts the now-existing declared source volumes
 ```
 
@@ -77,7 +78,7 @@ failures from the left.
 
 Kopia is deployed last so external named-volume mounts already exist. Its code
 and images come from Sophon, not a Gitea project. Backups and their supervisor
-operate without Portainer, Gitea or the Kopia UI. The UI remains a repository
+operate without Arcane, Gitea or the Kopia UI. The UI remains a repository
 browser, not the collector trigger. A console command stages a uniquely named
 immutable run, resumes writers, then uploads with a stable logical source
 identity (`backup@sophon:/sophon-state`). Partial runs upload successful groups
@@ -149,14 +150,14 @@ back it up ([decisions.md](decisions.md)). V3 labels declare irreproducible path
 native stdout dumps and stopped writers. Only declared named volumes are mounted;
 native database exports do not require exposing database directories.
 Snapshots contain real files, dumps and a v3 manifest, never tar artifacts,
-container environments, Portainer state, images or reconstructible configuration.
+container environments, Arcane state, images or reconstructible configuration.
 The journal and per-run report are outside snapshot staging.
 
-Portainer is recreated from IaC, not restored. Retain external inputs and the
+Arcane is recreated from IaC, not restored. Retain external inputs and the
 SFTP repository password/key/pins outside the encrypted repository. Restoration
 is explicit, never invoked by Configure. The console's `sophon-restore` runs a
 one-shot coordinator from the offline Kopia image using Podman alone, independently
-of Portainer, Gitea and the Kopia UI. It validates a snapshot/group against fresh
+of Arcane, Gitea and the Kopia UI. It validates a snapshot/group against fresh
 IaC, waits for explicit approval, stops that group, replaces declared files with
 numeric ownership preserved, imports native exports using isolated matching-image
 helpers, then starts producers before consumers. Failures leave the group stopped

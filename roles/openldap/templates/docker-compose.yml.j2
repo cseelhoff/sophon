@@ -210,9 +210,9 @@ services:
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
         member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
 
-        dn: cn=portainer-admins,ou=groups,{{ openldap_base_dn }}
+        dn: cn=arcane-admins,ou=groups,{{ openldap_base_dn }}
         objectClass: groupOfNames
-        cn: portainer-admins
+        cn: arcane-admins
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
         member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
 

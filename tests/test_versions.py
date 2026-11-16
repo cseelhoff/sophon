@@ -34,7 +34,7 @@ class VersionTests(unittest.TestCase):
         traefik, gitea, keycloak, ldap, tunnel = map(
             defaults, ('traefik', 'gitea', 'keycloak', 'openldap', 'cloudflared'))
         images = {
-            variables['portainer_image_repo'] + ':' + variables['portainer_image_tag'],
+            variables['arcane_image_repo'] + ':' + variables['arcane_image_tag'],
             'docker.io/library/traefik:' + traefik['traefik_image_tag'],
             'docker.io/cloudflare/cloudflared:' + tunnel['cloudflared_image_tag'],
             'docker.io/' + gitea['gitea_image_name'] + ':' + gitea['gitea_image_tag'],
@@ -46,10 +46,10 @@ class VersionTests(unittest.TestCase):
             'docker.io/library/haproxy:' + variables['kopia_proxy_version'],
         }
         prepared = set(defaults('prepare')['prepare_container_images'])
-        prepared.remove('{{ portainer_image }}')
+        prepared.remove('{{ arcane_image }}')
         prepared.remove('{{ kopia_proxy_image }}')
         prepared.add('docker.io/library/haproxy:' + variables['kopia_proxy_version'])
-        prepared.add(variables['portainer_image_repo'] + ':' + variables['portainer_image_tag'])
+        prepared.add(variables['arcane_image_repo'] + ':' + variables['arcane_image_tag'])
         self.assertEqual(prepared, images)
         for image in images:
             pattern = (r'^\d+\.\d+\.\d+-alpine$' if '/haproxy:' in image else
@@ -87,7 +87,7 @@ class VersionTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is required to resolve archive names')
     def test_every_deployed_archive_is_in_the_prepare_manifest(self):
         variables = yaml.safe_load((ROOT / 'group_vars/all.yml').read_text())
-        for role in ('prepare', 'traefik', 'cloudflared', 'gitea', 'keycloak', 'openldap', 'coredns', 'kopia'):
+        for role in ('prepare', 'arcane', 'traefik', 'cloudflared', 'gitea', 'keycloak', 'openldap', 'coredns', 'kopia'):
             variables.update(defaults(role))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -96,7 +96,7 @@ class VersionTests(unittest.TestCase):
                 'ansible.builtin.copy': {
                     'dest': str(output),
                     'content': "{{ {'prepared': prepare_image_tars + [prepare_coredns_tar | basename, prepare_kopia_tar | basename], "
-                               "'deployed': [portainer_image_tarname] + traefik_image_tars + cloudflared_image_tars + gitea_image_tars "
+                               "'deployed': arcane_image_tars + traefik_image_tars + cloudflared_image_tars + gitea_image_tars "
                                "+ keycloak_image_tars + openldap_image_tars + coredns_image_tars + kopia_image_tars} | to_json }}",
                 },
                 'vars': variables,

@@ -64,12 +64,12 @@ class KopiaRoleTests(unittest.TestCase):
         roles = [task["ansible.builtin.include_role"]["name"] for task in play["tasks"]
                  if "ansible.builtin.include_role" in task]
         self.assertEqual(roles[-1], "kopia")
-        for name in ("traefik", "gitea", "openldap", "keycloak"):
+        for name in ("traefik", "gitea", "openldap", "keycloak", "arcane"):
             self.assertLess(roles.index(name), roles.index("kopia"))
 
     def test_every_core_template_uses_v3_and_databases_only_native_exports(self):
         variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
-        roles = ("traefik", "openldap", "keycloak", "gitea", "coredns", "cloudflared", "kopia")
+        roles = ("traefik", "openldap", "keycloak", "gitea", "coredns", "cloudflared", "arcane", "kopia")
         for role in roles:
             variables.update(yaml.safe_load((ROOT / f"roles/{role}/defaults/main.yml").read_text()))
         variables.update(domain_name="dev.invalid", infravm_ip="192.0.2.3", vnet_dns="1.1.1.1",
@@ -97,120 +97,76 @@ class KopiaRoleTests(unittest.TestCase):
                         self.assertTrue(any(key.startswith("sophon.backup.dumps.") for key in labels))
 
     def test_deployment_never_creates_a_collector_key_and_mounts_only_declared_volumes(self):
-        requests, stack = [], None
-        unhealthy = False
-        test = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                requests.append(("GET", self.path))
-                if self.path == "/api/stacks":
-                    self.respond([stack] if stack else [])
-                elif self.path == "/api/endpoints":
-                    self.respond([{"Id": 1, "Type": 1}])
-                elif "/containers/kopia/logs?" in self.path:
-                    payload = ('KOPIA_STARTUP_ERROR_JSON=' + json.dumps({
-                        "message": "invalid repository password FIXTURE_SECRET_VALUE fixture-private-key"}) + "\n").encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/vnd.docker.raw-stream")
-                    self.end_headers()
-                    self.wfile.write(struct.pack(">BxxxI", 2, len(payload)) + payload)
-                elif self.path.endswith("/containers/kopia/json"):
-                    self.respond({"RestartCount": 1, "State": {"Health": {
-                        "Status": "unhealthy" if unhealthy else "healthy"}}})
-                else:
-                    self.send_error(404)
-
-            def do_POST(self):
-                nonlocal stack
-                requests.append(("POST", self.path))
-                data = self.rfile.read(int(self.headers["Content-Length"]))
-                if self.path == "/api/auth":
-                    self.respond({"jwt": "FIXTURE_SECRET"})
-                elif self.path.endswith("/images/load"):
-                    self.respond({})
-                elif "/stacks/create/" in self.path:
-                    body = json.loads(data)
-                    self.check(body)
-                    stack = {"Id": 3, "Name": "kopia", "Env": body["env"]}
-                    self.respond(stack)
-                else:
-                    self.send_error(404)
-
-            def do_PUT(self):
-                nonlocal stack
-                requests.append(("PUT", self.path))
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                self.check(body)
-                stack["Env"] = body["env"]
-                self.respond(stack)
-
-            def check(self, body):
-                env = {item["name"]: item["value"] for item in body["env"]}
-                test.assertFalse(any("PORTAINER" in key or "API_KEY" in key for key in env))
-                test.assertNotIn("UI_ONLY", env)
-                compose = yaml.safe_load(body["stackFileContent"])
-                kopia = compose["services"]["kopia"]
-                proxy = compose["services"]["engine-proxy"]
-                test.assertEqual(set(kopia["cap_add"]), {"DAC_OVERRIDE", "CHOWN", "FOWNER"})
-                test.assertEqual(kopia["user"], "0:0")
-                test.assertTrue(kopia["read_only"])
-                test.assertFalse(any("podman.sock" in mount for mount in kopia["volumes"]))
-                test.assertFalse(proxy.get("ports"))
-                test.assertTrue(compose["networks"]["backup-engine"]["internal"])
-                mounts = json.loads(kopia["environment"]["BACKUP_VOLUMES"])
-                test.assertIn("gitea_gitea_data", mounts)
-                test.assertIn("traefik_traefik_data", mounts)
-                for name in mounts:
-                    test.assertIn("/volumes/" + name + ":ro", "\n".join(kopia["volumes"]))
-
-            def respond(self, value):
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(value).encode())
-
-            def log_message(self, *_):
-                pass
-
-        with HTTPServer(("127.0.0.1", 0), Handler) as server, tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            worker = threading.Thread(target=server.serve_forever)
-            worker.start()
-            try:
-                archive = directory / "image.tar"
-                archive.write_bytes(b"fixture")
-                variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
-                variables.update({name.removeprefix("SOPHON_").lower(): value
-                                  for name, value in service_values().items() if name.startswith("SOPHON_KOPIA_")})
-                variables.update(kopia_extra_volumes=[], sophon_version="fixture", domain_name="dev.invalid",
-                                 portainer_admin_password="FIXTURE_SECRET", portainer_stack_api_retries=1,
-                                 portainer_stack_api_delay=0,
-                                 portainer_stack_endpoint_id=1, portainer_stack_auth_token="FIXTURE_SECRET",
-                                 infravm_portainer_url=f"http://127.0.0.1:{server.server_port}",
-                                 kopia_image_tars=[str(archive), str(archive)])
-                for attempt in range(2):
-                    if attempt:
-                        variables["kopia_extra_volumes"] = ["site-workload-data"]
-                        stack["Env"].extend([{"name": "BACKUP_PORTAINER_API_KEY", "value": "LEGACY_FIXTURE_KEY"},
-                                             {"name": "UI_ONLY", "value": "must-live-in-IaC"}])
-                    with patch.dict(os.environ, {"ANSIBLE_ROLES_PATH": str(ROOT / "roles")}):
-                        result = run_fixture(directory, [{"ansible.builtin.include_role": {
-                            "name": str(ROOT / "roles/kopia")}, "vars": variables}])
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
-                self.assertFalse(any("/tokens" in path or "/api/users" in path for _, path in requests))
-                unhealthy = True
-                with patch.dict(os.environ, {"ANSIBLE_ROLES_PATH": str(ROOT / "roles")}):
+            stacks = directory / "stacks"
+            archive = directory / "image.tar"
+            archive.write_bytes(b"fixture")
+            calls = directory / "docker-calls.jsonl"
+            state = directory / "unhealthy"
+            docker = directory / "bin/docker"
+            docker.parent.mkdir()
+            docker.write_text(
+                f"#!{sys.executable}\n"
+                "import json, pathlib, sys\n"
+                f"with open({str(calls)!r}, 'a') as out:\n"
+                "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "args = sys.argv[1:]\n"
+                "if 'inspect' in args:\n"
+                f"    print('unhealthy' if pathlib.Path({str(state)!r}).exists() else 'healthy')\n"
+                "elif 'logs' in args:\n"
+                "    sys.stderr.write('KOPIA_STARTUP_ERROR_JSON=' + json.dumps({\n"
+                "        'message': 'invalid repository password FIXTURE_SECRET_VALUE fixture-private-key'}) + '\\n')\n"
+            )
+            docker.chmod(0o755)
+            variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
+            variables.update({name.removeprefix("SOPHON_").lower(): value
+                              for name, value in service_values().items() if name.startswith("SOPHON_KOPIA_")})
+            variables.update(kopia_extra_volumes=[], sophon_version="fixture", domain_name="dev.invalid",
+                             compose_stacks_dir=str(stacks),
+                             compose_engine_host="unix:///fixture/podman.sock",
+                             kopia_image_tars=[str(archive), str(archive)])
+            env = dict(os.environ, PATH=str(docker.parent) + os.pathsep + os.environ["PATH"],
+                       ANSIBLE_ROLES_PATH=str(ROOT / "roles"))
+            for attempt in range(2):
+                if attempt:
+                    variables["kopia_extra_volumes"] = ["site-workload-data"]
+                    (stacks / "kopia/.env").write_text("BACKUP_PORTAINER_API_KEY=LEGACY_FIXTURE_KEY\nUI_ONLY=bad\n")
+                with patch.dict(os.environ, env, clear=True):
                     result = run_fixture(directory, [{"ansible.builtin.include_role": {
                         "name": str(ROOT / "roles/kopia")}, "vars": variables}])
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("invalid repository password", result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
-                self.assertNotIn("fixture-private-key", result.stdout + result.stderr)
-            finally:
-                server.shutdown()
-                worker.join()
+
+                dotenv = (stacks / "kopia/.env").read_text()
+                self.assertNotIn("PORTAINER", dotenv)
+                self.assertNotIn("API_KEY", dotenv)
+                self.assertNotIn("UI_ONLY", dotenv)
+                compose = yaml.safe_load((stacks / "kopia/compose.yaml").read_text())
+                kopia = compose["services"]["kopia"]
+                proxy = compose["services"]["engine-proxy"]
+                self.assertEqual(set(kopia["cap_add"]), {"DAC_OVERRIDE", "CHOWN", "FOWNER"})
+                self.assertEqual(kopia["user"], "0:0")
+                self.assertTrue(kopia["read_only"])
+                self.assertFalse(any("podman.sock" in mount for mount in kopia["volumes"]))
+                self.assertFalse(proxy.get("ports"))
+                self.assertTrue(compose["networks"]["backup-engine"]["internal"])
+                mounts = json.loads(kopia["environment"]["BACKUP_VOLUMES"])
+                self.assertIn("gitea_gitea_data", mounts)
+                self.assertIn("traefik_traefik_data", mounts)
+                if attempt:
+                    self.assertIn("site-workload-data", mounts)
+                for name in mounts:
+                    self.assertIn("/volumes/" + name + ":ro", "\n".join(kopia["volumes"]))
+
+            state.write_text("1")
+            with patch.dict(os.environ, env, clear=True):
+                result = run_fixture(directory, [{"ansible.builtin.include_role": {
+                    "name": str(ROOT / "roles/kopia")}, "vars": variables}])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid repository password", result.stdout + result.stderr)
+            self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
+            self.assertNotIn("fixture-private-key", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

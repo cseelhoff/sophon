@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
 
 
-SERVICES = ('traefik', 'portainer', 'dns', 'ldap', 'auth', 'git')
+SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git')
 MAX_FILE = 2 * 1024 * 1024
 KEY_TYPE = 'EC256'
 # The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (it contains a private key).

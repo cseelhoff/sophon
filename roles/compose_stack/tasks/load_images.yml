@@ -1,0 +1,39 @@
+---
+- name: Validate stack name
+  ansible.builtin.assert:
+    that:
+      - compose_stack_name is string
+      - compose_stack_name is match('^[a-z0-9][a-z0-9_-]*$')
+    fail_msg: "Invalid Compose stack name '{{ compose_stack_name }}'."
+
+- name: Stat image archives
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ compose_stack_image_tars }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: compose_stack_tar_stat
+
+- name: Fail if any image archive is missing
+  ansible.builtin.fail:
+    msg: >-
+      Stack '{{ compose_stack_name }}' is missing image archives:
+      {{ compose_stack_tar_stat.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}.
+      Run 1-prepare.yml, and check prepare_container_images lists these images.
+  when: compose_stack_tar_stat.results | rejectattr('stat.exists') | list | length > 0
+
+- name: Load image archives into the local container engine
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host }}"
+      - image
+      - load
+      - --quiet
+      - --input
+      - "{{ item }}"
+  loop: "{{ compose_stack_image_tars }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  changed_when: false

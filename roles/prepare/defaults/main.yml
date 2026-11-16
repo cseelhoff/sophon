@@ -5,7 +5,7 @@ prepare_force: false
 # Every image any role deploys. A stack whose image is missing here cannot start
 # without egress (compose files use pull_policy: never).
 prepare_container_images:
-  - "{{ portainer_image }}"
+  - "{{ arcane_image }}"
   - "docker.io/library/traefik:v3.7.16"
   - "docker.io/cloudflare/cloudflared:2026.10.6"
   - "docker.io/gitea/gitea:28.2.0"

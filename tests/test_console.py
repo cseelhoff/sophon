@@ -38,6 +38,9 @@ class ConsoleTests(unittest.TestCase):
         preflight = patch('console.backup_destination.prepare', side_effect=lambda values, **kwargs: values)
         preflight.start()
         self.addCleanup(preflight.stop)
+        arcane_key = patch('console.deployment.ensure_arcane_encryption_key', return_value='hex:' + 'a' * 64)
+        arcane_key.start()
+        self.addCleanup(arcane_key.stop)
 
     def test_backup_preflight_failure_blocks_deployment_and_certificate_staging(self):
         with patch.dict(os.environ, service_values(), clear=True), \
@@ -72,12 +75,12 @@ class ConsoleTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main([]), 19)
             run.assert_called_once_with(['--step', 'configure', '--', '4-configure.yml'])
-            # Supplied secrets are not asked again; only the Cloudflare token, licence key and Gitea DB password are.
-            self.assertEqual(hidden.call_count, 3)
+            # Supplied secrets are not asked again; only the Cloudflare token and Gitea DB password are.
+            self.assertEqual(hidden.call_count, 2)
             self.assertNotIn('FIXTURE_SECRET_VALUE', output.getvalue())
 
     def test_invalid_run_does_not_launch_or_expose_secret(self):
-        for updates in ({'SOPHON_PORTAINER_ADMIN_PASSWORD': 'short'}, {'SOPHON_DOMAIN': ''},
+        for updates in ({'SOPHON_ARCANE_ADMIN_PASSWORD': 'short'}, {'SOPHON_DOMAIN': ''},
                         {'SOPHON_INFRAVM_IP': '999.0.0.1'},
                         {'SOPHON_KOPIA_SNAPSHOT_INTERVAL': '0s'}):
             with self.subTest(updates=updates), patch.dict(os.environ, service_values() | updates, clear=True), \
@@ -146,18 +149,18 @@ class ConsoleTests(unittest.TestCase):
         return code, prompts, hidden, output.getvalue()
 
     def test_connected_site_asks_for_email_and_token_but_not_certificates(self):
-        values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': '', 'SOPHON_ACME_EMAIL': ''}
+        values = service_values() | {'SOPHON_ARCANE_ADMIN_PASSWORD': '', 'SOPHON_ACME_EMAIL': ''}
         # Inputs: internet access?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name.
         code, prompts, hidden, _ = self.wizard(
             values, ['y', '', '', '', '', 'me@example.test', '', '', ''],
-            ['token', 'long-enough-password', '', ''])
+            ['token', 'long-enough-password', ''])
         self.assertEqual(code, 0)
         text = ' '.join(prompts + hidden)
         self.assertIn('SOPHON_ACME_EMAIL', text)
         self.assertIn('SOPHON_CF_TOKEN', text)
         self.assertIn('SOPHON_CF_TUNNEL_NAME', text)
         self.assertNotIn('SOPHON_ACME_FILE', text)
-        self.assertTrue([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt])
+        self.assertTrue([prompt for prompt in hidden if 'SOPHON_ARCANE_ADMIN_PASSWORD' in prompt])
 
     def test_connected_is_the_default_even_when_a_certificate_file_was_found(self):
         values = service_values() | {'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_ACME_EMAIL': 'me@example.test'}
@@ -178,7 +181,7 @@ class ConsoleTests(unittest.TestCase):
             # Inputs: internet access?, then DNS, IP, domain, a missing path, the real path, realm, realm name
             # (no email, token or tunnel name).
             code, prompts, hidden, output = self.wizard(
-                values, ['n', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], ['', ''])
+                values, ['n', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], [''])
         text = ' '.join(prompts + hidden)
         self.assertNotIn('SOPHON_ACME_EMAIL', text)
         self.assertNotIn('SOPHON_CF_TOKEN', text)
@@ -188,13 +191,13 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(code, 2)  # the file is asked for, validated and rejected before any deployment
         self.assertEqual(len([prompt for prompt in prompts if 'SOPHON_ACME_FILE' in prompt]), 2)
 
-    def test_required_values_are_asked_again_and_portainer_password_has_a_minimum(self):
-        values = service_values() | {'SOPHON_PORTAINER_ADMIN_PASSWORD': ''}
+    def test_required_values_are_asked_again_and_arcane_password_has_a_minimum(self):
+        values = service_values() | {'SOPHON_ARCANE_ADMIN_PASSWORD': ''}
         code, prompts, hidden, output = self.wizard(
             values, ['y', '', '', '', '', 'me@example.test', '', '', ''],
-            ['token', '', 'short', 'long-enough-password', '', ''])
+            ['token', '', 'short', 'long-enough-password', ''])
         self.assertEqual(code, 0)
-        self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_PORTAINER_ADMIN_PASSWORD' in prompt]), 3)
+        self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_ARCANE_ADMIN_PASSWORD' in prompt]), 3)
         self.assertIn('at least 12 characters', output)
 
     def test_same_password_for_all_accounts(self):
@@ -202,10 +205,10 @@ class ConsoleTests(unittest.TestCase):
                                       if field[2] == 'password'}
         code, prompts, hidden, output = self.wizard(
             values, ['y', 'y'] + [''] * 7,
-            ['same-password-123', 'same-password-123', 'token', '', 'existing-repository-password'])
+            ['same-password-123', 'same-password-123', 'token', 'existing-repository-password'])
         self.assertEqual(code, 0, output)
         asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]
-        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_KOPIA_PASSWORD'])
+        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_KOPIA_PASSWORD'])
 
     def test_secret_prompt_shows_asterisks_and_handles_backspace(self):
         pid, terminal = pty.fork()
@@ -260,11 +263,12 @@ class ConsoleTests(unittest.TestCase):
             environment = dict(os.environ, **service_values(),
                                SOPHON_PROXMOX_PASSWORD='DO_NOT_FORWARD', SOPHON_NFS_IP='DO_NOT_FORWARD',
                                SOPHON_KOPIA_REPOSITORY_PASSWORD='DO_NOT_FORWARD',
-                               SOPHON_PORTAINER_SETUP_TOKEN='ONE_TIME_SETUP_TOKEN',
+                               SOPHON_PORTAINER_SETUP_TOKEN='DO_NOT_FORWARD',
                                PATH=str(directory) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(
                 [sys.executable, '-c',
-                 f'import sys;sys.path.insert(0,{str(ROOT / "src")!r});import console;'
+                 f'import pathlib,sys;sys.path.insert(0,{str(ROOT / "src")!r});import console;'
+                 f'console.deployment.ROOT=pathlib.Path({str(directory)!r});'
                  'console.backup_destination.prepare=lambda values,**kwargs:values;'
                  'sys.exit(console.main(["--run"]))'],
                 env=environment, capture_output=True, text=True, timeout=10)
@@ -273,9 +277,9 @@ class ConsoleTests(unittest.TestCase):
             self.assertNotIn('DO_NOT_FORWARD', forwarded.values())
             self.assertEqual(forwarded['SOPHON_INFRAVM_IP'], '192.0.2.3')
             self.assertEqual(forwarded['SOPHON_DEPLOYMENT_STEP'], 'configure')
-            self.assertEqual(forwarded['SOPHON_PORTAINER_SETUP_TOKEN'], 'ONE_TIME_SETUP_TOKEN')
+            self.assertRegex(forwarded['SOPHON_ARCANE_ENCRYPTION_KEY'], r'^hex:[0-9a-f]{64}$')
             self.assertEqual(forwarded['SOPHON_KOPIA_PREFLIGHT_COMPLETE'], 'true')
-            self.assertNotIn('ONE_TIME_SETUP_TOKEN', result.stdout + result.stderr)
+            self.assertNotIn(forwarded['SOPHON_ARCANE_ENCRYPTION_KEY'], result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

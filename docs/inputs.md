@@ -85,22 +85,21 @@ service accounts** (default no), then asks for:
 | Cloudflare token | Connected sites only, required. A custom token with three permissions: Zone / Zone / Read, Zone / DNS / Edit and Account / Cloudflare Tunnel / Edit (tunnel permission only if you use tunnels), scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
 | Cloudflare tunnel name | Connected sites only (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
-| Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, licence key, existing Kopia repository password and SSH material. |
-| Portainer licence | Business Edition key (the current free program covers three nodes). |
+| Passwords | Arcane admin (12+ characters), Keycloak admin and database, Arcane OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Arcane password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, existing Kopia repository password and SSH material. Configure generates and reuses Arcane's local SQLite encryption key under `credentials/arcane/` automatically. |
 | Kopia | External SFTP host/user/path, repository password and backup policy; Configure generates the client key and confirms host fingerprints. |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
 (passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
 
-Service names (`traefik`, `portainer`, `dns`, `kopia`, `ldap`, `auth`, `git` under your domain) must
+Service names (`traefik`, `arcane`, `dns`, `kopia`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.
 
 ### Kopia backup inputs
 
 Kopia deploys last, after core source volumes exist. Its backup operation needs
-no Portainer/Gitea token, stack definitions or environment capture. The collector
+no Arcane/Gitea token, stack definitions or environment capture. The collector
 uses a restricted engine proxy and explicitly mounted read-only source volumes.
-Keep stack definitions in IaC and supplied secrets outside Portainer.
+Keep stack definitions in IaC and supplied secrets outside Arcane.
 
 These are Configure inputs on InfraVM, not laptop `.env` settings:
 
@@ -171,7 +170,7 @@ before expecting them to be protected. Configure never restores state.
 `sophon-restore plan --group GROUP --snapshot latest` uses the existing `kopia`
 container's connection settings, or the same `SOPHON_KOPIA_*` destination,
 password/key/pins and stable source identity overrides above when it is absent.
-It never uses Portainer or Gitea. Supply `SOPHON_RESTORE_SOURCE_VOLUME` when the
+It never uses Arcane or Gitea. Supply `SOPHON_RESTORE_SOURCE_VOLUME` when the
 backup container is absent (normally `kopia_source-v3`, retained to coordinate
 backup/recovery), and optionally `SOPHON_KOPIA_RESTORE_IMAGE` for an already loaded
 custom recovery image. `--state-volume NAME` selects a private labelled staging
@@ -189,12 +188,13 @@ The 2026-10-28 pins target **fresh installations**. Existing VMs are not upgrade
 provision still leaves their installed system alone. Back up application data and verify restoration before
 replacing any stack or image.
 
-* **Portainer 3.0.0 is STS, not LTS.** Its image was published October 28, ahead of the October 29 release-note
-  date. Docker/Podman environments remain available, but 3.x's new features focus on Kubernetes. Back up the
-  Portainer data volume before trying it; do not assume an upgraded database can be opened by 2.x.
-  New instances require a one-time setup token. `sophon-deploy` reads it from the local Portainer logs and
-  passes it only to step 4, by environment variable, without printing or saving it. The runner sends it as
-  `X-Setup-Token` when creating the first administrator; initialized instances do not use it.
+* **Arcane replaces Portainer (clean break).** Deployment now writes declarative Compose stacks to
+  `/var/lib/sophon/stacks/` and reconciles them directly over the rootless Podman socket. Arcane (`v3.0.1`)
+  provides the open-source container and Compose GUI at `https://arcane.<domain>` with native Keycloak OIDC
+  RBAC (`arcane-admins` -> `role_admin`). Replace `SOPHON_PORTAINER_ADMIN_PASSWORD` and
+  `SOPHON_KEYCLOAK_PORTAINER_CLIENT_SECRET` with `SOPHON_ARCANE_ADMIN_PASSWORD` and
+  `SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET`; `SOPHON_PORTAINER_LICENSE_KEY` and `SOPHON_PORTAINER_SETUP_TOKEN`
+  are retired.
 * **PostgreSQL 16 -> 18 requires migration.** Both Gitea and Keycloak now use `18.6-alpine3.24`. The supported
   PostgreSQL 18 volume mount is `/var/lib/postgresql`, not `/var/lib/postgresql/data`. Dump each old database
   with the old server, restore into a fresh PostgreSQL 18 volume, then verify the applications. Never point 18
@@ -217,6 +217,5 @@ so the previous cached artifacts cannot satisfy these new pins.
 ## If something fails
 
 Host setup: `journalctl -u sophon-host-bootstrap`, then `sudo systemctl restart sophon-host-bootstrap`
-(do not reinstall). Portainer closes its first-run window after a few minutes idle; the same restart
-reopens it. A disconnected guest also needs an accurate clock: certificate and OIDC checks reject
+(do not reinstall). A disconnected guest also needs an accurate clock: certificate and OIDC checks reject
 large skew, so check `date -u` and the hardware clock after a cold boot.

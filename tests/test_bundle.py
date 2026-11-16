@@ -34,7 +34,7 @@ class BundleTests(unittest.TestCase):
         self.runner = self.directory / 'runner.tar'
         self.runner.write_bytes(b'runner-image')
         self.containers = [self.directory / name for name in (
-            'portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar',
+            'getarcaneapp-manager_v3.0.1.tar', 'keycloak-keycloak_26.8.1.tar',
             'coredns-dockerdiscovery.tar',
         )]
         for container in self.containers:
@@ -129,7 +129,7 @@ class BundleTests(unittest.TestCase):
 
     def test_symlink_files_directories_and_archives_rejected(self):
         target = self.write('unlisted-secret', 'PRIVATE')
-        for name in ('roles/gitea/tasks/main.yml', 'roles/portainer', 'group_vars'):
+        for name in ('roles/gitea/tasks/main.yml', 'roles/arcane', 'group_vars'):
             link = self.root / name
             if link.is_dir():
                 shutil.rmtree(link)
@@ -245,8 +245,8 @@ class BundleTests(unittest.TestCase):
         for name in ('sophon-network', 'sophon-set-password', 'host-bootstrap.sh'):
             self.assertTrue((extracted / 'guest' / name).stat().st_mode & 0o111, name)
         self.assertTrue((extracted / 'tools/busybox').stat().st_mode & 0o111)
-        self.assertEqual((extracted / 'project/bootstrap/portainer-image').read_text(),
-                         'docker.io/portainer/portainer-ee:3.0.0\n')
+        self.assertTrue((extracted / 'project/bootstrap/sophon-version').read_text().startswith('source-sha256:'))
+        self.assertFalse((extracted / 'project/bootstrap/portainer-image').exists())
 
 
 @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is not installed')
@@ -292,7 +292,7 @@ class PrepareTests(unittest.TestCase):
         self.write('artifacts/bootstrap/runner.tar', 'cached-runner')
         self.write('artifacts/bootstrap/runner.tar.id', 'sha256:cached')
         self.write('artifacts/bootstrap/busybox-1.38.0-musl', 'cached-helper')
-        for name in ('portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'):
+        for name in ('getarcaneapp-manager_v3.0.1.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'):
             self.write('artifacts/containers/' + name, name)
         self.write('artifacts/containers/library-haproxy_3.2.6-alpine.tar', 'cached-proxy')
         self.write('artifacts/containers/sophon-kopia_0.23.1.tar', 'cached-kopia')
@@ -324,13 +324,13 @@ class PrepareTests(unittest.TestCase):
                 'coreos_iso_path': str(live_iso),
                 'installer_iso_path': str(self.root / 'artifacts/coreos/sophon-installer.iso'),
                 'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-deployment.iso'),
-                'portainer_image': 'docker.io/portainer/portainer-ee:3.0.0',
-                'portainer_image_tarname': 'portainer-portainer-ee_3.0.0.tar',
+                'arcane_image': 'ghcr.io/getarcaneapp/manager:v3.0.1',
+                'arcane_image_tarname': 'getarcaneapp-manager_v3.0.1.tar',
                 'kopia_image': 'localhost/sophon-kopia:0.23.1',
                 'kopia_image_tarname': 'sophon-kopia_0.23.1.tar',
                 'prepare_coredns_tar': str(self.root / 'artifacts/containers/coredns-dockerdiscovery.tar'),
                 'prepare_container_images': [
-                    'docker.io/portainer/portainer-ee:3.0.0', 'quay.io/keycloak/keycloak:26.8.1',
+                    'ghcr.io/getarcaneapp/manager:v3.0.1', 'quay.io/keycloak/keycloak:26.8.1',
                     'docker.io/library/haproxy:3.2.6-alpine'],
             },
             'tasks': [{'ansible.builtin.import_role': {'name': 'prepare'}}],
@@ -351,7 +351,7 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(live_iso.read_text(), 'cached-stock-live-iso', 'the stock ISO must stay unchanged')
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())
         self.assertEqual([Path(path).name for path in manifest], [
-            'portainer-portainer-ee_3.0.0.tar', 'keycloak-keycloak_26.8.1.tar',
+            'getarcaneapp-manager_v3.0.1.tar', 'keycloak-keycloak_26.8.1.tar',
             'library-haproxy_3.2.6-alpine.tar', 'coredns-dockerdiscovery.tar', 'sophon-kopia_0.23.1.tar'])
         # A changed runner image must be re-saved (saving is the only thing that should be attempted).
         image_id.write_text('sha256:rebuilt')

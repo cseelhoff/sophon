@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V3 filesystem/native-export collector. No Portainer access or restore operations."""
+"""V3 filesystem/native-export collector. No management UI access or restore operations."""
 import argparse
 import contextlib
 import configparser

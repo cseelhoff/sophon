@@ -60,9 +60,6 @@ def bundle(media):
         "guest/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
         "guest/sophon-network": NETWORK.read_text(),
         "guest/sophon-set-password": (SCRIPTS / "sophon-set-password").read_text(),
-        "project/bootstrap/portainer-image": "docker.io/portainer/portainer-ee:3.0.0\n",
-        "project/bootstrap/portainer-archive": "portainer.tar\n",
-        "project/artifacts/containers/portainer.tar": "fixture portainer",
     }.items():
         path = media / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,53 +97,31 @@ with (root / "calls").open("a") as log:
     log.write(json.dumps([name, *args]) + "\n")
 if name == "id":
     print(os.environ.get("STUB_UID", "1000") if args == ["-u"] else "core")
-elif name == "curl":
-    sys.exit(int(os.environ.get("CURL_FAIL", "0")))
+elif name == "systemctl":
+    if args == ["--user", "start", "podman.socket"] and os.environ.get("SOCKET_FAIL") != "1":
+        sock = root / "podman.sock"
+        import socket as _socket
+        if not sock.exists():
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.bind(str(sock))
+            s.close()
 elif name == "podman":
     assert args.pop(0) == "--remote=false"
     statefile = root / "state"
     state = json.loads(statefile.read_text()) if statefile.exists() else {
-        "images": [], "network": False, "container": False, "volume": False
+        "images": [], "network": False
     }
     status = 0
     if args[:2] == ["image", "exists"]:
         status = int(args[2] not in state["images"])
     elif args[0] == "load":
-        image = ("sophon:latest" if args[-1].endswith("runner.tar")
-                 else "docker.io/portainer/portainer-ee:3.0.0")
-        state["images"].append(image)
+        state["images"].append("sophon:latest")
     elif args[:2] == ["network", "exists"]:
         status = int(not state["network"])
     elif args[:2] == ["network", "create"]:
         state["network"] = True
-    elif args[:2] == ["volume", "exists"]:
-        status = int(not state["volume"])
-    elif args[:2] == ["volume", "create"]:
-        status = int(state["volume"]) * 125
-        state["volume"] = True
-    elif args[:2] == ["container", "exists"]:
-        status = int(not state["container"])
-    elif args[0] == "run":
-        state["container"] = True
-        state["label_version"] = "3"
-        if os.environ.get("SOPHON_PORTAINER_SETUP_TOKEN"):
-            (root / "received-setup-token").write_text(os.environ["SOPHON_PORTAINER_SETUP_TOKEN"])
-    elif args[0] == "rm":
-        state["container"] = False
-    elif args[0] == "inspect":
-        expression = args[2]
-        if "sophon.backup.version" in expression:
-            print(state.get("label_version", "3"))
-        elif ".Mounts" in expression:
-            print(state.get("data_volume", "portainer_data"))
-        elif expression == "{{.Image}}":
-            print(state.get("image", "sha256:" + "a" * 64))
-        elif ".ExitCode" in expression:
-            print("0")
-        else:
-            print("true")
-    elif args[0] == "logs":
-        print("setup_token=first-fixture-token\n\x1b[36msetup_token=\x1b[0mlatest-fixture-token", file=sys.stderr)
+    elif args[0] == "info":
+        status = int(os.environ.get("PODMAN_INFO_FAIL", "0"))
     statefile.write_text(json.dumps(state))
     sys.exit(status)
 elif name == "df":
@@ -555,7 +530,7 @@ udevadm() { [[ $1 == settle ]]; }
             result = shell('copy_artifacts "$@"', media, root, env=env)
             self.assertIn("already exists", result.stderr)
 
-    def test_bootstrap_before_the_address_is_known_starts_portainer_without_dns(self):
+    def test_bootstrap_before_the_address_is_known_creates_proxy_without_dns(self):
         with fixture() as directory:
             bundle(directory / "media")
             data = directory / "persistent"
@@ -566,21 +541,24 @@ udevadm() { [[ $1 == settle ]]; }
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
                               .replace("/var/lib/sophon", str(data))
+                              .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
                               .replace("/run/user/1000/sophon-ready", str(ready)))
             env = tools(directory)
             self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
             self.assertTrue(ready.is_file())
+            self.assertEqual(stat.S_IMODE((data / "stacks").stat().st_mode), 0o700)
             podman = calls(directory, "podman")
             network_create, = [call for call in podman if call[2:4] == ["network", "create"]]
             self.assertNotIn("--dns", network_create)
             self.assertEqual(len([call for call in podman if call[2:4] == ["network", "update"]]), 0)
+            self.assertFalse(any(call[2] == "run" for call in podman))
             # Once step 4 has saved the address, a rerun points the services' network at it.
             (data / "project/site.json").write_text('{"SOPHON_INFRAVM_IP":"10.0.60.2"}')
             self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
             self.assertIn(["podman", "--remote=false", "network", "update", "--dns-add", "10.0.60.2", "proxy"],
                           calls(directory, "podman"))
 
-    def test_bootstrap_is_idempotent_offline_and_api_ready(self):
+    def test_bootstrap_is_idempotent_offline_and_socket_ready(self):
         with fixture() as directory:
             bundle(directory / "media")
             data = directory / "persistent"
@@ -590,6 +568,7 @@ udevadm() { [[ $1 == settle ]]; }
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
                               .replace("/var/lib/sophon", str(data))
+                              .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
                               .replace("/run/user/1000/sophon-ready", str(ready)))
             env = tools(directory)
             for _ in range(2):
@@ -598,21 +577,13 @@ udevadm() { [[ $1 == settle ]]; }
                 self.assertTrue(ready.is_file())
                 self.assertIn("Log in as core", result.stdout)
             podman = calls(directory, "podman")
-            self.assertEqual(len([call for call in podman if call[2] == "load"]), 2)
-            self.assertEqual(len([call for call in podman if call[2] == "run"]), 1)
-            self.assertEqual(len([call for call in podman if call[2] == "restart"]), 1)
+            self.assertEqual(len([call for call in podman if call[2] == "load"]), 1)
+            self.assertFalse(any(call[2] == "run" for call in podman))
             network_create, = [call for call in podman if call[2:4] == ["network", "create"]]
             self.assertIn("--dns", network_create)
             self.assertEqual(network_create[network_create.index("--dns") + 1], "10.0.60.2")
             self.assertIn(["podman", "--remote=false", "network", "update",
                            "--dns-add", "10.0.60.2", "proxy"], podman)
-            run, = [call for call in podman if call[2] == "run"]
-            self.assertIn("--restart", run)
-            self.assertIn("always", run)
-            self.assertIn("9443:9443", run)
-            self.assertIn("/run/user/1000/podman/podman.sock:/var/run/docker.sock", run)
-            self.assertNotIn("--privileged", run)
-            self.assertEqual(len(calls(directory, "curl")), 2)
 
     def test_bootstrap_failure_does_not_offer_continuation(self):
         with fixture() as directory:
@@ -625,57 +596,15 @@ udevadm() { [[ $1 == settle ]]; }
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
                               .replace("/var/lib/sophon", str(data))
+                              .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
                               .replace("/run/user/1000/sophon-ready", str(ready)))
             env = tools(directory)
-            env["CURL_FAIL"] = "1"
+            env["PODMAN_INFO_FAIL"] = "1"
             result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(ready.exists())
             self.assertNotIn("Log in as core", result.stdout)
             self.assertIn("retry", result.stderr)
-
-    def test_existing_portainer_labels_refresh_without_changing_image_or_deleting_data(self):
-        for volume in ("portainer_data", "unmanaged"):
-            with self.subTest(volume=volume), fixture() as directory:
-                bundle(directory / "media")
-                data = directory / "persistent"
-                shutil.copytree(directory / "media/project", data / "project")
-                (data / "runner.tar").write_text("runner")
-                script = directory / "host-bootstrap"
-                script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
-                                  .replace("/var/lib/sophon", str(data))
-                                  .replace("/run/user/1000/sophon-ready", str(directory / "ready")))
-                original_image = "sha256:" + "a" * 64
-                (directory / "state").write_text(json.dumps({
-                    "images": ["sophon:latest", "docker.io/portainer/portainer-ee:3.0.0"],
-                    "network": True, "container": True, "volume": True, "label_version": "2",
-                    "image": original_image, "data_volume": volume}))
-                result = subprocess.run(["bash", str(script)], env=tools(directory), text=True, capture_output=True)
-                commands = calls(directory, "podman")
-                if volume == "unmanaged":
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse(any(call[2] in ("stop", "rm", "run") for call in commands))
-                else:
-                    self.assert_success(result)
-                    creation, = [call for call in commands if call[2] == "run"]
-                    self.assertIn(original_image, creation)
-                    self.assertIn("portainer_data:/data:Z", creation)
-                    self.assertIn("sophon.backup.version=3", creation)
-                    self.assertIn(["podman", "--remote=false", "rm", "portainer"], commands)
-                    self.assertFalse(any(call[2:4] == ["volume", "rm"] for call in commands))
-
-    def test_metadata_is_data_not_shell(self):
-        with fixture() as directory:
-            data = directory / "persistent"
-            (data / "project/bootstrap").mkdir(parents=True)
-            (data / "project/bootstrap/portainer-image").write_text("image\nMALICIOUS=1\n")
-            script = directory / "host-bootstrap"
-            script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
-                              .replace("/var/lib/sophon", str(data))
-                              .replace("/run/user/1000/sophon-ready", str(directory / "ready")))
-            result = subprocess.run(["bash", str(script)], env=tools(directory), text=True, capture_output=True)
-            self.assertIn("Invalid Portainer image", result.stderr)
-            self.assertFalse(calls(directory, "podman"))
 
     def controller(self, directory, saved=True, relocate=False):
         """A copy of sophon-deploy whose paths point into `directory`; returns (script, ready file, data dir, env)."""
@@ -691,7 +620,9 @@ udevadm() { [[ $1 == settle ]]; }
         helper.chmod(0o755)
         text = (SCRIPTS / "sophon-deploy").read_text()
         text = (text.replace("/var/lib/sophon", str(data)) if relocate
-                else text.replace("site=/var/lib/sophon/project/site.json", f"site={site}"))
+                else text.replace("site=/var/lib/sophon/project/site.json", f"site={site}")
+                         .replace("install -d -m 0700 /var/lib/sophon/stacks",
+                                  f"install -d -m 0700 {shlex.quote(str(data / 'stacks'))}"))
         script = directory / "controller"
         script.write_text(text.replace("/run/user/1000/sophon-ready", str(ready))
                           .replace("/usr/local/libexec/sophon-network", str(helper)))
@@ -710,7 +641,7 @@ udevadm() { [[ $1 == settle ]]; }
     def test_wrapper_argument_and_environment_boundary(self):
         source = (SCRIPTS / "sophon-deploy").read_text()
         allowed = source.split("for name in", 1)[1].split("\ndo", 1)[0].replace("\\", "").split()
-        self.assertEqual(set(allowed), set(step_fields("configure")) | {"SOPHON_PORTAINER_SETUP_TOKEN"})
+        self.assertEqual(set(allowed), set(step_fields("configure")))
         with fixture() as directory:
             script, ready, _, env = self.controller(directory)
             ready.touch()
@@ -718,6 +649,7 @@ udevadm() { [[ $1 == settle ]]; }
                        SOPHON_INFRAVM_IP="10.0.60.2", SOPHON_VNET_DNS="1.1.1.1",
                        SOPHON_NFS_IP="forbidden", SOPHON_VNET_GATEWAY="forbidden",
                        SOPHON_KOPIA_ADMIN_PASSWORD="forbidden", SOPHON_PROXMOX_PASSWORD="forbidden",
+                       SOPHON_PORTAINER_SETUP_TOKEN="forbidden",
                        SOPHON_DEPLOYMENT_STEP="provision", CONTAINER_HOST="ssh://forbidden")
             for args in ([], ["--dashboard", "--port", "41327"], ["--run", "--state-dir", "/workspace/artifacts/deployment/services"],
                          ["--help"], ["--", "--tags", "gitea"]):
@@ -729,17 +661,17 @@ udevadm() { [[ $1 == settle ]]; }
                 self.assertIn("SOPHON_DEPLOYMENT_STEP=configure", command[:boundary])
                 self.assertIn("SOPHON_CF_TOKEN", command[:boundary])
                 self.assertIn("SOPHON_INFRAVM_IP", command[:boundary])
-                self.assertIn("SOPHON_PORTAINER_SETUP_TOKEN", command[:boundary])
-                self.assertNotIn("latest-fixture-token", " ".join(command))
-                self.assertEqual((directory / "received-setup-token").read_text(), "latest-fixture-token")
+                self.assertNotIn("SOPHON_PORTAINER_SETUP_TOKEN", command[:boundary])
                 self.assertNotIn("secret with spaces", " ".join(command))
                 self.assertFalse(any("forbidden" in arg or "=bootstrap" in arg for arg in command))
                 self.assertIn("/var/lib/sophon/project:/workspace:Z", command)
+                self.assertIn("/var/lib/sophon/stacks:/var/lib/sophon/stacks", command)
+                self.assertIn("/run/user/1000/podman/podman.sock:/var/run/docker.sock", command)
                 self.assertIn("--pull", command)
                 self.assertIn("never", command)
                 self.assertNotIn("-it", command)
                 self.assertNotIn("--privileged", command)
-                self.assertFalse(any("podman.sock" in arg or arg.startswith("/:/") for arg in command))
+                self.assertFalse(any(arg.startswith("/:/") for arg in command))
 
     def test_certificate_disk_is_copied_into_the_project_and_unmounted(self):
         with fixture() as directory:

@@ -282,35 +282,35 @@
     status_code: [204, 409]
   changed_when: false
 
-# -------- portainer OIDC client --------
-- name: Lookup portainer client
+# -------- arcane OIDC client --------
+- name: Lookup arcane client
   ansible.builtin.uri:
-    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=portainer"
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=arcane"
     method: GET
     headers: "{{ _kc_headers }}"
     validate_certs: false
     status_code: 200
-  register: _kc_portainer_client
+  register: _kc_arcane_client
   changed_when: false
 
-- name: Create portainer client
-  when: _kc_portainer_client.json | length == 0
+- name: Create arcane client
+  when: _kc_arcane_client.json | length == 0
   ansible.builtin.uri:
     url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients"
     method: POST
     headers: "{{ _kc_headers }}"
     body_format: json
     body:
-      clientId: portainer
-      name: Portainer
+      clientId: arcane
+      name: Arcane
       enabled: true
       protocol: openid-connect
       clientAuthenticatorType: client-secret
-      secret: "{{ keycloak_portainer_client_secret }}"
+      secret: "{{ keycloak_arcane_client_secret }}"
       redirectUris:
-        - "https://portainer.{{ keycloak_domain }}/*"
+        - "https://arcane.{{ keycloak_domain }}/*"
       webOrigins:
-        - "https://portainer.{{ keycloak_domain }}"
+        - "https://arcane.{{ keycloak_domain }}"
       publicClient: false
       standardFlowEnabled: true
       implicitFlowEnabled: false
@@ -319,18 +319,19 @@
       frontchannelLogout: true
       fullScopeAllowed: true
       attributes:
-        post.logout.redirect.uris: "https://portainer.{{ keycloak_domain }}"
+        post.logout.redirect.uris: "https://arcane.{{ keycloak_domain }}"
     validate_certs: false
     status_code: [201, 409]
+  no_log: true
 
-- name: Refresh portainer client lookup
+- name: Refresh arcane client lookup
   ansible.builtin.uri:
-    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=portainer"
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=arcane"
     method: GET
     headers: "{{ _kc_headers }}"
     validate_certs: false
     status_code: 200
-  register: _kc_portainer_client
+  register: _kc_arcane_client
   changed_when: false
 
 - name: Lookup "groups" scope id
@@ -343,12 +344,12 @@
   register: _kc_scopes
   changed_when: false
 
-- name: Add "groups" scope as default scope on portainer client
+- name: Add "groups" scope as default scope on arcane client
   vars:
     _kc_groups_scope_id: "{{ (_kc_scopes.json | selectattr('name', 'equalto', 'groups') | list | first).id }}"
-    _kc_portainer_id: "{{ _kc_portainer_client.json[0].id }}"
+    _kc_arcane_id: "{{ _kc_arcane_client.json[0].id }}"
   ansible.builtin.uri:
-    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_portainer_id }}/default-client-scopes/{{ _kc_groups_scope_id }}"
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_arcane_id }}/default-client-scopes/{{ _kc_groups_scope_id }}"
     method: PUT
     headers: "{{ _kc_headers }}"
     validate_certs: false

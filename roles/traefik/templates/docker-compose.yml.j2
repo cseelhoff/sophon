@@ -9,7 +9,6 @@ services:
       - -c
       - |
         touch /etc/traefik/dynamic.yml
-        printf 'http:\n  services:\n    portainer:\n      loadBalancer:\n        servers:\n          - url: "http://portainer:9000"\n' > /etc/traefik/portainer.yml
     volumes:
       - traefik_config:/etc/traefik
     labels:
@@ -78,13 +77,6 @@ services:
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - "traefik.http.routers.dashboard.tls.domains[0].main={{ domain_name | lower | regex_replace('\\.$', '') }}"
       - "traefik.http.routers.dashboard.tls.domains[0].sans=*.{{ domain_name | lower | regex_replace('\\.$', '') }}"
-      - "traefik.http.routers.portainer.rule=Host(`portainer.{{ domain_name | lower | regex_replace('\\.$', '') }}`)"
-      - "traefik.http.routers.portainer.entrypoints=websecure"
-      - "traefik.http.routers.portainer.tls=true"
-      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.portainer.tls.domains[0].main={{ domain_name | lower | regex_replace('\\.$', '') }}"
-      - "traefik.http.routers.portainer.tls.domains[0].sans=*.{{ domain_name | lower | regex_replace('\\.$', '') }}"
-      - "traefik.http.routers.portainer.service=portainer@file"
 
 volumes:
   traefik_config:

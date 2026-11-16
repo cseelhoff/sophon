@@ -48,20 +48,21 @@ def test_vm_network_config():
 
 def test_credential_inputs():
   required = [
-    'portainer_admin_password', 'keycloak_admin_password',
-    'keycloak_db_password', 'keycloak_portainer_client_secret', 'gitea_admin_password',
+    'arcane_admin_password', 'keycloak_admin_password',
+    'keycloak_db_password', 'keycloak_arcane_client_secret', 'gitea_admin_password',
     'openldap_admin_password', 'openldap_example_user_password', 'openldap_example_admin_password',
   ]
   backup = ['kopia_password', 'kopia_server_password', 'kopia_sftp_private_key_b64', 'kopia_sftp_known_hosts_b64']
-  required += backup
+  required += ['arcane_encryption_key', *backup]
   shared = ['gitea_db_password']
-  inputs = [name for name in required if name not in backup] + shared + backup
+  inputs = [name for name in required if name not in ('arcane_encryption_key', *backup)] + shared + ['arcane_encryption_key', *backup]
   preflight = yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['pre_tasks']
   assert preflight[1]['loop'] == inputs
   preflight = preflight[:3]
   generated = {'kopia_sftp_private_key_b64', 'kopia_sftp_known_hosts_b64'}
+  internal = {'arcane_encryption_key'}
   assert {name for name, field in step_fields('configure').items() if field[2] == 'password' and field[4]} == {
-    'SOPHON_' + name.upper() for name in required if name not in generated}
+    'SOPHON_' + name.upper() for name in required if name not in generated | internal}
   assert all(not step_fields('configure')['SOPHON_' + name.upper()][4] for name in generated)
   sources = [ROOT / '4-configure.yml', ROOT / 'group_vars/all.yml',
              *sorted((ROOT / 'roles').rglob('*.yml'))]
@@ -98,7 +99,7 @@ def test_credential_inputs():
     environment.update(ANSIBLE_CONFIG=str(config), SOPHON_DEPLOYMENT_STEP='configure',
                        SOPHON_KOPIA_PREFLIGHT_COMPLETE='true')
     supplied = {name: 'PRIVATE_TEST_' + name for name in required}
-    expected = supplied | {name: supplied['portainer_admin_password'] for name in shared}
+    expected = supplied | {name: supplied['arcane_admin_password'] for name in shared}
     exported = {'SOPHON_' + name.upper(): value for name, value in supplied.items()}
 
     def run(values, expected_values, overrides=None, error=None):
@@ -122,10 +123,10 @@ def test_credential_inputs():
       run(missing, expected, error='SOPHON_' + name.upper())
     run(exported | {'SOPHON_GITEA_ADMIN_PASSWORD': '   '}, expected,
         error='SOPHON_GITEA_ADMIN_PASSWORD')
-    run(exported | {'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 11}, expected,
+    run(exported | {'SOPHON_ARCANE_ADMIN_PASSWORD': 'x' * 11}, expected,
         error='at least 12 characters')
-    minimum = expected | {name: 'x' * 12 for name in ['portainer_admin_password', *shared]}
-    run(exported | {'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 12}, minimum)
+    minimum = expected | {name: 'x' * 12 for name in ['arcane_admin_password', *shared]}
+    run(exported | {'SOPHON_ARCANE_ADMIN_PASSWORD': 'x' * 12}, minimum)
     run({}, expected, overrides=supplied)
     run(exported, expected | {'gitea_admin_password': 'PRIVATE_TEST_OVERRIDE'},
         overrides={'gitea_admin_password': 'PRIVATE_TEST_OVERRIDE'})
@@ -172,25 +173,25 @@ def run_launcher(arguments, extra=None, path=None):
 def test_launcher_passes_only_the_steps_settings():
   result, received = run_launcher(['--step', 'provision', '--', '2-provision.yml', '-e', 'prepare_force=true'], {
     'SOPHON_PROXMOX_HOST': '192.0.2.10', 'SOPHON_PROXMOX_PASSWORD': 'PRIVATE_TEST_PASSWORD',
-    'SOPHON_DOMAIN': 'service-setting.example', 'SOPHON_PORTAINER_ADMIN_PASSWORD': 'x' * 16,
-    'SOPHON_PORTAINER_SETUP_TOKEN': 'ONE_TIME_SETUP_TOKEN'})
+    'SOPHON_DOMAIN': 'service-setting.example', 'SOPHON_ARCANE_ADMIN_PASSWORD': 'x' * 16,
+    'SOPHON_ARCANE_ENCRYPTION_KEY': 'hex:' + 'a' * 64})
   assert result.returncode == 0, result.stderr
   assert received['args'] == ['2-provision.yml', '-e', 'prepare_force=true']
   environment = received['environment']
   assert environment['SOPHON_PROXMOX_PASSWORD'] == 'PRIVATE_TEST_PASSWORD'
   assert environment['SOPHON_DEPLOYMENT_STEP'] == 'provision'
-  assert 'SOPHON_DOMAIN' not in environment and 'SOPHON_PORTAINER_ADMIN_PASSWORD' not in environment
-  assert 'SOPHON_PORTAINER_SETUP_TOKEN' not in environment
+  assert 'SOPHON_DOMAIN' not in environment and 'SOPHON_ARCANE_ADMIN_PASSWORD' not in environment
+  assert 'SOPHON_ARCANE_ENCRYPTION_KEY' not in environment
   assert 'PRIVATE_TEST_PASSWORD' not in result.stdout + result.stderr
 
   result, received = run_launcher(['--step', 'configure', '--', '4-configure.yml'], {
     'SOPHON_DEPLOYMENT_STEP': 'configure', 'SOPHON_PROXMOX_PASSWORD': 'DO_NOT_FORWARD',
     'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_DOMAIN': 'example.test',
-    'SOPHON_PORTAINER_SETUP_TOKEN': 'ONE_TIME_SETUP_TOKEN'})
+    'SOPHON_ARCANE_ENCRYPTION_KEY': 'hex:' + 'b' * 64})
   assert result.returncode == 0, result.stderr
   environment = received['environment']
   assert environment['SOPHON_DOMAIN'] == 'example.test'
-  assert environment['SOPHON_PORTAINER_SETUP_TOKEN'] == 'ONE_TIME_SETUP_TOKEN'
+  assert environment['SOPHON_ARCANE_ENCRYPTION_KEY'] == 'hex:' + 'b' * 64
   assert 'SOPHON_PROXMOX_PASSWORD' not in environment and 'SOPHON_ACME_FILE' not in environment
 
 

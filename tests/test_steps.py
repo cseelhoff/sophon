@@ -38,7 +38,7 @@ def test_step_settings():
     assert 'management.example' not in json.dumps(configure)
     assert 'LOGIN_SECRET' not in json.dumps(configure)
     assert 'SOPHON_PROXMOX_HOST' not in step_fields('configure')
-    assert 'SOPHON_PORTAINER_ADMIN_PASSWORD' not in step_fields('provision')
+    assert 'SOPHON_ARCANE_ADMIN_PASSWORD' not in step_fields('provision')
     assert 'SOPHON_DOMAIN' not in step_fields('provision')
     assert 'configure.example' not in json.dumps(provision)
     assert step_fields('configure')['SOPHON_DOMAIN'][4]
@@ -80,7 +80,8 @@ def test_service_task_graph():
                 walk(path.parent / filename)
 
     walk(ROOT / '4-configure.yml')
-    assert ROOT / 'roles/portainer/tasks/main.yml' in visited
+    assert ROOT / 'roles/arcane/tasks/main.yml' in visited
+    assert ROOT / 'roles/compose_stack/tasks/main.yml' in visited
     assert ROOT / 'roles/proxmox/tasks/main.yml' not in visited
 
 
@@ -226,7 +227,7 @@ def test_service_resolution_follows_entered_domain():
             canonical = domain.lower().rstrip('.')
             entries = [line for line in content.splitlines() if line.startswith(ip + ' ')]
             assert entries == [f'{ip} {name + "." if name else ""}{canonical}'
-                               for name in ('', 'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns', 'kopia')]
+                               for name in ('', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia')]
             if canonical == 'second.example':
                 assert 'first.example' not in content and '192.0.2.3' not in content
         unchanged = hosts.read_text()
@@ -283,7 +284,7 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
         assert 'ports' not in service
         assert set(service['labels']) == {
             'sophon.backup.version=3', 'sophon.backup.group=cloudflared', 'sophon.backup.stop=false'}
-        # No tunnel (no token or no egress): the role must not touch the network or Portainer.
+        # No tunnel (no token or no egress): the role must not touch the network or engine.
         result, _ = run_fixture(directory, [{
             'ansible.builtin.include_tasks': str(ROOT / 'roles/cloudflared/tasks/main.yml'),
             'vars': {'coredns_cf_tunnel_id': '', 'coredns_cf_account_id': '', 'coredns_cf_token': 'unused'},
@@ -351,13 +352,13 @@ def test_stale_tunnel_cnames_are_repointed_but_other_records_are_not():
     assert 'cfargotunnel' in conditions and '!=' in conditions
     defaults = yaml.safe_load((ROOT / 'roles/coredns/defaults/main.yml').read_text())
     assert defaults['coredns_cf_owner_comment'] == 'managed by coredns-dockerdiscovery'
-    assert {'traefik', 'auth', 'ldap', 'git', 'portainer', 'dns'} <= set(defaults['coredns_published_hosts'])
+    assert {'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns'} <= set(defaults['coredns_published_hosts'])
 
 
 def test_gitea_initializer_reports_cli_failures():
     defaults = yaml.safe_load((ROOT / 'roles/gitea/defaults/main.yml').read_text())
     defaults.update(
-        domain_name='site.example', portainer_admin_password='fixture',
+        domain_name='site.example', arcane_admin_password='fixture',
         gitea_admin_password='fixture', gitea_db_password='fixture', keycloak_hostname='auth', keycloak_domain='site.example',
         keycloak_realm='sophon', keycloak_gitea_client_secret='fixture')
     with tempfile.TemporaryDirectory() as temporary:
@@ -395,76 +396,84 @@ def test_gitea_initializer_reports_cli_failures():
         for state, exit_code in [('exited', 0), ('exited', 24), ('dead', 0)]:
             result, _ = run_fixture(directory, [
                 {'ansible.builtin.set_fact': {
-                    'gitea_init_inspect': {'json': {'State': {'Status': state, 'ExitCode': exit_code}}}}},
+                    'gitea_init_inspect': {'rc': 0, 'stdout': f'{state} {exit_code}'}}},
                 guard,
             ])
             assert (result.returncode == 0) == (state == 'exited' and exit_code == 0)
 
 
 def test_acme_backup_retries_container_replacement_race():
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    import threading
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        counter = directory / 'attempts'
+        docker = directory / 'bin/docker'
+        docker.parent.mkdir()
+        docker.write_text(
+            f'#!{sys.executable}\n'
+            'import pathlib, sys\n'
+            f'count_file = pathlib.Path({str(counter)!r})\n'
+            'attempts = int(count_file.read_text()) + 1 if count_file.exists() else 1\n'
+            'count_file.write_text(str(attempts))\n'
+            'if attempts == 1:\n'
+            '    sys.stderr.write("Error: No such container: traefik\\n")\n'
+            '    sys.exit(1)\n'
+            'pathlib.Path(sys.argv[-1]).write_bytes(b"fixture acme store")\n'
+        )
+        docker.chmod(0o755)
+        artifacts = directory / 'artifacts'
+        backup = artifacts / 'acme.json'
+        tasks = yaml.safe_load((ROOT / 'roles/traefik/tasks/backup_acme.yml').read_text())
+        for task in tasks:
+            for item in task.get('block', []):
+                if item.get('name') == 'Copy acme.json from traefik container':
+                    item['delay'] = 0
+        env = dict(os.environ, PATH=str(docker.parent) + os.pathsep + os.environ['PATH'],
+                   ANSIBLE_STDOUT_CALLBACK='default')
+        playbook = directory / 'fixture.yml'
+        playbook.write_text(json.dumps([{'hosts': 'localhost', 'gather_facts': False, 'tasks': [
+            {'ansible.builtin.set_fact': {
+                'compose_engine_host': 'unix:///fixture/podman.sock',
+                'traefik_acme_artifacts_dir': str(artifacts),
+                'traefik_acme_backup_path': str(backup)}},
+            *tasks,
+        ]}]))
+        result = subprocess.run(['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(playbook)],
+                                env=env, cwd=directory, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert backup.read_bytes() == b'fixture acme store'
+        assert int(counter.read_text()) == 2
 
-    requests = []
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            requests.append(self.path)
-            self.send_response(500 if len(requests) == 1 else 200)
-            self.send_header('Content-Type', 'application/octet-stream')
-            self.end_headers()
-            self.wfile.write(b'container was replaced' if len(requests) == 1 else b'fixture archive')
-
-        def log_message(self, *args):
-            pass
-
-    tasks = yaml.safe_load((ROOT / 'roles/traefik/tasks/backup_acme.yml').read_text())
-    download = next(task for task in tasks
-                    if task['name'] == 'Download acme.json archive from traefik container')
-    with HTTPServer(('127.0.0.1', 0), Handler) as server, tempfile.TemporaryDirectory() as temporary:
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            directory = Path(temporary)
-            archive = directory / 'acme.tar'
-            result, _ = run_fixture(directory, [
-                {'ansible.builtin.set_fact': {
-                    'infravm_portainer_url': f'http://127.0.0.1:{server.server_port}',
-                    '_traefik_portainer_endpoint_id': 1, '_traefik_portainer_token': 'fixture',
-                    '_traefik_acme_dl_tar': {'path': str(archive)}}},
-                download | {'delay': 0},
-            ])
-            assert result.returncode == 0, result.stdout + result.stderr
-            assert archive.read_bytes() == b'fixture archive'
-            assert len(requests) == 2
-        finally:
-            server.shutdown()
-            thread.join()
-
-
-def test_portainer_routing_configured_with_traefik():
+def test_arcane_routing_configured_with_traefik():
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         config = directory / 'traefik'
         config.mkdir()
-        template = ROOT / 'roles/traefik/templates/docker-compose.yml.j2'
+        traefik_template = ROOT / 'roles/traefik/templates/docker-compose.yml.j2'
+        arcane_template = ROOT / 'roles/arcane/templates/docker-compose.yml.j2'
         result, _ = run_fixture(directory, [
             {'ansible.builtin.set_fact': {
                 'domain_name': 'Step4.Example.', 'traefik_fqdn': 'traefik.step4.example',
                 'traefik_image_tag': 'v3.7.16', 'coredns_cf_token': '', 'traefik_port_http': 80,
                 'traefik_port_https': 443, 'traefik_acme_email': 'admin@example.com',
                 'traefik_acme_server': 'https://acme.invalid', 'traefik_log_level': 'INFO',
+                'arcane_image': 'ghcr.io/getarcaneapp/manager:v3.0.1',
+                'arcane_fqdn': 'arcane.step4.example', 'arcane_port': 3552,
+                'arcane_stacks_dir': '/var/lib/sophon/stacks',
+                'arcane_oidc_issuer_url': 'https://auth.step4.example/realms/sophon',
             }},
-            {'ansible.builtin.set_fact': {'compose': "{{ lookup('template', '" + str(template) + "') | from_yaml }}"}},
+            {'ansible.builtin.set_fact': {
+                'compose': "{{ lookup('template', '" + str(traefik_template) + "') | from_yaml }}",
+                'arcane_compose': "{{ lookup('template', '" + str(arcane_template) + "') | from_yaml }}"}},
             {'ansible.builtin.assert': {'that': [
-                "'traefik.http.routers.portainer.rule=Host(`portainer.step4.example`)' in compose.services.traefik.labels",
-                "'traefik.http.routers.portainer.service=portainer@file' in compose.services.traefik.labels",
-                "'traefik.http.routers.portainer.tls.certresolver=letsencrypt' in compose.services.traefik.labels",
+                "'traefik.http.routers.arcane.rule=Host(`arcane.step4.example`)' in arcane_compose.services.arcane.labels",
+                "'traefik.http.services.arcane.loadbalancer.server.port=3552' in arcane_compose.services.arcane.labels",
+                "'traefik.http.routers.arcane.tls.certresolver=letsencrypt' in arcane_compose.services.arcane.labels",
                 "'--providers.file.directory=/etc/traefik' in compose.services.traefik.command",
                 "'--certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53' in compose.services.traefik.command",
                 "'--certificatesresolvers.letsencrypt.acme.keyType=EC256' in compose.services.traefik.command",
-                "'traefik.http.routers.portainer.tls.domains[0].main=step4.example' in compose.services.traefik.labels",
-                "'traefik.http.routers.portainer.tls.domains[0].sans=*.step4.example' in compose.services.traefik.labels",
+                "'traefik.http.routers.arcane.tls.domains[0].main=step4.example' in arcane_compose.services.arcane.labels",
+                "'traefik.http.routers.arcane.tls.domains[0].sans=*.step4.example' in arcane_compose.services.arcane.labels",
                 "'traefik.http.routers.dashboard.tls.domains[0].main=step4.example' in compose.services.traefik.labels",
                 "'traefik.http.routers.dashboard.tls.domains[0].sans=*.step4.example' in compose.services.traefik.labels",
                 "compose.services.traefik.entrypoint is not defined",
@@ -474,9 +483,8 @@ def test_portainer_routing_configured_with_traefik():
             {'ansible.builtin.shell': "{{ compose.services['traefik-init'].entrypoint[2] | replace('/etc/traefik', '" + str(config) + "') }}"},
         ])
         assert result.returncode == 0, result.stdout + result.stderr
-        dynamic = yaml.safe_load((config / 'portainer.yml').read_text())
-        assert dynamic['http']['services']['portainer']['loadBalancer']['servers'] == [
-            {'url': 'http://portainer:9000'}]
+        assert (config / 'dynamic.yml').is_file()
+        assert not (config / 'portainer.yml').exists()
 
 
 def test_wildcard_certificate_labels_cover_every_certresolver_router():
@@ -489,7 +497,7 @@ def test_wildcard_certificate_labels_cover_every_certresolver_router():
             seen.add(router)
             assert f'traefik.http.routers.{router}.tls.domains[0].main={{{{' in text, (template.name, router)
             assert f'traefik.http.routers.{router}.tls.domains[0].sans=*.{{{{' in text, (template.name, router)
-    assert seen == {'dashboard', 'portainer', 'keycloak', 'gitea', 'coredns', 'ldap-certs'}, seen
+    assert seen == {'dashboard', 'arcane', 'keycloak', 'gitea', 'coredns', 'ldap-certs'}, seen
 
 
 def test_ldaps_reads_the_wildcard_certificate_by_its_main_domain():
@@ -524,5 +532,5 @@ if __name__ == '__main__':
     test_missing_tunnel_is_created_only_after_a_successful_empty_lookup()
     test_stale_tunnel_cnames_are_repointed_but_other_records_are_not()
     test_acme_backup_retries_container_replacement_race()
-    test_portainer_routing_configured_with_traefik()
+    test_arcane_routing_configured_with_traefik()
     print('Deployment step checks passed')

@@ -12,7 +12,7 @@ import termios
 import deployment
 import backup_destination
 
-NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_KOPIA_PASSWORD',
+NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_KOPIA_PASSWORD',
               'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'}
 INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_NAME'}
 
@@ -78,8 +78,8 @@ def prompt_field(name, label, kind, current, required):
         value = answer or current
         if required and not value.strip():
             print('This value is required.')
-        elif name == 'SOPHON_PORTAINER_ADMIN_PASSWORD' and len(value) < 12:
-            print('The Portainer admin password needs at least 12 characters.')
+        elif name == 'SOPHON_ARCANE_ADMIN_PASSWORD' and len(value) < 12:
+            print('The Arcane admin password needs at least 12 characters.')
         elif kind == 'path' and value and not Path(value).is_file():
             print(f'File not found on this VM: {value}')
         else:
@@ -179,6 +179,7 @@ def main(argv=None):
         values = backup_destination.prepare(values, root=deployment.ROOT,
                                             confirm=None if options.run else ask_yes_no)
         values = deployment.stage_certificates(values)
+        values['SOPHON_ARCANE_ENCRYPTION_KEY'] = deployment.ensure_arcane_encryption_key(deployment.ROOT)
     except KeyboardInterrupt:
         print('\nConfigure cancelled; no service stacks were deployed. Retained SFTP state is available for retry.',
               file=sys.stderr)

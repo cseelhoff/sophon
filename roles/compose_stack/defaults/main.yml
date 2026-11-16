@@ -1,0 +1,8 @@
+---
+compose_stacks_dir: "/var/lib/sophon/stacks"
+compose_engine_host: "unix:///var/run/docker.sock"
+compose_stack_name: ""
+compose_stack_content: ""
+compose_stack_image_tars: []
+compose_stack_env_vars: []
+compose_stack_deploy_timeout: 180

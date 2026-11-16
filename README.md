@@ -1,8 +1,9 @@
 # Sophon
 
-Offline-capable deployment of DNS, reverse proxy, encrypted backups, directory, SSO and Git services onto one
-Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft Hyper-V. Services run as rootless Podman
-containers managed through Portainer; the Ansible runner is a container on InfraVM itself.
+Offline-capable deployment of DNS, reverse proxy, encrypted backups, directory, SSO, Git and container-management
+services onto one Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft Hyper-V. Services run as
+declarative rootless Podman Compose stacks with Arcane as the OIDC-authenticated management GUI; the Ansible runner is
+a container on InfraVM itself.
 
 ## Install
 
@@ -26,8 +27,7 @@ install media, then creates and starts a blank VM with the media attached.
 3. Run `sophon-deploy`. It first asks for the network (the VM starts on a DHCP lease; address, prefix and gateway
    default to it, so Enter keeps them as a static address, and DNS defaults to `1.1.1.1`). Then answer **Y** (the
    default) to "Does this site have internet access?" unless the site is offline, and enter your domain and credentials.
-   It deploys CoreDNS, Traefik, Kopia,
-   OpenLDAP, Keycloak and Gitea.
+   It deploys CoreDNS, Traefik, OpenLDAP, Keycloak, Gitea, Arcane and Kopia.
 
 **No internet at the VM's site?** Also follow [Air-gapped sites](#air-gapped-sites).
 
@@ -89,8 +89,8 @@ Later, `sophon-deploy --network` asks for the network again. Detach both ISOs on
 
 ### Using the services
 
-Portainer is at `https://portainer.<domain>` (also `traefik`, `dns`, `kopia`, `ldap`, `auth`, `git`). `https://<VM address>:9443`
-is Portainer's own self-signed bootstrap port (certificate for `localhost`): ignore it.
+Arcane is at `https://arcane.<domain>` (also `traefik`, `dns`, `kopia`, `ldap`, `auth`, `git`). Sign in with Keycloak
+SSO (`john.doe.admin` or any member of `arcane-admins` receives `role_admin`).
 
 Point clients at CoreDNS on the VM for your domain only. On Windows, in an elevated PowerShell:
 
@@ -105,7 +105,7 @@ upstream forwards back to it (for example the Hyper-V Default Switch address): l
 ### Backups
 
 Kopia is built during Prepare, carried offline and deployed after the core
-source volumes exist. Its [v3 collector](roles/kopia) operates without Portainer,
+source volumes exist. Its [v3 collector](roles/kopia) operates without Arcane,
 Gitea or a management API key: named read-only mounts supply irreproducible
 files, native tools export databases through a restricted engine proxy.
 Writers resume before upload. Snapshots contain files, dumps and a versioned
@@ -131,11 +131,9 @@ podman exec kopia python3 /app/backup.py run
 podman exec kopia cat /source/last-run.json
 ```
 
-Portainer is reconstructible: nothing may exist only in its UI. Rebuild means
-rerun Configure, then explicitly restore state. The old tool is retained by
-`kopia-legacy`; there are no v1/v2 compatibility shims. **M2's new group restore
-and rebuild drill are not part of M1**, and Configure never restores application
-state. See the [operator guide](roles/kopia/README.md).
+Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
+rerun Configure, then explicitly restore state via `sophon-restore`. Configure
+never restores application state automatically. See the [operator guide](roles/kopia/README.md).
 
 ### Air-gapped sites
 
@@ -162,4 +160,4 @@ full deployment). Eject the disk afterwards (`.\sophon-provision.ps1 detach-cert
 
 Rebuild the tools image (`docker build -t sophon-tools -f Containerfile .`, or `podman`), then run
 `bash sophon-provision.sh prepare -e prepare_force=true`. New ISOs only affect **new** VMs; don't swap images under
-existing PostgreSQL, LDAP or Portainer volumes without migrating ([details](docs/inputs.md#upgrading-from-the-previous-pins)).
+existing PostgreSQL or LDAP volumes without migrating ([details](docs/inputs.md#upgrading-from-the-previous-pins)).
