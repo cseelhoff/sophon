@@ -23,7 +23,7 @@ PROJECT = (
     '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
     *(f'roles/{role}' for role in ('portainer', 'portainer_stack', 'coredns', 'traefik',
                                    'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea')),
-    'src/console.py', 'src/deployment.py', 'src/certificates.py',
+    'src/console.py', 'src/deployment.py', 'src/certificates.py', 'src/backup_destination.py',
 )
 GUEST = ('host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-network', 'sophon-set-password')
 EXCLUDED = frozenset((

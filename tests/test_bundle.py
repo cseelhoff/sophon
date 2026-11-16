@@ -101,6 +101,7 @@ class BundleTests(unittest.TestCase):
     def test_secrets_and_unallowlisted_artifacts_never_copied(self):
         for name in (
             '.env', '.git/config', 'unknown.txt', 'site.json', 'artifacts/deployment/events.json',
+            'credentials/kopia/id_ed25519', 'credentials/kopia/destination.known_hosts',
             'artifacts/containers/not-declared.tar', 'roles/gitea/.env', 'roles/gitea/credentials.json',
             'roles/gitea/secrets.yml', 'roles/gitea/id_ed25519', 'roles/gitea/config.pem',
             'roles/gitea/artifacts/deployment/key', 'roles/gitea/logs/run.json',

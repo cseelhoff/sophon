@@ -5,7 +5,11 @@
 # Nothing is copied from the build context, so .dockerignore excludes everything.
 
 FROM docker.io/library/python:3.14.10-slim-trixie AS runner
-RUN pip install --no-cache-dir ansible-core==2.21.5 cryptography==50.0.2 requests==2.34.2
+RUN pip install --no-cache-dir ansible-core==2.21.5 cryptography==50.0.2 requests==2.34.2 paramiko==4.0.0
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=docker.io/kopia/kopia:0.23.1 /bin/kopia /usr/local/bin/kopia
 WORKDIR /workspace
 
 # Builds the official CoreOS installer so `prepare` can bake the unattended installer into the live ISO.

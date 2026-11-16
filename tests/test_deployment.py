@@ -59,8 +59,10 @@ def test_credential_inputs():
   preflight = yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['pre_tasks']
   assert preflight[1]['loop'] == inputs
   preflight = preflight[:3]
+  generated = {'kopia_sftp_private_key_b64', 'kopia_sftp_known_hosts_b64'}
   assert {name for name, field in step_fields('configure').items() if field[2] == 'password' and field[4]} == {
-    'SOPHON_' + name.upper() for name in required}
+    'SOPHON_' + name.upper() for name in required if name not in generated}
+  assert all(not step_fields('configure')['SOPHON_' + name.upper()][4] for name in generated)
   sources = [ROOT / '4-configure.yml', ROOT / 'group_vars/all.yml',
              *sorted((ROOT / 'roles').rglob('*.yml'))]
   for source in sources:
@@ -93,7 +95,8 @@ def test_credential_inputs():
     }]))
     environment = {name: value for name, value in os.environ.items()
                    if not name.startswith(('SOPHON_', 'ANSIBLE_'))}
-    environment.update(ANSIBLE_CONFIG=str(config), SOPHON_DEPLOYMENT_STEP='configure')
+    environment.update(ANSIBLE_CONFIG=str(config), SOPHON_DEPLOYMENT_STEP='configure',
+                       SOPHON_KOPIA_PREFLIGHT_COMPLETE='true')
     supplied = {name: 'PRIVATE_TEST_' + name for name in required}
     expected = supplied | {name: supplied['portainer_admin_password'] for name in shared}
     exported = {'SOPHON_' + name.upper(): value for name, value in supplied.items()}
