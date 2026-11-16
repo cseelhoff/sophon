@@ -91,6 +91,9 @@ kopia_extra_volumes: "{{ lookup('env', 'SOPHON_KOPIA_EXTRA_VOLUMES') | default('
 sophon_version: "{{ lookup('file', playbook_dir ~ '/bootstrap/sophon-version') | trim }}"
 kopia_backups_enabled: "{{ lookup('env', 'SOPHON_KOPIA_BACKUPS_ENABLED') | default('false', true) }}"
 kopia_snapshot_interval: "{{ lookup('env', 'SOPHON_KOPIA_SNAPSHOT_INTERVAL') | default('6h', true) }}"
+kopia_coarse_enabled: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_ENABLED') | default('false', true) }}"
+kopia_coarse_volumes_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_VOLUMES_DIR') }}"
+kopia_coarse_work_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_WORK_DIR') }}"
 
 # --- Shared paths --------------------------------------------------------------
 artifacts_dir: "{{ playbook_dir }}/artifacts"

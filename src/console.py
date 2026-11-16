@@ -152,6 +152,8 @@ def main(argv=None):
                     continue
                 if name in (*backup_destination.MATERIAL, 'SOPHON_KOPIA_CREATE_REPOSITORY'):
                     continue
+                if name in ('SOPHON_KOPIA_COARSE_VOLUMES_DIR', 'SOPHON_KOPIA_COARSE_WORK_DIR') and values['SOPHON_KOPIA_COARSE_ENABLED'] != 'true':
+                    continue
                 if kind == 'password' and value:
                     # Supplied by the environment or the shared password; keep it without asking again.
                     continue

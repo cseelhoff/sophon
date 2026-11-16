@@ -4,7 +4,7 @@ import base64
 import ipaddress
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
@@ -77,6 +77,10 @@ FIELDS = {
     'SOPHON_KOPIA_EXTRA_VOLUMES': ('Additional site workload volumes (JSON array)', 'Backup', 'text', '[]', False),
     'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups (after first verified backup)', 'Backup', 'choice', 'false', True),
     'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
+    'SOPHON_KOPIA_COARSE_ENABLED': ('Enable last-resort weekly volume clones (true/false)', 'Backup', 'choice', 'false', False),
+    'SOPHON_KOPIA_COARSE_VOLUMES_DIR': ('Host Podman volumes directory (read-only source)', 'Backup', 'text', '', False),
+    'SOPHON_KOPIA_COARSE_WORK_DIR': ('Dedicated host working directory outside the volumes tree, on the same filesystem',
+                                   'Backup', 'text', '', False),
 }
 LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
           'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),
@@ -84,7 +88,8 @@ LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), '
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
            'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true'),
-           'SOPHON_KOPIA_CREATE_REPOSITORY': ('false', 'true')}
+           'SOPHON_KOPIA_CREATE_REPOSITORY': ('false', 'true'),
+           'SOPHON_KOPIA_COARSE_ENABLED': ('false', 'true')}
 PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Hyper-V', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
                     if field[2] not in ('password', 'path') and field[1] not in (*PROVISION_GROUPS, 'Backup') and name != 'SOPHON_DOMAIN')
@@ -175,6 +180,16 @@ def validate_settings(current, changes, step='provision'):
                 return None, 'VM name must contain 1-80 letters, digits, dots, underscores or hyphens.'
         except ValueError:
             return None, f'{label} is not a valid {kind} value.'
+    if values.get('SOPHON_KOPIA_COARSE_ENABLED') == 'true':
+        names = ('SOPHON_KOPIA_COARSE_VOLUMES_DIR', 'SOPHON_KOPIA_COARSE_WORK_DIR')
+        for name in names:
+            path = values[name]
+            if (not re.fullmatch(r'/[A-Za-z0-9_./-]+', path) or path == '/'
+                    or '//' in path or '..' in path.split('/') or str(PurePosixPath(path)) != path):
+                return None, f'{name} must be a normalized absolute host directory, not /, using letters, numbers, /, _, - and dots.'
+        left, right = (PurePosixPath(values[name]) for name in names)
+        if left.is_relative_to(right) or right.is_relative_to(left):
+            return None, 'Coarse source and working directories must not overlap.'
     if values.get('SOPHON_ACME_FILE'):
         import certificates
         try:
