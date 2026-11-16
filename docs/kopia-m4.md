@@ -86,6 +86,15 @@ docker run --rm -v "$PWD:/workspace" --entrypoint python3 \
 Prepared shared image contains current coarse controller: PASS
 ```
 
+A final operator-guide-only refresh with the same Prepare command returned
+`ok=17 changed=1 failed=0 skipped=8`. Checked extraction/`cmp` of the controller,
+proxy and role README then produced:
+
+```text
+source-sha256:04b6766cef2a94ea4e9a0bd40b638acda4ac8aed7b990efd432c15cdaacdbf53
+Final offline M4 code and operator guide: PASS
+```
+
 ## Real dev checks
 
 Only isolated VM 107, `10.0.60.66`, was used. No production VM or repository was

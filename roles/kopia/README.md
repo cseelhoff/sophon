@@ -163,6 +163,8 @@ primary backups and operator restores refuse to race it. Incomplete restart
 recovery exits so the container restart policy retries; other scheduled failures
 are reported and wait until the next weekly attempt or a manual run. Failed
 uploads retain one immutable ready copy; retry uploads it without another pause.
+Retained reflinks pin old extents: monitor local free space while applications
+change files, especially during slow or failed uploads.
 Never disable/prune the service or remove working storage while recovery is
 pending; re-enable with the same paths if it was removed accidentally.
 
