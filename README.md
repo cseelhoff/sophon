@@ -111,10 +111,12 @@ files, native tools export databases through a restricted engine proxy.
 Writers resume before upload. Snapshots contain files, dumps and a versioned
 manifest, not images, caches, container environments or a system copy.
 
-Supply the external SFTP destination, pinned SSH host key, SSH private key,
-repository password and Kopia UI credentials at the console; see
-[backup inputs](docs/inputs.md#kopia-backup-inputs). Existing repositories connect
-by default, never initialize on error. Keep repository decryption credentials
+Supply the external SFTP host/user/path, repository password and Kopia UI
+credentials at the console. Configure generates a client key, shows the public
+line to authorize, confirms host fingerprints and runs preflight before stacks;
+see [backup inputs](docs/inputs.md#kopia-backup-inputs). Only a confirmed missing
+repository on an unused path may be created; all other errors fail closed.
+Keep repository decryption credentials
 outside the encrypted repository. Scheduled backups remain an explicit setting:
 verify a first backup before enabling the six-hour schedule.
 

@@ -14,16 +14,43 @@ socket-proxy image in the offline bundle. Configure deploys Kopia last, after
 the source volumes exist. The backup runs in a normal stack; no backup host
 service or timer is installed.
 
+Use the newly prepared runner when installing/updating this version: pairing
+needs its Kopia binary, OpenSSH client and Paramiko. Preparing media alone does
+not update an installed VM. For an explicitly managed in-place update, carry the
+new runner archive and load it as `core` with
+`podman load -i /path/to/updated/runner.tar` before running the updated console;
+an existing `sophon:latest` tag is not proof that its dependencies are current.
+
 On an existing managed InfraVM, host bootstrap refreshes immutable Portainer
 labels by recreating only its container with the same image ID and
 `portainer_data` volume. It never deletes that volume or upgrades the image
 as part of this metadata refresh; an unexpected data mount is refused.
 
-Supply the SFTP destination, key/pins, repository password and UI credentials
-through [Configure inputs](../../docs/inputs.md#kopia-backup-inputs). M1 expects
-an **already initialized** SFTP repository. Startup only connects; there is no
-create-on-error fallback. Interactive pairing/confirmed creation is the separate
-M3 milestone, not an implemented M1 feature.
+Supply the SFTP host/account/path, repository password and UI credentials through
+[Configure inputs](../../docs/inputs.md#kopia-backup-inputs). The server/account
+and writable directory must already exist. Before deploying any stacks, Configure
+generates/reuses an ed25519 identity under project `credentials/kopia`, shows its
+ready-to-paste public key, scans the host and requires independently verified
+SHA256 fingerprints. Install that public key on the confined SFTP account.
+For example, compare against this on the server console:
+
+```sh
+for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key" -E sha256; done
+```
+
+Client directory/files are 0700/0600 and excluded from Git, media and primary
+backups. Rebuilds can authorize a new key. Every rerun checks the offered key
+set against saved trust; a change, including an override of saved pins, fails
+hard until an independently verified intentional re-pairing.
+
+Preflight requires authentication and write/read/delete integrity, and reports
+free space when supported. Only Kopia 0.23.1's exact missing-repository diagnostic
+on an unused path offers operator-confirmed creation; all other errors fail
+closed. `--run` can use saved/generated material or optional base64 overrides.
+Explicit `SOPHON_KOPIA_CREATE_REPOSITORY=true` confirms unattended creation only
+when missing; it never reinitializes existing storage and needs no reset step.
+Startup only connects. A later startup/health failure surfaces the redacted Kopia
+diagnostic through Ansible instead of hiding the reason behind `no_log`.
 
 Run and inspect backups from the InfraVM console as `core`:
 

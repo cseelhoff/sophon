@@ -87,7 +87,7 @@ service accounts** (default no), then asks for:
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
 | Passwords | Portainer admin (12+ characters), Keycloak admin and database, Portainer OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Portainer password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, licence key, existing Kopia repository password and SSH material. |
 | Portainer licence | Business Edition key (the current free program covers three nodes). |
-| Kopia | External SFTP destination, existing repository password, base64 SSH key/verified host keys and backup policy; details below. |
+| Kopia | External SFTP host/user/path, repository password and backup policy; Configure generates the client key and confirms host fingerprints. |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
 (passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
@@ -106,28 +106,50 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 
 | Variable | Meaning |
 |---|---|
-| `SOPHON_KOPIA_PASSWORD` | Required existing repository encryption password; never replaced by "same password for all". Retain outside the repository. |
+| `SOPHON_KOPIA_PASSWORD` | Required repository encryption password, new or existing; never replaced by "same password for all". Retain outside the repository. |
 | `SOPHON_KOPIA_SERVER_USERNAME`, `_SERVER_PASSWORD` | Independent UI login; username defaults to `admin`. |
 | `SOPHON_KOPIA_SFTP_HOST`, `_SFTP_PORT` | Required reachable SFTP host; port defaults to `22`. |
 | `SOPHON_KOPIA_SFTP_USERNAME`, `_SFTP_PATH` | Required account and absolute repository path, without `..` components. |
-| `SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64` | Required single-line base64 SSH private key. Encoding is not encryption. |
-| `SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64` | Required single-line base64 of independently verified/pinned `known_hosts`; include `[host]:port` for a nonstandard port. |
+| `SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64` | Optional single-line base64 unencrypted private-key override. Otherwise Configure generates/reuses project `credentials/kopia/id_ed25519`. Encoding is not encryption. |
+| `SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64` | Optional single-line base64 of independently verified `known_hosts` for unattended pairing. Include all offered keys, with `[host]:port` for non-22 ports. Overrides cannot replace saved trust. |
+| `SOPHON_KOPIA_CREATE_REPOSITORY` | Optional unattended creation confirmation (`true`); default `false`. Used only for an exact missing repository on an unused path, never an existing repository or other error. No reset/rerun step is needed. |
 | `SOPHON_KOPIA_CLIENT_USERNAME`, `_CLIENT_HOSTNAME` | Stable snapshot source identity, default `backup@sophon`. Preserve it on reruns/recovery. |
 | `SOPHON_KOPIA_EXTRA_VOLUMES` | Site workload volume names as a JSON array, default `[]`. Core roles declare their own list. These become read-only mounts, not host paths. Retain the list in site IaC and redeploy after changes. |
 | `SOPHON_KOPIA_BACKUPS_ENABLED` | `false` until a first full backup is verified. Set `true` to enable scheduled backups; keep the existing value on reruns. |
 | `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix. The container supervisor schedules collector runs, not raw filesystem snapshots. |
 
-Keep supplying the same destination, password, identity, SSH material and policy
+Keep supplying the same destination, password, source identity and policy
 when reconfiguring an existing instance. The role reuses the `kopia` stack and
 its v3 config/cache/log/staging volumes; preparing new media alone changes no
 installed VM. An unreachable repository or invalid key/password fails startup.
 There is no collector API key to supply, persist or rotate. Revoke a retired
 legacy collector key after finishing legacy recovery and quiescing its schedule.
 
-M1 expects an already initialized SFTP repository: create it explicitly with a
-separate Kopia client and the intended password. `SOPHON_KOPIA_INIT_REPOSITORY`
-has been removed; startup never creates on error. M3 will replace manual client
-key/pin preparation with console pairing and confirmed missing-repository creation.
+Before Configure, provide a confined SFTP account and an existing writable
+directory on your backup server. Configure prints a ready-to-paste public
+`authorized_keys` line, scans the server and asks you to independently verify
+every SHA256 fingerprint. Install the public key on the server and continue.
+The key/pins stay in project `credentials/kopia`, never in the backup or ISO.
+After a rebuild, authorize a new generated client key; retain the repository
+password, not a recovery copy of a replaceable SSH key.
+
+Preflight checks reachability, authentication, write/read/delete and available
+space before any stack deployment. Servers without the statvfs extension report
+space as unavailable; authentication, permission or other query failures remain
+fatal. Reported free space is not a guarantee that future backups fit.
+
+Only Kopia's exact missing-repository result on an empty path (or its own verified
+`.shards` layout marker) offers creation. Wrong passwords, changed host keys,
+unrelated files and every other error fail closed. `sophon-deploy --run` needs
+saved trust or explicit verified pin overrides, and
+`SOPHON_KOPIA_CREATE_REPOSITORY=true` to confirm first creation. Existing
+repositories never create again, even if that confirmation remains exported.
+The old `SOPHON_KOPIA_INIT_REPOSITORY` flag is not supported.
+
+Changed host keys are a hard failure, including when a new pin is supplied.
+After independently checking an intentional server rotation, remove only that
+endpoint's hash-named `.known_hosts` file under `credentials/kopia`, then pair
+again. Do not delete the whole directory or blindly accept a scan.
 
 The [operator guide](../roles/kopia/README.md) defines v3 labels, console backup
 commands, partial-run reports and interruption recovery. No v1/v2 labels or

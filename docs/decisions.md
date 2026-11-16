@@ -9,7 +9,8 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    password is chosen at the first boot (the account is locked until then, so no default password exists) and the
    static network in step 4. Site data and secrets never enter either ISO.
 2. **The runner lives on InfraVM.** A container that sees only Portainer's HTTP API: no hypervisor
-   credentials, SSH, host root or Podman socket. Step 4 therefore needs nothing from the laptop.
+   credentials, guest SSH, host root or Podman socket. It also checks the explicitly
+   declared SFTP destination before any stack deployment. Step 4 needs nothing from the laptop.
 3. **Portainer is the deployment substrate.** Stacks, image loads and volume seeding all go through its API.
    If Portainer is down, fix it by hand and rerun. It is reconstructible, not a backup target.
    Nothing may exist only in Portainer: keep definitions in IaC and supplied credentials externally.
@@ -23,7 +24,10 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    that machine. See [certificates.md](certificates.md).
 7. **Passwords are never generated or stored.** The operator supplies each and keeps it in a password
    manager; reruns need the same values. Generated identity state (`acme.json`, ACME account) lives under
-   `artifacts/` and is irreplaceable.
+   `artifacts/` and is irreplaceable. The replaceable SFTP client key is the
+   exception: Configure generates ed25519 under project `credentials/kopia`,
+   excluded from Git, media and primary backups. Rebuilds can authorize a new key;
+   the repository password still must be retained externally.
 8. **State is either reconstructible or irreplaceable.** A rerun rebuilds the Keycloak realm, seeded users and
    routing. Gitea repositories, user-created LDAP entries and `acme.json` need
    encrypted native backups and tested restoration. Primary backups contain only
@@ -71,3 +75,11 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     state even after coordinator death. Explicit cleanup removes that hold and
     decrypted staging without guessing whether
     partial state is safe to start. There is no automatic cross-image migration.
+16. **SFTP onboarding fails closed before stack deployment.** Configure scans all
+    offered host keys, requires independently verified fingerprints (or explicit
+    verified pin overrides), persists trust and rejects changes on reruns, even
+    with an override. Authenticate, test write/read/delete and query free space
+    when the server supports it. Only Kopia 0.23.1's exact missing-repository
+    diagnostic on an unused destination permits operator-confirmed creation.
+    Wrong passwords/keys and ambiguous errors never create. Runtime only connects;
+    its redacted structured failure is surfaced by the deployment role.
