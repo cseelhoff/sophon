@@ -98,6 +98,90 @@ configured seed rows as well as irreproducible application state; these are
 coherent database recovery inputs, never a copy of the running database files.
 Application-generated identity values remain encrypted by Kopia.
 
+## Optional weekly coarse layer
+
+**Last resort only.** Keep native exports/selective files and the explicit v3
+group restore as the routine recovery path. This optional cold layer includes
+raw databases, caches, reconstructible state and secrets found in named volumes.
+It is not a VM/system backup and does not include unrelated host bind mounts.
+
+It is off by default. As `core`, find the actual volume directory:
+
+```sh
+podman info --format '{{.Store.VolumePath}}'
+```
+
+Choose a dedicated empty working directory on that same filesystem, outside
+Podman's volumes tree. For example, with the usual CoreOS home storage:
+
+```sh
+export SOPHON_KOPIA_COARSE_ENABLED=true
+export SOPHON_KOPIA_COARSE_VOLUMES_DIR=/var/home/core/.local/share/containers/storage/volumes
+export SOPHON_KOPIA_COARSE_WORK_DIR=/var/home/core/sophon-coarse
+install -d -m 700 "$SOPHON_KOPIA_COARSE_WORK_DIR"
+sophon-deploy
+```
+
+Use your actual paths, not these examples when Podman storage was relocated.
+Create the empty directory as `core`; its parent must be writable by the
+rootless owner. First use refuses nonempty/unowned working storage. Mount
+identity checks reject recursive/writable-source aliases, and the selected volume
+root must actually contain the shared coordination volume. No additional disk,
+storage backend or filesystem snapshot mechanism is required.
+
+The separate `kopia-coarse` service uses the primary image and the same three file
+capabilities. Its unpublished isolated proxy permits **list, stop, start only**:
+no inspect, exec, archive, image, create/delete or volume APIs. Pod infrastructure
+and the coarse worker/proxy stay alive; all other running workloads are paused.
+No application dependency labels/order are required. Apps must tolerate ordinary
+restart/reconnection, as on a normal reboot.
+
+Each attempt records original running IDs before stopping, clones the complete
+read-only volume tree with `cp --archive --reflink=always`, syncs it, restarts
+those IDs in any order, and releases coordination before uploading. A failure
+to reflink skips with an error; it never falls back to copying. Originally
+stopped containers stay stopped. Deleted IDs are reported, never guessed by name.
+Do not run Configure, deploy/remove workloads, or let another host supervisor
+mutate these volumes during the brief cold-capture window.
+
+The first scheduled attempt is immediate, then every 604800 seconds (seven days).
+The durable due time survives restarts; it is not a particular weekday/time.
+Source `backup@sophon:/sophon-coarse` (with your configured client identity)
+retains latest four with hourly/daily/weekly/monthly/annual extras disabled.
+Primary source/retention are unchanged.
+
+```sh
+podman logs kopia-coarse
+podman exec kopia-coarse cat /coarse/last-run.json
+podman exec kopia-coarse python3 /app/coarse.py run
+podman exec kopia-coarse python3 /app/coarse.py recover
+```
+
+Recovery runs before any repository connection on startup. A lost stop response
+is settled before restart. A pending journal keeps a shared `coarse.json` hold:
+primary backups and operator restores refuse to race it. Incomplete restart
+recovery exits so the container restart policy retries; other scheduled failures
+are reported and wait until the next weekly attempt or a manual run. Failed
+uploads retain one immutable ready copy; retry uploads it without another pause.
+Never disable/prune the service or remove working storage while recovery is
+pending; re-enable with the same paths if it was removed accidentally.
+
+Inspect coarse snapshots only into isolated working storage:
+
+```sh
+podman exec kopia-coarse kopia snapshot list backup@sophon:/sophon-coarse
+podman exec kopia-coarse kopia snapshot restore SNAPSHOT_ID /coarse/inspection \
+  --no-skip-owners --no-skip-permissions --no-ignore-permission-errors
+```
+
+Recovery from this layer is explicit, offline/operator-controlled and requires
+matching application images and validation. It is not accepted by v3 group
+restore or called by Configure. Prefer rebuilding from IaC, then restoring chosen
+application `_data` contents only. **Do not blindly overwrite Podman volume
+metadata, Portainer state or Kopia config/cache/coordination volumes**: rebuild
+those, especially stale copied stop/restore/coarse holds. Retain external inputs
+and repository credentials separately.
+
 ## v3 declarations
 
 Only flat v3 split labels are accepted. Legacy v1/v2 recipes, archives, native

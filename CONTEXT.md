@@ -38,6 +38,11 @@ irreproducible paths are cloned and native dumps are captured. Writers resume be
 **Primary snapshot**: real irreproducible files, native dumps and a v3 manifest
 with workload images and Sophon source version; not a system or Portainer backup.
 
+**Coarse snapshot**: an optional weekly, last-resort cold copy of the rootless
+Podman volumes tree. Applications pause only for a strict reflink clone, then
+their previously running IDs restart without dependency ordering before upload.
+Working storage is a separate host bind outside the copied tree.
+
 **Engine proxy**: the unpublished allowlisted socket proxy used by the backup
 container, separate from Portainer. The primary collector has named read-only
 volume mounts, not the engine socket or whole volumes directory.

@@ -83,3 +83,14 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     diagnostic on an unused destination permits operator-confirmed creation.
     Wrong passwords/keys and ambiguous errors never create. Runtime only connects;
     its redacted structured failure is surfaced by the deployment role.
+17. **The optional coarse layer is last-resort only.** A separate service in the
+    same stack/image runs weekly, with a private list/stop/start-only proxy.
+    Record running application IDs durably, stop them, strictly reflink-clone the
+    entire read-only volumes tree, then restart those IDs in any order before
+    upload. Previously stopped containers stay stopped; network/pod infrastructure
+    and the coarse controller/proxy stay up. Native application retries provide
+    readiness; no dependency contract is added. Reflink failure skips with an
+    error, never a plain copy. Dedicated same-filesystem host working storage
+    outside the source holds journal/staging/config/cache. Startup recovers stops
+    before accessing SFTP; a shared hold prevents primary backups/restores racing
+    pending recovery. A separate Kopia source retains the latest four.
