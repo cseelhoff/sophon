@@ -32,6 +32,11 @@ def workloads(rows):
             and (row.get("Labels") or {}).get(CONTROL) not in ("worker", "proxy")}
 
 
+def configuration_running(rows):
+    return any(row["State"] == "running" and
+               (row.get("Labels") or {}).get("sophon.deployment") == "configure" for row in rows.values())
+
+
 def check_idle(source):
     if any((source / name).exists() or (source / name).is_symlink() for name in ("journal.json", "restore.json")):
         backup.fail("Finish primary backup/restore recovery before a coarse run")
@@ -99,6 +104,8 @@ def ensure_stopped(api):
 def capture(api, volumes, work, source, version):
     check_idle(source)
     rows = inventory(api)
+    if configuration_running(rows):
+        backup.fail("Configure is in progress; defer coarse capture until its runner exits")
     controls = [(row.get("Labels") or {}).get(CONTROL) for row in rows.values() if row["State"] == "running"]
     if controls.count("worker") != 1 or controls.count("proxy") != 1:
         backup.fail("Coarse capture requires exactly one running worker and restricted control proxy")
@@ -235,9 +242,14 @@ def main():
             return 0
         run(environment, recover_only=True)
         schedule = Path(environment.get("COARSE_ROOT", "/coarse")) / "schedule.json"
+        api = backup.engine_api(runtime.required(environment, "ENGINE_URL"))
         while True:
             due = json.loads(schedule.read_text())["due"] if schedule.exists() else 0
             if time.time() >= due:
+                if configuration_running(inventory(api)):
+                    print("Coarse backup deferred while Configure is running", flush=True)
+                    time.sleep(30)
+                    continue
                 backup.write_json(schedule, {"due": time.time() + WEEK})
                 try:
                     run(environment)

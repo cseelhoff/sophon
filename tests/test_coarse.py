@@ -14,6 +14,19 @@ import coarse
 
 
 class CoarseTests(unittest.TestCase):
+    def test_configure_in_progress_is_refused_before_any_container_stop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            volumes, work, source, rows, events, api, command = self.fixture(Path(temporary))
+            rows["7" * 64] = {
+                "Id": "7" * 64, "Names": ["configure-runner"], "State": "running", "ExitCode": 0,
+                "IsInfra": False, "Labels": {"sophon.deployment": "configure"},
+                "Image": "sophon:latest", "ImageID": "b" * 64}
+            with patch.object(coarse.subprocess, "run", side_effect=command):
+                with self.assertRaisesRegex(RuntimeError, "Configure"):
+                    coarse.capture(api, volumes, work, source, "fixture")
+            self.assertEqual(events, [])
+            self.assertFalse((work / "journal.json").exists())
+
     def test_opt_in_rejects_overlapping_or_root_host_paths(self):
         from test_console import service_values
         import deployment

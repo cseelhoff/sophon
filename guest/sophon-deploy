@@ -51,6 +51,7 @@ fi
 
 args=(
     --remote=false run --rm --network host --pull never
+    --label sophon.deployment=configure
     -v /var/lib/sophon/project:/workspace:Z --workdir /workspace
     --env SOPHON_DEPLOYMENT_STEP=configure
 )
