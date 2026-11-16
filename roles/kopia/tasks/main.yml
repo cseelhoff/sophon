@@ -40,19 +40,62 @@
     portainer_stack_deploy_timeout: 300
   no_log: true
 
-- name: Wait for the repository-connected backup service
-  ansible.builtin.uri:
-    url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_stack_endpoint_id }}/docker/containers/kopia/json"
-    headers:
-      Authorization: "Bearer {{ portainer_stack_auth_token }}"
-    validate_certs: false
-    status_code: [200, 404]
-  register: kopia_health
-  until: kopia_health.status == 200 and kopia_health.json.State.Health.Status | default('starting') == 'healthy'
-  retries: 60
-  delay: 5
-  no_log: true
-  changed_when: false
+- name: Check backup startup and report redacted failures
+  block:
+    - name: Wait for the repository-connected backup service
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_stack_endpoint_id }}/docker/containers/kopia/json"
+        headers:
+          Authorization: "Bearer {{ portainer_stack_auth_token }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: kopia_health
+      until: >-
+        kopia_health.status == 200 and
+        kopia_health.json.State.Health.Status | default('starting') in ['healthy', 'unhealthy']
+      failed_when: >-
+        kopia_health.status == 200 and
+        kopia_health.json.State.Health.Status | default('starting') == 'unhealthy'
+      retries: 60
+      delay: 5
+      no_log: true
+      changed_when: false
+  rescue:
+    - name: Read startup logs privately for a structured diagnostic
+      ansible.builtin.uri:
+        url: "{{ infravm_portainer_url }}/api/endpoints/{{ portainer_stack_endpoint_id }}/docker/containers/kopia/logs?stdout=true&stderr=true&tail=50"
+        headers:
+          Authorization: "Bearer {{ portainer_stack_auth_token }}"
+        validate_certs: false
+        return_content: true
+      register: kopia_startup_logs
+      failed_when: false
+      changed_when: false
+      no_log: true
+    - name: Extract only the structured startup diagnostic
+      ansible.builtin.set_fact:
+        kopia_diagnostics: "{{ kopia_startup_logs.content | default('') | regex_findall('KOPIA_STARTUP_ERROR_JSON=(\\{[^\\r\\n]*\\})') }}"
+      no_log: true
+    - name: Select the reported startup failure
+      ansible.builtin.set_fact:
+        kopia_startup_error: >-
+          {{ (kopia_diagnostics | last | from_json).message if kopia_diagnostics | length > 0
+             else 'No structured startup diagnostic available; log API status: ' ~
+                  (kopia_startup_logs.status | default('unavailable') | string) ~ '. Inspect podman logs kopia on the console.' }}
+      no_log: true
+    - name: Redact supplied secrets from the diagnostic
+      ansible.builtin.set_fact:
+        kopia_startup_error: "{{ kopia_startup_error | replace(item, '[redacted]') }}"
+      loop:
+        - "{{ kopia_password }}"
+        - "{{ kopia_server_password }}"
+        - "{{ kopia_sftp_private_key_b64 }}"
+        - "{{ kopia_sftp_private_key_b64 | b64decode | trim }}"
+      when: item | length > 0
+      no_log: true
+    - name: Fail with the redacted Kopia startup reason
+      ansible.builtin.fail:
+        msg: "Kopia deployment failed: {{ kopia_startup_error }}"
 
 - name: Report the management-independent backup command
   ansible.builtin.debug:

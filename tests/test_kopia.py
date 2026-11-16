@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import struct
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,15 @@ from test_console import service_values
 
 
 class KopiaRoleTests(unittest.TestCase):
+    def test_configure_refuses_to_deploy_without_console_preflight(self):
+        guard = yaml.safe_load((ROOT / "4-configure.yml").read_text())[0]["pre_tasks"][0]
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+                os.environ, {"SOPHON_DEPLOYMENT_STEP": "configure", "SOPHON_PROXMOX_PASSWORD": "",
+                             "SOPHON_VCENTER_PASSWORD": "", "SOPHON_KOPIA_PREFLIGHT_COMPLETE": ""}):
+            result = run_fixture(Path(temporary), [guard])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("complete SFTP preflight before stack deployment", result.stdout + result.stderr)
+
     def test_collector_regressions(self):
         result = subprocess.run([sys.executable, str(ROOT / "tests/backup_checks.py")],
                                 capture_output=True, text=True, timeout=60)
@@ -60,6 +70,7 @@ class KopiaRoleTests(unittest.TestCase):
 
     def test_deployment_never_creates_a_collector_key_and_mounts_only_declared_volumes(self):
         requests, stack = [], None
+        unhealthy = False
         test = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -69,8 +80,16 @@ class KopiaRoleTests(unittest.TestCase):
                     self.respond([stack] if stack else [])
                 elif self.path == "/api/endpoints":
                     self.respond([{"Id": 1, "Type": 1}])
+                elif "/containers/kopia/logs?" in self.path:
+                    payload = ('KOPIA_STARTUP_ERROR_JSON=' + json.dumps({
+                        "message": "invalid repository password FIXTURE_SECRET_VALUE fixture-private-key"}) + "\n").encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/vnd.docker.raw-stream")
+                    self.end_headers()
+                    self.wfile.write(struct.pack(">BxxxI", 2, len(payload)) + payload)
                 elif self.path.endswith("/containers/kopia/json"):
-                    self.respond({"State": {"Health": {"Status": "healthy"}}})
+                    self.respond({"RestartCount": 1, "State": {"Health": {
+                        "Status": "unhealthy" if unhealthy else "healthy"}}})
                 else:
                     self.send_error(404)
 
@@ -153,6 +172,14 @@ class KopiaRoleTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
                 self.assertFalse(any("/tokens" in path or "/api/users" in path for _, path in requests))
+                unhealthy = True
+                with patch.dict(os.environ, {"ANSIBLE_ROLES_PATH": str(ROOT / "roles")}):
+                    result = run_fixture(directory, [{"ansible.builtin.include_role": {
+                        "name": str(ROOT / "roles/kopia")}, "vars": variables}])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid repository password", result.stdout + result.stderr)
+                self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
+                self.assertNotIn("fixture-private-key", result.stdout + result.stderr)
             finally:
                 server.shutdown()
                 worker.join()
