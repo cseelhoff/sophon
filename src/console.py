@@ -177,6 +177,13 @@ def main(argv=None):
         values = backup_destination.prepare(values, root=deployment.ROOT,
                                             confirm=None if options.run else ask_yes_no)
         values = deployment.stage_certificates(values)
+    except KeyboardInterrupt:
+        print('\nConfigure cancelled; no service stacks were deployed. Retained SFTP state is available for retry.',
+              file=sys.stderr)
+        return 130
+    except EOFError:
+        print('Configure preflight ended before completion; no service stacks were deployed.', file=sys.stderr)
+        return 2
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f'Configure preflight failed: {error}', file=sys.stderr)
         return 2

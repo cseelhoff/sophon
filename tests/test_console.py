@@ -50,6 +50,17 @@ class ConsoleTests(unittest.TestCase):
             certificates.assert_not_called()
             self.assertIn('SFTP authentication failed', error.getvalue())
 
+    def test_backup_pairing_interruption_never_dispatches_stacks(self):
+        for failure, expected in ((KeyboardInterrupt(), 130), (EOFError(), 2)):
+            with self.subTest(failure=type(failure).__name__), patch.dict(
+                    os.environ, service_values(), clear=True), \
+                    patch('console.deployment.load_site_settings', return_value={}), \
+                    patch('console.backup_destination.prepare', side_effect=failure), \
+                    patch('console.deployment.main') as run, contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(console.main(['--run']), expected)
+                run.assert_not_called()
+                self.assertIn('no service stacks were deployed', error.getvalue())
+
     def test_run_dispatch_and_hidden_input(self):
         environment = service_values()
         with patch.dict(os.environ, environment, clear=True), \

@@ -34,7 +34,7 @@ bash sophon-provision.sh test
 Final output:
 
 ```text
-Ran 150 tests in 97.200s
+Ran 151 tests in 86.021s
 OK (skipped=3)
 Deployment step checks passed
 ```
@@ -44,7 +44,8 @@ changed host keys despite overrides, exact missing-repository classification,
 ambiguous/wrong-password failures, a path changing during confirmation, unsupported
 space reporting versus actual permission/authentication failures, RSA-4096
 overrides exceeding the old 4096-character input ceiling, console/deployment
-ordering, and explicit refusal of Configure without preflight.
+ordering, cancellation/EOF without stack dispatch, and explicit refusal of
+Configure without preflight.
 
 The role HTTP fixture supplies Docker-framed structured errors containing
 synthetic secrets. Its failing deployment exposes `invalid repository password`
@@ -90,7 +91,7 @@ cat "$temp/version"
 ```
 
 ```text
-source-sha256:7a0607d03231604b7e838076fe686c896e9b7f85056327a256d4a937beeb4a4c
+source-sha256:22bce2346303a34a82ce386db6cea0db89ec1703b83da88a7a766031d5a3fb58
 Offline M3 pairing/console/guard/diagnostic-role byte comparisons: PASS
 ```
 
