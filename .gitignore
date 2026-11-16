@@ -7,3 +7,4 @@ __pycache__/
 .bundle-test-*/
 .prepare-test-*/
 .installer-fixture-*/
+/credentials/

@@ -34,6 +34,33 @@ def service_values():
 
 
 class ConsoleTests(unittest.TestCase):
+    def setUp(self):
+        preflight = patch('console.backup_destination.prepare', side_effect=lambda values, **kwargs: values)
+        preflight.start()
+        self.addCleanup(preflight.stop)
+
+    def test_backup_preflight_failure_blocks_deployment_and_certificate_staging(self):
+        with patch.dict(os.environ, service_values(), clear=True), \
+                patch('console.deployment.load_site_settings', return_value={}), \
+                patch('console.backup_destination.prepare', side_effect=RuntimeError('SFTP authentication failed')), \
+                patch('console.deployment.stage_certificates') as certificates, \
+                patch('console.deployment.main') as run, contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(console.main(['--run']), 2)
+            run.assert_not_called()
+            certificates.assert_not_called()
+            self.assertIn('SFTP authentication failed', error.getvalue())
+
+    def test_backup_pairing_interruption_never_dispatches_stacks(self):
+        for failure, expected in ((KeyboardInterrupt(), 130), (EOFError(), 2)):
+            with self.subTest(failure=type(failure).__name__), patch.dict(
+                    os.environ, service_values(), clear=True), \
+                    patch('console.deployment.load_site_settings', return_value={}), \
+                    patch('console.backup_destination.prepare', side_effect=failure), \
+                    patch('console.deployment.main') as run, contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(console.main(['--run']), expected)
+                run.assert_not_called()
+                self.assertIn('no service stacks were deployed', error.getvalue())
+
     def test_run_dispatch_and_hidden_input(self):
         environment = service_values()
         with patch.dict(os.environ, environment, clear=True), \
@@ -175,12 +202,10 @@ class ConsoleTests(unittest.TestCase):
                                       if field[2] == 'password'}
         code, prompts, hidden, output = self.wizard(
             values, ['y', 'y'] + [''] * 7,
-            ['same-password-123', 'same-password-123', 'token', '', 'existing-repository-password',
-             base64.b64encode(b'fixture-private-key').decode(), base64.b64encode(b'fixture-known-hosts').decode()])
+            ['same-password-123', 'same-password-123', 'token', '', 'existing-repository-password'])
         self.assertEqual(code, 0, output)
         asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]
-        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_KOPIA_PASSWORD',
-                                 'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'])
+        self.assertEqual(asked, ['SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_KOPIA_PASSWORD'])
 
     def test_secret_prompt_shows_asterisks_and_handles_backspace(self):
         pid, terminal = pty.fork()
@@ -238,7 +263,10 @@ class ConsoleTests(unittest.TestCase):
                                SOPHON_PORTAINER_SETUP_TOKEN='ONE_TIME_SETUP_TOKEN',
                                PATH=str(directory) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(
-                [sys.executable, str(ROOT / 'src/console.py'), '--run'],
+                [sys.executable, '-c',
+                 f'import sys;sys.path.insert(0,{str(ROOT / "src")!r});import console;'
+                 'console.backup_destination.prepare=lambda values,**kwargs:values;'
+                 'sys.exit(console.main(["--run"]))'],
                 env=environment, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 7, result.stderr)
             forwarded = json.loads(received.read_text())
@@ -246,6 +274,7 @@ class ConsoleTests(unittest.TestCase):
             self.assertEqual(forwarded['SOPHON_INFRAVM_IP'], '192.0.2.3')
             self.assertEqual(forwarded['SOPHON_DEPLOYMENT_STEP'], 'configure')
             self.assertEqual(forwarded['SOPHON_PORTAINER_SETUP_TOKEN'], 'ONE_TIME_SETUP_TOKEN')
+            self.assertEqual(forwarded['SOPHON_KOPIA_PREFLIGHT_COMPLETE'], 'true')
             self.assertNotIn('ONE_TIME_SETUP_TOKEN', result.stdout + result.stderr)
 
 

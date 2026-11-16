@@ -349,6 +349,7 @@ class CertificateTests(unittest.TestCase):
 
         with patch.dict(os.environ, settings, clear=False), \
                 patch('console.deployment.ROOT', root), \
+                patch('console.backup_destination.prepare', side_effect=lambda values, **kwargs: values), \
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main', return_value=0) as run, \
                 patch('console.sys.stdin.isatty', return_value=True), \
@@ -375,6 +376,7 @@ class CertificateTests(unittest.TestCase):
 
         with patch.dict(os.environ, settings, clear=False), \
                 patch('console.deployment.ROOT', root), \
+                patch('console.backup_destination.prepare', side_effect=lambda values, **kwargs: values), \
                 patch('console.deployment.load_site_settings', return_value={}), \
                 patch('console.deployment.main', return_value=0), \
                 patch('console.sys.stdin.isatty', return_value=True), \

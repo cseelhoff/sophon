@@ -11,7 +11,8 @@
           - lookup('env', 'SOPHON_DEPLOYMENT_STEP') == 'configure'
           - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
           - lookup('env', 'SOPHON_VCENTER_PASSWORD') == ''
-        fail_msg: "Run sophon-deploy on the installed InfraVM. Provisioning is a separate laptop step."
+          - lookup('env', 'SOPHON_KOPIA_PREFLIGHT_COMPLETE') == 'true'
+        fail_msg: "Run sophon-deploy on the installed InfraVM to complete SFTP preflight before stack deployment. Provisioning is a separate laptop step."
       tags: [always]
     - name: Validate service credentials
       ansible.builtin.assert:

@@ -32,6 +32,14 @@ def kopia(environment, *arguments, timeout=180):
     return result.stdout
 
 
+def startup_diagnostic(error, environment):
+    detail = str(error)
+    for name, value in environment.items():
+        if value and any(word in name for word in ("PASSWORD", "SECRET", "TOKEN", "PRIVATE_KEY")):
+            detail = detail.replace(value, "[redacted]")
+    return "KOPIA_STARTUP_ERROR_JSON=" + json.dumps({"message": detail})
+
+
 def health(environment):
     authorization = base64.b64encode((required(environment, "KOPIA_SERVER_USERNAME") + ":" +
                                      required(environment, "KOPIA_SERVER_PASSWORD")).encode()).decode()
@@ -144,5 +152,5 @@ if __name__ == "__main__":
         else:
             raise ValueError("Expected no arguments or health")
     except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as error:
-        print(str(error), file=sys.stderr)
+        print(startup_diagnostic(error, dict(os.environ)), file=sys.stderr)
         sys.exit(1)

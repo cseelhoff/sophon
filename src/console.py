@@ -5,10 +5,12 @@ import getpass
 import os
 from pathlib import Path
 import select
+import subprocess
 import sys
 import termios
 
 import deployment
+import backup_destination
 
 NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_PORTAINER_LICENSE_KEY', 'SOPHON_KOPIA_PASSWORD',
               'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'}
@@ -123,7 +125,8 @@ def main(argv=None):
     if not options.run:
         if not sys.stdin.isatty():
             parser.error('Interactive setup requires a terminal; use --run with exported settings for automation.')
-        print('Sophon Step 4: configure services on this InfraVM. Inputs are not saved.')
+        print('Sophon Step 4: configure services on this InfraVM. Service passwords are not saved.')
+        print('SFTP client identity and confirmed host pins are kept under project credentials/kopia.')
         print('Settings already exported in the environment are used; Enter keeps a displayed default.')
         fields = deployment.step_fields('configure')
         try:
@@ -147,6 +150,8 @@ def main(argv=None):
                     continue
                 if name in skipped:
                     continue
+                if name in (*backup_destination.MATERIAL, 'SOPHON_KOPIA_CREATE_REPOSITORY'):
+                    continue
                 if kind == 'password' and value:
                     # Supplied by the environment or the shared password; keep it without asking again.
                     continue
@@ -169,12 +174,22 @@ def main(argv=None):
             print(f'Configuration rejected: {error}', file=sys.stderr)
             return 2
     try:
+        values = backup_destination.prepare(values, root=deployment.ROOT,
+                                            confirm=None if options.run else ask_yes_no)
         values = deployment.stage_certificates(values)
-    except (OSError, ValueError) as error:
-        print(f'Certificate import failed: {error}', file=sys.stderr)
+    except KeyboardInterrupt:
+        print('\nConfigure cancelled; no service stacks were deployed. Retained SFTP state is available for retry.',
+              file=sys.stderr)
+        return 130
+    except EOFError:
+        print('Configure preflight ended before completion; no service stacks were deployed.', file=sys.stderr)
+        return 2
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f'Configure preflight failed: {error}', file=sys.stderr)
         return 2
     os.environ.pop('SOPHON_ACME_FILE', None)
     os.environ.update(values)
+    os.environ['SOPHON_KOPIA_PREFLIGHT_COMPLETE'] = 'true'
     extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
     return deployment.main(arguments + ['--', '4-configure.yml', *extra])
 

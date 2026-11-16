@@ -34,6 +34,16 @@ These surfaces explain deployment and backup failures:
    list/inspect/exec/stop/start on the existing rootless Podman socket. Native dumps
    stream stdout, not archives. Portainer is absent from this path.
 
+Before deploying any stacks, the console runner pairs/preflights the explicitly
+declared SFTP destination directly. Prepare includes Kopia 0.23.1, OpenSSH client
+tools and pinned Paramiko in the runner. A replaceable ed25519 client key and
+confirmed host pins live under project `credentials/kopia` (mode 0700, files
+0600), outside source-volume backups, Git and reusable media. Fingerprints must
+be verified out of band; changed key sets fail closed. Only an exact native
+missing-repository result plus confirmation can create an empty repository.
+Startup itself never creates. Deployment reads only the runtime's structured
+redacted failure on an unhealthy/restarting service, not raw secret-bearing logs.
+
 ## Artifacts
 
 Step 1 writes everything into `artifacts/` and is cached: with a complete cache it touches no network.

@@ -13,7 +13,8 @@
 
 **InfraVM**: the single Fedora CoreOS VM that runs Portainer, the runner and every service as rootless Podman containers.
 
-**Runner**: the Ansible container on InfraVM. It has no hypervisor access, SSH or host privileges.
+**Runner**: the Ansible container on InfraVM. It deploys through Portainer and
+preflights the declared SFTP destination; it has no hypervisor/guest SSH or host privileges.
 
 **Installer ISO**: `sophon-installer.iso`; the stock Fedora CoreOS live ISO with a small Ignition config baked in (`coreos-installer iso customize`) that runs the unattended install. Reusable, secret-free.
 

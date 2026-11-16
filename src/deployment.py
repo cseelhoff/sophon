@@ -62,15 +62,16 @@ FIELDS = {
     'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD': ('LDAP seed-user password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD': ('LDAP seed-admin password', 'Access', 'password', '', True),
     'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password (empty uses the Portainer password)', 'Access', 'password', '', False),
-    'SOPHON_KOPIA_PASSWORD': ('Existing repository encryption password', 'Backup', 'password', '', True),
+    'SOPHON_KOPIA_PASSWORD': ('Repository encryption password (new or existing; retain in your password manager)', 'Backup', 'password', '', True),
     'SOPHON_KOPIA_SERVER_USERNAME': ('Kopia UI username', 'Backup', 'text', 'admin', True),
     'SOPHON_KOPIA_SERVER_PASSWORD': ('Kopia UI password', 'Backup', 'password', '', True),
     'SOPHON_KOPIA_SFTP_HOST': ('SFTP host', 'Backup', 'host', '', True),
     'SOPHON_KOPIA_SFTP_PORT': ('SFTP port', 'Backup', 'number', '22', True),
     'SOPHON_KOPIA_SFTP_USERNAME': ('SFTP username', 'Backup', 'text', '', True),
     'SOPHON_KOPIA_SFTP_PATH': ('Absolute SFTP repository path', 'Backup', 'text', '', True),
-    'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64': ('Base64 SSH private key', 'Backup', 'password', '', True),
-    'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64': ('Base64 verified SSH known_hosts', 'Backup', 'password', '', True),
+    'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64': ('Imported base64 SSH private key (optional override)', 'Backup', 'password', '', False),
+    'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64': ('Imported base64 verified SSH known_hosts (optional override)', 'Backup', 'password', '', False),
+    'SOPHON_KOPIA_CREATE_REPOSITORY': ('Confirm creation only if no repository exists', 'Backup', 'choice', 'false', False),
     'SOPHON_KOPIA_CLIENT_USERNAME': ('Backup source username', 'Backup', 'text', 'backup', True),
     'SOPHON_KOPIA_CLIENT_HOSTNAME': ('Backup source hostname', 'Backup', 'text', 'sophon', True),
     'SOPHON_KOPIA_EXTRA_VOLUMES': ('Additional site workload volumes (JSON array)', 'Backup', 'text', '[]', False),
@@ -82,7 +83,8 @@ LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), '
           'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
-           'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true')}
+           'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true'),
+           'SOPHON_KOPIA_CREATE_REPOSITORY': ('false', 'true')}
 PROVISION_GROUPS = ('Hypervisor', 'Proxmox', 'vCenter', 'Hyper-V', 'Network', 'VM')
 SITE_FIELDS = tuple(name for name, field in FIELDS.items()
                     if field[2] not in ('password', 'path') and field[1] not in (*PROVISION_GROUPS, 'Backup') and name != 'SOPHON_DOMAIN')
@@ -111,9 +113,10 @@ def validate_settings(current, changes, step='provision'):
     definitions = step_fields(step)
     if not isinstance(changes, dict) or not changes.keys() <= definitions.keys():
         return None, 'Unexpected deployment setting.'
-    if any(not isinstance(value, str) or len(value) > 4096 or any(ord(character) < 32 for character in value)
-           for value in changes.values()):
-        return None, 'Settings must be single-line strings of at most 4096 characters.'
+    for name, value in (current | changes).items():
+        limit = 16384 if name in ('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64') else 4096
+        if not isinstance(value, str) or len(value) > limit or any(ord(character) < 32 for character in value):
+            return None, f'{name} must be a single-line string of at most {limit} characters.'
     values = current | changes
     provider = values.get('SOPHON_HYPERVISOR', 'proxmox').strip()
     if provider not in CHOICES['SOPHON_HYPERVISOR']:
@@ -239,6 +242,7 @@ def main(argv=None):
     allowed = set(step_fields(options.step))
     if options.step == 'configure':
         allowed.add('SOPHON_PORTAINER_SETUP_TOKEN')
+        allowed.add('SOPHON_KOPIA_PREFLIGHT_COMPLETE')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in allowed:
             os.environ.pop(name, None)
