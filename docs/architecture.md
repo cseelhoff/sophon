@@ -95,6 +95,8 @@ directory read-only; its dedicated host working bind is physically disjoint on
 the same filesystem. Its small shared coordination mount is used only for the
 normal backup lock/hold, not staging. Application IDs are journaled before stops;
 strict reflinks complete and sync before those IDs restart, without ordering.
+Scheduled capture waits for labeled Configure runners to exit before its first
+stop; direct captures refuse while Configure is active.
 Upload follows restart and lock release. Its `/sophon-coarse` source keeps four,
 separately from primary retention. No filesystem snapshots or host units are added.
 This layer includes reconstructible/raw database state intentionally as a

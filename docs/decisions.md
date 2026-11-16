@@ -94,3 +94,7 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     outside the source holds journal/staging/config/cache. Startup recovers stops
     before accessing SFTP; a shared hold prevents primary backups/restores racing
     pending recovery. A separate Kopia source retains the latest four.
+    Configure runners carry `sophon.deployment=configure`: scheduled capture
+    waits for their exit without advancing the due time, and manual capture
+    refuses before any stop. Operators must still avoid concurrent engine
+    mutations once capture has begun.

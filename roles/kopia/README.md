@@ -145,6 +145,13 @@ Do not run Configure, deploy/remove workloads, or let another host supervisor
 mutate these volumes during the brief cold-capture window.
 
 The first scheduled attempt is immediate, then every 604800 seconds (seven days).
+The supported `sophon-deploy` runner carries `sophon.deployment=configure`.
+Scheduled capture waits for running Configure runners, checking every 30 seconds
+without advancing the weekly due time; manual capture refuses before stopping
+anything. Direct container invocations of Configure must carry the same label.
+This protects first enablement, not concurrent engine changes after capture begins.
+See the [fresh dev redeployment evidence](../../docs/kopia-redeploy.md) for the
+activation regression and native overlap checks.
 The durable due time survives restarts; it is not a particular weekday/time.
 Source `backup@sophon:/sophon-coarse` (with your configured client identity)
 retains latest four with hourly/daily/weekly/monthly/annual extras disabled.

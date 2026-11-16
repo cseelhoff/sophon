@@ -150,7 +150,9 @@ repositories never create again, even if that confirmation remains exported.
 The old `SOPHON_KOPIA_INIT_REPOSITORY` flag is not supported.
 
 Coarse copies use a separate Kopia source and keep four snapshots. Enabling starts
-one run immediately, then schedules attempts every seven days. Unsupported
+one run immediately after the labeled Configure runner exits, then schedules
+attempts every seven days. While Configure is running, the service defers without
+advancing its due time. Unsupported
 reflinks, cross-filesystem staging and incomplete restart recovery fail explicitly;
 there is no plain-copy fallback. See the [last-resort procedure](../roles/kopia/README.md#optional-weekly-coarse-layer).
 
