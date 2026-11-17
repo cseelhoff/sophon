@@ -17,7 +17,7 @@ from test_console import service_values
 
 
 class KopiaRoleTests(unittest.TestCase):
-    def test_optional_coarse_stack_has_isolated_control_and_readonly_volume_tree(self):
+    def test_optional_coarse_stack_has_no_engine_socket_and_readonly_btrfs_source(self):
         variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
         variables.update(yaml.safe_load((ROOT / "roles/kopia/defaults/main.yml").read_text()))
         variables.update(domain_name="dev.invalid", sophon_version="fixture", kopia_volume_names=[],
@@ -30,19 +30,22 @@ class KopiaRoleTests(unittest.TestCase):
                     "src": str(ROOT / "roles/kopia/templates/docker-compose.yml.j2"),
                     "dest": str(directory / "compose.yml")}, "vars": variables}])
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                services = yaml.safe_load((directory / "compose.yml").read_text())["services"]
+                compose = yaml.safe_load((directory / "compose.yml").read_text())
+                services = compose["services"]
+                self.assertNotIn("coarse-proxy", services)
+                self.assertNotIn("coarse-engine", compose.get("networks", {}))
                 if not enabled:
                     self.assertNotIn("coarse", services)
-                    self.assertNotIn("coarse-proxy", services)
                     continue
-                worker, proxy = services["coarse"], services["coarse-proxy"]
+                worker = services["coarse"]
                 self.assertEqual(worker["image"], services["kopia"]["image"])
-                self.assertNotIn("backup-engine", worker["networks"])
-                self.assertEqual(proxy["networks"], ["coarse-engine"])
-                self.assertFalse(proxy.get("ports"))
+                self.assertEqual(worker["networks"], ["proxy"])
+                self.assertEqual(worker["cap_add"], ["DAC_OVERRIDE"])
+                self.assertNotIn("ENGINE_URL", worker["environment"])
                 self.assertEqual(worker["volumes"][0], {
                     "type": "bind", "source": "/srv/podman/volumes", "target": "/volumes", "read_only": True})
                 self.assertEqual(worker["volumes"][1]["source"], "/srv/coarse")
+                self.assertEqual(worker["volumes"][2], "source-v3:/source:ro")
                 self.assertFalse(any("podman.sock" in str(mount) for mount in worker["volumes"]))
 
     def test_configure_refuses_to_deploy_without_console_preflight(self):

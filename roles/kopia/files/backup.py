@@ -457,8 +457,6 @@ def select_ini(path, keys):
 
 
 def collect(api, volumes, root, version):
-    if (root / "coarse.json").exists() or (root / "coarse.json").is_symlink():
-        fail("Coarse backup recovery is pending; resume previously running containers before backing up")
     if (root / "restore.json").exists() or (root / "restore.json").is_symlink():
         fail("Operator restoration is pending; resume or explicitly clean up its recovery state before backing up")
     recover(api, root)

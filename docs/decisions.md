@@ -86,18 +86,15 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     diagnostic on an unused destination permits operator-confirmed creation.
     Wrong passwords/keys and ambiguous errors never create. Runtime only connects;
     its redacted structured failure is surfaced by the deployment role.
-17. **The optional coarse layer is last-resort only.** A separate service in the
-    same stack/image runs weekly, with a private list/stop/start-only proxy.
-    Record running application IDs durably, stop them, strictly reflink-clone the
-    entire read-only volumes tree, then restart those IDs in any order before
-    upload. Previously stopped containers stay stopped; network/pod infrastructure
-    and the coarse controller/proxy stay up. Native application retries provide
-    readiness; no dependency contract is added. Reflink failure skips with an
-    error, never a plain copy. Dedicated same-filesystem host working storage
-    outside the source holds journal/staging/config/cache. Startup recovers stops
-    before accessing SFTP; a shared hold prevents primary backups/restores racing
-    pending recovery. A separate Kopia source retains the latest four.
-    Configure runners carry `sophon.deployment=configure`: scheduled capture
-    waits for their exit without advancing the due time, and manual capture
-    refuses before any stop. Operators must still avoid concurrent engine
-    mutations once capture has begun.
+17. **The optional coarse layer uses zero-downtime Btrfs read-only subvolume snapshots.**
+    Step 3 allocates an 8 GiB XFS immutable OS root and formats the remaining disk as a
+    persistent Btrfs `/var` (`LABEL=sophon-var`, mounted `noatime,user_subvol_rm_allowed`),
+    and host bootstrap creates `/var/home/core/.local/share/containers/storage/volumes` as
+    a Btrfs subvolume before Podman starts. The opt-in weekly `coarse` service mounts that
+    subvolume read-only alongside `/var/home/core/sophon-coarse`, mounts no Podman socket
+    and holds only `DAC_OVERRIDE`. It invokes `BTRFS_IOC_SNAP_CREATE_V2` (`RDONLY`) to capture
+    an atomic crash-consistent snapshot without pausing any workload, uploads to a separate
+    `/sophon-coarse` source (retaining the latest four), and deletes the snapshot via
+    `BTRFS_IOC_SNAP_DESTROY_V2`. Non-Btrfs or non-subvolume sources fail explicitly with no
+    plain-copy fallback. This layer remains last-resort only, never a replacement for daily
+    logical exports.

@@ -88,30 +88,6 @@ services:
       traefik.http.services.kopia.loadbalancer.server.port: "51515"
 {% if kopia_coarse_enabled | bool %}
 
-  coarse-proxy:
-    image: {{ kopia_proxy_image }}
-    pull_policy: never
-    container_name: kopia-coarse-engine
-    user: "0:0"
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["label=disable", "no-new-privileges:true"]
-    networks: [coarse-engine]
-    volumes:
-      - /run/user/1000/podman/podman.sock:/socket/podman.sock:ro
-      - ${SOPHON_PROJECT_PATH:-/var/lib/sophon/project}/roles/kopia/files/coarse-proxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2375/v1.41/libpod/containers/json"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-    labels:
-      sophon.backup.version: "3"
-      sophon.backup.group: kopia
-      sophon.backup.stop: "false"
-      sophon.coarse.control: proxy
-
   coarse:
     image: {{ kopia_image }}
     pull_policy: never
@@ -120,19 +96,16 @@ services:
     user: "0:0"
     read_only: true
     cap_drop: [ALL]
-    cap_add: [DAC_OVERRIDE, CHOWN, FOWNER]
+    cap_add: [DAC_OVERRIDE]
     security_opt: ["label=disable", "no-new-privileges:true"]
     entrypoint: ["python3", "/app/coarse.py"]
     command: [serve]
     stop_grace_period: 240s
-    networks: [proxy, coarse-engine]
+    networks: [proxy]
     depends_on:
-      coarse-proxy:
-        condition: service_healthy
       kopia:
         condition: service_healthy
     environment:
-      ENGINE_URL: http://coarse-proxy:2375
       SOPHON_VERSION: {{ sophon_version | to_json }}
       KOPIA_CONFIG_PATH: /coarse/config/repository.config
       KOPIA_CACHE_DIRECTORY: /coarse/cache
@@ -156,22 +129,17 @@ services:
       - type: bind
         source: {{ kopia_coarse_work_dir | to_json }}
         target: /coarse
-      - source-v3:/source
+      - source-v3:/source:ro
     labels:
       sophon.backup.version: "3"
       sophon.backup.group: kopia
       sophon.backup.stop: "false"
-      sophon.coarse.control: worker
 {% endif %}
 networks:
   proxy:
     external: true
   backup-engine:
     internal: true
-{% if kopia_coarse_enabled | bool %}
-  coarse-engine:
-    internal: true
-{% endif %}
 volumes:
   config-v3:
   cache-v3:

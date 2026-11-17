@@ -116,9 +116,9 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 | `SOPHON_KOPIA_EXTRA_VOLUMES` | Site workload volume names as a JSON array, default `[]`. Core roles declare their own list. These become read-only mounts, not host paths. Retain the list in site IaC and redeploy after changes. |
 | `SOPHON_KOPIA_BACKUPS_ENABLED` | `false` until a first full backup is verified. Set `true` to enable scheduled backups; keep the existing value on reruns. |
 | `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix. The container supervisor schedules collector runs, not raw filesystem snapshots. |
-| `SOPHON_KOPIA_COARSE_ENABLED` | Optional last-resort weekly cold-volume layer, default `false`, independent of the primary schedule. |
-| `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | When enabled, the actual absolute host rootless Podman volumes directory: run `podman info --format '{{.Store.VolumePath}}'` as `core`. Mounted read-only. |
-| `SOPHON_KOPIA_COARSE_WORK_DIR` | When enabled, an empty dedicated absolute host directory outside the volumes tree, on the same filesystem. Holds private staging, journal, config/cache/logs. Neither path may contain the other; plain normalized paths only. |
+| `SOPHON_KOPIA_COARSE_ENABLED` | Optional last-resort weekly live Btrfs subvolume snapshot layer, default `false`, independent of the primary schedule. |
+| `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | Host rootless Podman Btrfs `volumes` subvolume (default `/var/home/core/.local/share/containers/storage/volumes`), mounted read-only. |
+| `SOPHON_KOPIA_COARSE_WORK_DIR` | Disjoint host Btrfs working directory outside the volumes subvolume (default `/var/home/core/sophon-coarse`). Holds temporary read-only snapshot staging, config/cache/logs. |
 
 Keep supplying the same destination, password, source identity and policy
 when reconfiguring an existing instance. The role reuses the `kopia` stack and
@@ -148,12 +148,11 @@ saved trust or explicit verified pin overrides, and
 repositories never create again, even if that confirmation remains exported.
 The old `SOPHON_KOPIA_INIT_REPOSITORY` flag is not supported.
 
-Coarse copies use a separate Kopia source and keep four snapshots. Enabling starts
-one run immediately after the labeled Configure runner exits, then schedules
-attempts every seven days. While Configure is running, the service defers without
-advancing its due time. Unsupported
-reflinks, cross-filesystem staging and incomplete restart recovery fail explicitly;
-there is no plain-copy fallback. See the [last-resort procedure](../roles/kopia/README.md#optional-weekly-coarse-layer).
+Coarse snapshots use a separate Kopia source and keep four snapshots. Enabling
+takes an atomic read-only Btrfs subvolume snapshot immediately with zero container
+downtime, then schedules attempts every seven days. Non-Btrfs or non-subvolume
+sources fail explicitly; there is no plain-copy fallback. See the
+[last-resort procedure](../roles/kopia/README.md#optional-weekly-coarse-layer).
 
 Changed host keys are a hard failure, including when a new pin is supplied.
 After independently checking an intentional server rotation, remove only that
