@@ -124,6 +124,14 @@ elif name == "podman":
         status = int(os.environ.get("PODMAN_INFO_FAIL", "0"))
     statefile.write_text(json.dumps(state))
     sys.exit(status)
+elif name == "stat":
+    if "-f" in args:
+        print(os.environ.get("STUB_FSTYPE", "btrfs"))
+    else:
+        os.execv("/usr/bin/stat", ["/usr/bin/stat", *args])
+elif name == "btrfs":
+    assert args[:2] == ["subvolume", "create"]
+    Path(args[2]).mkdir(parents=True, exist_ok=True)
 elif name == "df":
     print("Avail\n1099511627776")
 '''
@@ -132,7 +140,7 @@ elif name == "df":
 def tools(directory):
     bin_dir = directory / "bin"
     bin_dir.mkdir()
-    for name in ("id", "podman", "systemctl", "curl", "sleep", "chown", "sync", "df"):
+    for name in ("id", "podman", "systemctl", "sleep", "chown", "sync", "df", "stat", "btrfs"):
         path = bin_dir / name
         path.write_text("#!" + sys.executable + "\n" + TOOL_STUB)
         path.chmod(0o755)
@@ -400,8 +408,23 @@ sudo() {{ cat > /dev/null 2>&1 || true; }}
             self.assertIn("PasswordAuthentication no", files["/etc/ssh/sshd_config.d/40-sophon-console-only.conf"][1])
             self.assertIn("enabled = false", files["/etc/zincati/config.d/90-disable-auto-reboot.toml"][1])
             self.assertIn("/var/lib/systemd/linger/core", files)
+            filesystems = ignition["storage"]["filesystems"]
+            self.assertEqual(filesystems, [{
+                "path": "/var",
+                "device": "/dev/disk/by-label/sophon-var",
+                "format": "btrfs",
+                "label": "sophon-var",
+                "wipeFilesystem": False,
+                "mountOptions": ["noatime", "user_subvol_rm_allowed"],
+            }])
             units = {unit["name"]: unit for unit in ignition["systemd"]["units"]}
-            self.assertEqual(set(units), {"sophon-host-bootstrap.service", "sophon-set-password.service"})
+            self.assertEqual(set(units), {"var.mount", "sophon-host-bootstrap.service", "sophon-set-password.service"})
+            var_mount = units["var.mount"]
+            self.assertTrue(var_mount["enabled"])
+            self.assertIn("What=/dev/disk/by-label/sophon-var", var_mount["contents"])
+            self.assertIn("Where=/var", var_mount["contents"])
+            self.assertIn("Type=btrfs", var_mount["contents"])
+            self.assertIn("Options=noatime,user_subvol_rm_allowed", var_mount["contents"])
             bootstrap = units["sophon-host-bootstrap.service"]
             self.assertTrue(bootstrap["enabled"])
             self.assertIn("User=core", bootstrap["contents"])
@@ -434,112 +457,109 @@ sudo() {{ cat > /dev/null 2>&1 || true; }}
         self.assertIn("(already installed?", source)
         self.assertNotIn("INSTALL $disk", source)
 
-    def test_ostree_var_is_selected_not_physical_root_var(self):
-        with fixture() as directory:
-            root = directory / "mounted-root"
-            root.joinpath("var/lib").mkdir(parents=True)
-            var = root / "ostree/deploy/fedora-coreos/var"
-            var.mkdir(parents=True)
-            var.parent.joinpath("deploy/hash.0").mkdir(parents=True)
-            result = shell('installed_var "$1"', root)
-            self.assert_success(result)
-            self.assertEqual(result.stdout.strip(), str(var))
-            other = root / "ostree/deploy/other/var"
-            other.mkdir(parents=True)
-            other.parent.joinpath("deploy").mkdir()
-            self.assertIn("exactly one", shell('installed_var "$1"', root).stderr)
-
-    def test_installed_root_expansion_before_artifact_copy(self):
+    def test_installed_storage_partitions_8g_root_and_btrfs_var_before_artifact_copy(self):
         stubs = r'''
+is_block_device() { return 0; }
 lsblk() {
-    case "$2" in PARTN) echo 4;; FSTYPE) echo "${ROOT_FSTYPE:-xfs}";; *) return 99;; esac
+    case "$*" in
+        "-dnro PARTN /dev/fixture4") echo 4;;
+        "-dnro FSTYPE /dev/fixture4") echo "${ROOT_FSTYPE:-xfs}";;
+        "-nrpo NAME,PARTLABEL /dev/fixture") printf '/dev/fixture4 root\n/dev/fixture5 var\n';;
+        "-dnro PKNAME /dev/fixture5") echo /dev/fixture;;
+        *) return 99;;
+    esac
 }
-growpart() { printf '%s\n' "${GROW_OUTPUT:-CHANGED: partition=4}"; return "${GROW_STATUS:-0}"; }
-sgdisk() { [[ $1 == --move-main-table=2 && $2 == /dev/fixture ]]; }
+sgdisk() {
+    if [[ $1 == -i ]]; then
+        printf 'First sector: 1050624 (at 513.0 MiB)\nPartition GUID code: 0FC63DAF-8483-4772-8E79-3D69D8477DE4 (Linux filesystem)\nPartition unique GUID: 11111111-2222-3333-4444-555555555555\n'
+    else
+        [[ $* == *"--new=4:1050624:+8G"* && $* == *"--largest-new=5"* && $* == *"--move-main-table=2"* ]]
+    fi
+}
+partx() { [[ $1 == --update && $2 == /dev/fixture ]]; }
+mkfs.btrfs() { [[ $* == *"-L sophon-var /dev/fixture5" ]]; }
 udevadm() { [[ $1 == settle ]]; }
 '''
-        for output, status in (("CHANGED: partition=4", "0"), ("NOCHANGE: partition 4 is size 100", "1")):
-            env = dict(os.environ, GROW_OUTPUT=output, GROW_STATUS=status)
-            self.assert_success(shell(stubs + '\ngrow_installed_root /dev/fixture /dev/fixture4', env=env))
-        result = shell(stubs + '\ngrow_installed_root /dev/fixture /dev/fixture4',
-                       env=dict(os.environ, GROW_OUTPUT="FAILED: cannot resize", GROW_STATUS="2"))
-        self.assertIn("Cannot expand", result.stderr)
-        result = shell(stubs + '\ngrow_installed_root /dev/fixture /dev/fixture4',
-                       env=dict(os.environ, ROOT_FSTYPE="ext4"))
-        self.assertIn("numbered XFS", result.stderr)
+        result = shell(stubs + '\npartition_installed_storage /dev/fixture /dev/fixture4')
+        self.assert_success(result)
+        self.assertEqual(result.stdout.strip(), "/dev/fixture5")
+        bad = shell(stubs + '\npartition_installed_storage /dev/fixture /dev/fixture4',
+                    env=dict(os.environ, ROOT_FSTYPE="ext4"))
+        self.assertIn("numbered XFS", bad.stderr)
         source = INSTALL.read_text()
-        self.assertLess(source.index('grow_installed_root "$disk" "$part"'),
-                        source.index('mount "$part" "$root"'))
-        self.assertLess(source.index('xfs_growfs "$root"'),
-                        source.index('copy_artifacts "$media" "$root"'))
+        self.assertLess(source.index('var_part=$(partition_installed_storage "$disk" "$part")'),
+                        source.index('copy_artifacts "$media" "$installed_var"'))
 
-    @unittest.skipUnless(shutil.which("sgdisk") and shutil.which("sfdisk"), "Native GPT tools are required")
-    def test_grown_gpt_survives_coreos_first_boot_without_changing_partitions(self):
+    @unittest.skipUnless(shutil.which("sgdisk"), "sgdisk is required")
+    def test_partitioned_gpt_survives_coreos_first_boot_without_overlap(self):
         with fixture() as directory:
             image = directory / "disk.img"
             with image.open("wb") as output:
-                output.truncate(64 * 1024 * 1024)
-            setup = subprocess.run(
-                ["sfdisk", "--no-reread", str(image)],
-                input="label: gpt\nfirst-lba: 2048\n\nstart=2048, size=128991, type=L\n",
-                text=True, capture_output=True)
+                output.truncate(40 * 1024 * 1024 * 1024)
+            setup = subprocess.run([
+                "sgdisk",
+                "-n", "1:2048:+1M", "-c", "1:BIOS-BOOT", "-t", "1:ef02",
+                "-n", "2:0:+127M", "-c", "2:EFI-SYSTEM", "-t", "2:ef00",
+                "-n", "3:0:+384M", "-c", "3:boot", "-t", "3:8300",
+                "-n", "4:0:+3G", "-c", "4:root", "-t", "4:8300",
+                str(image),
+            ], text=True, capture_output=True)
             self.assert_success(setup)
-            before = json.loads(subprocess.check_output(["sfdisk", "--json", str(image)]))
-            first_boot = ["sgdisk", "--disk-guid=R", "--move-second-header", str(image)]
-            broken = subprocess.run(first_boot, text=True, capture_output=True)
-            self.assertNotEqual(broken.returncode, 0)
-            self.assertIn("overlaps", broken.stdout + broken.stderr)
-            stubs = r'''
-lsblk() { case "$2" in PARTN) echo 1;; FSTYPE) echo xfs;; *) return 99;; esac; }
-growpart() { echo 'NOCHANGE: already expanded'; return 1; }
-udevadm() { [[ $1 == settle ]]; }
+            stubs = f'''
+is_block_device() {{ return 0; }}
+lsblk() {{
+    case "$*" in
+        "-dnro PARTN {image}p4") echo 4;;
+        "-dnro FSTYPE {image}p4") echo xfs;;
+        "-nrpo NAME,PARTLABEL {image}") printf '{image}p4 root\\n{image}p5 var\\n';;
+        "-dnro PKNAME {image}p5") echo "{image}";;
+        *) return 99;;
+    esac
+}}
+partx() {{ return 0; }}
+mkfs.btrfs() {{ return 0; }}
+udevadm() {{ [[ $1 == settle ]]; }}
 '''
-            self.assert_success(shell(stubs + '\ngrow_installed_root "$1" "$1"', image))
-            after = json.loads(subprocess.check_output(["sfdisk", "--json", str(image)]))
-            self.assertEqual(before["partitiontable"]["partitions"], after["partitiontable"]["partitions"])
-            self.assertEqual(after["partitiontable"]["firstlba"], 34)
+            self.assert_success(shell(stubs + '\npartition_installed_storage "$1" "$2"', image, f"{image}p4"))
+            first_boot = ["sgdisk", "--disk-guid=R", "--move-second-header", str(image)]
             self.assert_success(subprocess.run(first_boot, text=True, capture_output=True))
-            self.assert_success(subprocess.run(["sgdisk", "--verify", str(image)], text=True, capture_output=True))
-
-    def test_var_missing_or_symlink_refused(self):
-        with fixture() as root:
-            self.assertNotEqual(shell('installed_var "$1"', root).returncode, 0)
-            (root / "ostree/deploy/fedora-coreos/deploy").mkdir(parents=True)
-            (root / "var").mkdir()
-            (root / "ostree/deploy/fedora-coreos/var").symlink_to(root / "var", target_is_directory=True)
-            self.assertNotEqual(shell('installed_var "$1"', root).returncode, 0)
+            verify = subprocess.run(["sgdisk", "--verify", str(image)], text=True, capture_output=True)
+            self.assert_success(verify)
+            table = subprocess.check_output(["sgdisk", "-p", str(image)], text=True)
+            self.assertIn("8.0 GiB", table)
+            self.assertIn("var", table)
 
     def test_persistent_copy_ownership_and_no_overwrite(self):
         with fixture() as directory:
             media = directory / "media"
             bundle(media)
             (media / "project/site.json").unlink()
-            root = directory / "root"
-            var = root / "ostree/deploy/fedora-coreos/var"
-            var.mkdir(parents=True)
-            var.parent.joinpath("deploy").mkdir()
+            var = directory / "installed-var"
+            var.mkdir()
             env = tools(directory)
-            result = shell('copy_artifacts "$@"', media, root, env=env)
+            result = shell('copy_artifacts "$@"', media, var, env=env)
             self.assert_success(result)
             data = var / "lib/sophon"
             self.assertEqual((data / "runner.tar").read_bytes(), (media / "runner.tar").read_bytes())
             # The address is chosen later by sophon-deploy; the installer saves none.
             self.assertFalse((data / "project/site.json").exists())
-            self.assertFalse((root / "var").exists())
             self.assertEqual(calls(directory, "chown"), [["chown", "-R", "1000:1000", str(data)]])
-            result = shell('copy_artifacts "$@"', media, root, env=env)
+            result = shell('copy_artifacts "$@"', media, var, env=env)
             self.assertIn("already exists", result.stderr)
 
     def test_bootstrap_before_the_address_is_known_creates_proxy_without_dns(self):
         with fixture() as directory:
             bundle(directory / "media")
             data = directory / "persistent"
+            home = directory / "home"
+            home.mkdir()
             shutil.copytree(directory / "media/project", data / "project")
             (data / "project/site.json").unlink()
             (data / "runner.tar").write_text("runner")
             ready = directory / "ready"
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
+                              .replace("/var/home/core", str(home))
                               .replace("/var/lib/sophon", str(data))
                               .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
                               .replace("/run/user/1000/sophon-ready", str(ready)))
@@ -547,6 +567,8 @@ udevadm() { [[ $1 == settle ]]; }
             self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
             self.assertTrue(ready.is_file())
             self.assertEqual(stat.S_IMODE((data / "stacks").stat().st_mode), 0o700)
+            self.assertTrue((home / ".local/share/containers/storage/volumes").is_dir())
+            self.assertEqual(len(calls(directory, "btrfs")), 1)
             podman = calls(directory, "podman")
             network_create, = [call for call in podman if call[2:4] == ["network", "create"]]
             self.assertNotIn("--dns", network_create)
@@ -555,6 +577,7 @@ udevadm() { [[ $1 == settle ]]; }
             # Once step 4 has saved the address, a rerun points the services' network at it.
             (data / "project/site.json").write_text('{"SOPHON_INFRAVM_IP":"10.0.60.2"}')
             self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
+            self.assertEqual(len(calls(directory, "btrfs")), 1)
             self.assertIn(["podman", "--remote=false", "network", "update", "--dns-add", "10.0.60.2", "proxy"],
                           calls(directory, "podman"))
 
@@ -562,11 +585,14 @@ udevadm() { [[ $1 == settle ]]; }
         with fixture() as directory:
             bundle(directory / "media")
             data = directory / "persistent"
+            home = directory / "home"
+            home.mkdir()
             shutil.copytree(directory / "media/project", data / "project")
             (data / "runner.tar").write_text("runner")
             ready = directory / "ready"
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
+                              .replace("/var/home/core", str(home))
                               .replace("/var/lib/sophon", str(data))
                               .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
                               .replace("/run/user/1000/sophon-ready", str(ready)))
@@ -578,6 +604,7 @@ udevadm() { [[ $1 == settle ]]; }
                 self.assertIn("Log in as core", result.stdout)
             podman = calls(directory, "podman")
             self.assertEqual(len([call for call in podman if call[2] == "load"]), 1)
+            self.assertEqual(len(calls(directory, "btrfs")), 1)
             self.assertFalse(any(call[2] == "run" for call in podman))
             network_create, = [call for call in podman if call[2:4] == ["network", "create"]]
             self.assertIn("--dns", network_create)
@@ -589,12 +616,15 @@ udevadm() { [[ $1 == settle ]]; }
         with fixture() as directory:
             bundle(directory / "media")
             data = directory / "persistent"
+            home = directory / "home"
+            home.mkdir()
             shutil.copytree(directory / "media/project", data / "project")
             (data / "runner.tar").write_text("runner")
             ready = directory / "ready"
             ready.touch()
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
+                              .replace("/var/home/core", str(home))
                               .replace("/var/lib/sophon", str(data))
                               .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
                               .replace("/run/user/1000/sophon-ready", str(ready)))
@@ -605,6 +635,11 @@ udevadm() { [[ $1 == settle ]]; }
             self.assertFalse(ready.exists())
             self.assertNotIn("Log in as core", result.stdout)
             self.assertIn("retry", result.stderr)
+            shutil.rmtree(home / ".local/share/containers/storage/volumes")
+            non_btrfs = subprocess.run(["bash", str(script)], env=dict(env, PODMAN_INFO_FAIL="0", STUB_FSTYPE="xfs"),
+                                       text=True, capture_output=True)
+            self.assertNotEqual(non_btrfs.returncode, 0)
+            self.assertIn("Btrfs", non_btrfs.stderr)
 
     def controller(self, directory, saved=True, relocate=False):
         """A copy of sophon-deploy whose paths point into `directory`; returns (script, ready file, data dir, env)."""

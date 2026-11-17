@@ -38,10 +38,10 @@ irreproducible paths are cloned and native dumps are captured. Writers resume be
 **Primary snapshot**: real irreproducible files, native dumps and a v3 manifest
 with workload images and Sophon source version; not a system or GUI backup.
 
-**Coarse snapshot**: an optional weekly, last-resort cold copy of the rootless
-Podman volumes tree. Applications pause only for a strict reflink clone, then
-their previously running IDs restart without dependency ordering before upload.
-Working storage is a separate host bind outside the copied tree.
+**Coarse snapshot**: an optional weekly, last-resort crash-consistent Btrfs
+read-only subvolume snapshot of the rootless Podman `volumes` subvolume on `/var`.
+Zero containers stop and no engine socket is mounted; Kopia uploads the read-only
+snapshot from a disjoint working directory on `/var` and destroys the snapshot when complete.
 
 **Engine proxy**: the unpublished allowlisted socket proxy used by the backup
 container, separate from Arcane. The primary collector has named read-only

@@ -78,14 +78,13 @@ class Engine:
 
 class CollectorTests(unittest.TestCase):
     def test_pending_operator_restore_blocks_collection_before_engine_access(self):
-        for marker, message in (("restore.json", "restoration"), ("coarse.json", "Coarse")):
-            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                (root / marker).write_text('{"version":3,"volume":"recovery-state"}')
-                engine = Engine([])
-                with self.assertRaisesRegex(RuntimeError, message):
-                    backup.prepare({"transport": engine}, {}, root, "fixture")
-                self.assertEqual(engine.events, [])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "restore.json").write_text('{"version":3,"volume":"recovery-state"}')
+            engine = Engine([])
+            with self.assertRaisesRegex(RuntimeError, "restoration"):
+                backup.prepare({"transport": engine}, {}, root, "fixture")
+            self.assertEqual(engine.events, [])
 
     def test_prepare_clones_before_restart_and_never_captures_environment(self):
         with tempfile.TemporaryDirectory() as temporary:

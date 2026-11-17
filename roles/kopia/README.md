@@ -100,53 +100,32 @@ group restore as the routine recovery path. This optional cold layer includes
 raw databases, caches, reconstructible state and secrets found in named volumes.
 It is not a VM/system backup and does not include unrelated host bind mounts.
 
-It is off by default. As `core`, find the actual volume directory:
-
-```sh
-podman info --format '{{.Store.VolumePath}}'
-```
-
-Choose a dedicated empty working directory on that same filesystem, outside
-Podman's volumes tree. For example, with the usual CoreOS home storage:
+It is off by default. Step 3 formats `/var` as Btrfs (`sophon-var`, mounted
+`noatime,user_subvol_rm_allowed`) and `host-bootstrap.sh` creates
+`/var/home/core/.local/share/containers/storage/volumes` as a Btrfs subvolume and
+`/var/home/core/sophon-coarse` as its disjoint working directory. Both paths are
+the defaults when enabling:
 
 ```sh
 export SOPHON_KOPIA_COARSE_ENABLED=true
-export SOPHON_KOPIA_COARSE_VOLUMES_DIR=/var/home/core/.local/share/containers/storage/volumes
-export SOPHON_KOPIA_COARSE_WORK_DIR=/var/home/core/sophon-coarse
-install -d -m 700 "$SOPHON_KOPIA_COARSE_WORK_DIR"
 sophon-deploy
 ```
 
-Use your actual paths, not these examples when Podman storage was relocated.
-Create the empty directory as `core`; its parent must be writable by the
-rootless owner. First use refuses nonempty/unowned working storage. Mount
-identity checks reject recursive/writable-source aliases, and the selected volume
-root must actually contain the shared coordination volume. No additional disk,
-storage backend or filesystem snapshot mechanism is required.
+Override `SOPHON_KOPIA_COARSE_VOLUMES_DIR` and `SOPHON_KOPIA_COARSE_WORK_DIR`
+only if Podman storage was relocated onto another Btrfs subvolume. First use
+refuses nonempty/unowned working storage. Mount identity checks reject
+recursive/writable-source aliases, and the selected volume subvolume must
+actually contain the shared coordination volume.
 
-The separate `kopia-coarse` service uses the primary image and the same three file
-capabilities. Its unpublished isolated proxy permits **list, stop, start only**:
-no inspect, exec, archive, image, create/delete or volume APIs. Pod infrastructure
-and the coarse worker/proxy stay alive; all other running workloads are paused.
-No application dependency labels/order are required. Apps must tolerate ordinary
-restart/reconnection, as on a normal reboot.
-
-Each attempt records original running IDs before stopping, clones the complete
-read-only volume tree with `cp --archive --reflink=always`, syncs it, restarts
-those IDs in any order, and releases coordination before uploading. A failure
-to reflink skips with an error; it never falls back to copying. Originally
-stopped containers stay stopped. Deleted IDs are reported, never guessed by name.
-Do not run Configure, deploy/remove workloads, or let another host supervisor
-mutate these volumes during the brief cold-capture window.
+The separate `kopia-coarse` service uses the primary image with **only
+`DAC_OVERRIDE`** and **no Podman socket or proxy container**. Zero containers
+are stopped or restarted: each attempt invokes `BTRFS_IOC_SNAP_CREATE_V2`
+(`RDONLY`) on `/volumes` to create an atomic crash-consistent read-only Btrfs
+subvolume snapshot at `/coarse/staging/volumes`, syncs it, uploads to Kopia, and
+destroys the snapshot via `BTRFS_IOC_SNAP_DESTROY_V2`. Non-Btrfs or
+non-subvolume sources fail explicitly with no plain-copy fallback.
 
 The first scheduled attempt is immediate, then every 604800 seconds (seven days).
-The supported `sophon-deploy` runner carries `sophon.deployment=configure`.
-Scheduled capture waits for running Configure runners, checking every 30 seconds
-without advancing the weekly due time; manual capture refuses before stopping
-anything. Direct container invocations of Configure must carry the same label.
-This protects first enablement, not concurrent engine changes after capture begins.
-See the [fresh dev redeployment evidence](../../docs/kopia-redeploy.md) for the
-activation regression and native overlap checks.
 The durable due time survives restarts; it is not a particular weekday/time.
 Source `backup@sophon:/sophon-coarse` (with your configured client identity)
 retains latest four with hourly/daily/weekly/monthly/annual extras disabled.
@@ -156,19 +135,13 @@ Primary source/retention are unchanged.
 podman logs kopia-coarse
 podman exec kopia-coarse cat /coarse/last-run.json
 podman exec kopia-coarse python3 /app/coarse.py run
-podman exec kopia-coarse python3 /app/coarse.py recover
 ```
 
-Recovery runs before any repository connection on startup. A lost stop response
-is settled before restart. A pending journal keeps a shared `coarse.json` hold:
-primary backups and operator restores refuse to race it. Incomplete restart
-recovery exits so the container restart policy retries; other scheduled failures
-are reported and wait until the next weekly attempt or a manual run. Failed
-uploads retain one immutable ready copy; retry uploads it without another pause.
-Retained reflinks pin old extents: monitor local free space while applications
-change files, especially during slow or failed uploads.
-Never disable/prune the service or remove working storage while recovery is
-pending; re-enable with the same paths if it was removed accidentally.
+Active operator restores (`restore.json`) defer coarse snapshots until recovery
+completes. Failed uploads retain one immutable read-only Btrfs snapshot in
+`/coarse/staging/volumes`; retry uploads it without creating another snapshot,
+then destroys it once uploaded. Retained read-only snapshots pin old Btrfs
+extents: monitor `/var` free space during prolonged upload outages.
 
 Inspect coarse snapshots only into isolated working storage:
 

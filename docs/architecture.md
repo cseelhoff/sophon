@@ -89,19 +89,16 @@ Kopia server child handles browsing; native snapshot scheduling stays disabled
 to prevent snapshots bypassing the collector. No host backup timer or unit is
 created. The primary stack never mounts the whole volumes directory.
 
-An opt-in `coarse` service uses the same image but a separate internal
-`coarse-proxy` limited to native container list and ID-specific stop/start.
-Only that proxy mounts the socket. The coarse service sees the whole volumes
-directory read-only; its dedicated host working bind is physically disjoint on
-the same filesystem. Its small shared coordination mount is used only for the
-normal backup lock/hold, not staging. Application IDs are journaled before stops;
-strict reflinks complete and sync before those IDs restart, without ordering.
-Scheduled capture waits for labeled Configure runners to exit before its first
-stop; direct captures refuse while Configure is active.
-Upload follows restart and lock release. Its `/sophon-coarse` source keeps four,
-separately from primary retention. No filesystem snapshots or host units are added.
-This layer includes reconstructible/raw database state intentionally as a
-last-resort exception, never the default native-export restore path.
+An opt-in `coarse` service uses the same image and requires no Podman socket or
+proxy container. Step 3 formats `/var` as Btrfs (`sophon-var`, mounted with
+`noatime,user_subvol_rm_allowed`) and host bootstrap creates Podman's `volumes`
+directory as a Btrfs subvolume. The `coarse` service mounts that subvolume
+read-only alongside a disjoint `/var/home/core/sophon-coarse` working bind, with
+only `DAC_OVERRIDE`. Once a week it takes an atomic read-only Btrfs subvolume
+snapshot (`BTRFS_IOC_SNAP_CREATE_V2`) with zero workload pauses, uploads to its
+`/sophon-coarse` source (retaining four), and destroys the local snapshot.
+This crash-consistent layer includes reconstructible/raw database state
+intentionally as a last-resort exception, never the default native-export restore path.
 
 ## DNS
 

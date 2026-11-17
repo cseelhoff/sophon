@@ -104,7 +104,7 @@ ignition_file() {
 }
 
 render_ignition() {
-    local media=$1 unit password_unit
+    local media=$1 unit password_unit var_mount_unit
     unit='[Unit]
 Description=Sophon offline host bootstrap
 After=network-online.target user@1000.service
@@ -148,7 +148,20 @@ ExecStart=/usr/local/libexec/sophon-set-password
 [Install]
 WantedBy=multi-user.target
 '
-    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"files":['
+    var_mount_unit='[Unit]
+Description=Mount persistent Btrfs /var
+Before=local-fs.target
+
+[Mount]
+What=/dev/disk/by-label/sophon-var
+Where=/var
+Type=btrfs
+Options=noatime,user_subvol_rm_allowed
+
+[Install]
+RequiredBy=local-fs.target
+'
+    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"filesystems":[{"path":"/var","device":"/dev/disk/by-label/sophon-var","format":"btrfs","label":"sophon-var","wipeFilesystem":false,"mountOptions":["noatime","user_subvol_rm_allowed"]}],"files":['
     ignition_file /etc/hostname 420 sophon-infravm; printf ','
     ignition_file /etc/sysctl.d/99-sophon-lowports.conf 420 $'net.ipv4.ip_unprivileged_port_start=0\n'; printf ','
     ignition_file /etc/systemd/resolved.conf.d/nostub.conf 420 $'[Resolve]\nDNSStubListener=no\n'; printf ','
@@ -161,46 +174,48 @@ WantedBy=multi-user.target
     ignition_file /usr/local/libexec/sophon-host-bootstrap 493 "$(cat "$media/guest/host-bootstrap.sh")"; printf ','
     ignition_file /usr/local/libexec/sophon-network 493 "$(cat "$media/guest/sophon-network")"; printf ','
     ignition_file /usr/local/libexec/sophon-set-password 493 "$(cat "$media/guest/sophon-set-password")"
-    printf '],"links":[{"path":"/etc/systemd/user/sockets.target.wants/podman.socket","target":"/usr/lib/systemd/user/podman.socket"},{"path":"/etc/systemd/user/default.target.wants/podman-restart.service","target":"/usr/lib/systemd/user/podman-restart.service"}]},"systemd":{"units":[{"name":"sophon-host-bootstrap.service","enabled":true,"contents":'
+    printf '],"links":[{"path":"/etc/systemd/user/sockets.target.wants/podman.socket","target":"/usr/lib/systemd/user/podman.socket"},{"path":"/etc/systemd/user/default.target.wants/podman-restart.service","target":"/usr/lib/systemd/user/podman-restart.service"}]},"systemd":{"units":[{"name":"var.mount","enabled":true,"contents":'
+    json_string "$var_mount_unit"
+    printf '},{"name":"sophon-host-bootstrap.service","enabled":true,"contents":'
     json_string "$unit"
     printf '},{"name":"sophon-set-password.service","enabled":true,"contents":'
     json_string "$password_unit"
     printf '}]}}\n'
 }
 
-installed_var() {
-    local root=$1 path
-    local -a candidates=()
-    # FCOS /var belongs to the OSTree stateroot, not the mounted physical root.
-    for path in "$root"/ostree/deploy/*/var; do
-        [[ -d $path && ! -L $path ]] || continue
-        [[ -d ${path%/var}/deploy ]] || continue
-        candidates+=("$path")
-    done
-    [[ ${#candidates[@]} == 1 ]] || die "Expected exactly one installed OSTree stateroot/var; refusing ambiguous copy."
-    printf '%s\n' "${candidates[0]}"
-}
-
-grow_installed_root() {
-    local disk=$1 part=$2 number output
+partition_installed_storage() {
+    local disk=$1 part=$2 number info start type_guid guid var_part parent
     number=$(lsblk -dnro PARTN "$part")
     [[ $number =~ ^[1-9][0-9]*$ && $(lsblk -dnro FSTYPE "$part") == xfs ]] ||
         die "Expected a numbered XFS root partition on the newly installed disk."
-    if output=$(growpart "$disk" "$number" 2>&1); then
-        printf '%s\n' "$output"
-    elif [[ $output == NOCHANGE:* ]]; then
-        printf '%s\n' "$output"
-    else
-        die "Cannot expand the installed root partition: $output"
-    fi
-    # Normalize growpart's GPT bounds before CoreOS's first-boot sgdisk update.
-    sgdisk --move-main-table=2 "$disk"
+    info=$(sgdisk -i "$number" "$disk")
+    start=$(printf '%s\n' "$info" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
+    type_guid=$(printf '%s\n' "$info" | sed -n 's/^Partition GUID code: \([^ ]*\).*/\1/p')
+    guid=$(printf '%s\n' "$info" | sed -n 's/^Partition unique GUID: //p')
+    [[ $start =~ ^[0-9]+$ && -n $type_guid && -n $guid ]] ||
+        die "Cannot inspect installed root partition geometry."
+    # Size immutable OSTree root to CoreOS's 8 GiB minimum and give remaining space to Btrfs /var.
+    sgdisk --move-second-header \
+           --delete="$number" \
+           --new="${number}:${start}:+8G" --change-name="${number}:root" \
+           --typecode="${number}:${type_guid}" --partition-guid="${number}:${guid}" \
+           --largest-new=5 --change-name=5:var --typecode=5:8300 \
+           --move-main-table=2 "$disk" >/dev/null
+    partx --update "$disk"
     udevadm settle
+    var_part=$(lsblk -nrpo NAME,PARTLABEL "$disk" | awk '$2 == "var" {print $1}')
+    [[ -n $var_part && $var_part != *$'\n'* ]] && is_block_device "$var_part" ||
+        die "Cannot identify the newly created Btrfs /var partition."
+    parent=$(lsblk -dnro PKNAME "$var_part")
+    [[ /dev/$parent == "$disk" || $parent == "$disk" ]] ||
+        die "Installed /var partition is not on the selected disk."
+    mkfs.btrfs -q -f -L sophon-var "$var_part"
+    udevadm settle
+    printf '%s\n' "$var_part"
 }
 
 copy_artifacts() {
-    local media=$1 root=$2 var available needed
-    var=$(installed_var "$root")
+    local media=$1 var=$2 available needed
     available=$(df -B1 --output=avail "$var" | tail -n 1)
     needed=$(required_bytes "$media")
     (( available >= needed - 12 * 1024 * 1024 * 1024 )) ||
@@ -227,11 +242,11 @@ main() {
     [[ $EUID == 0 ]] || die "Run with sudo from the CoreOS live console."
     [[ -e /run/ostree-live ]] ||
         die "This installer only runs in a CoreOS live environment, never on the installed host."
-    local media disk required work root part source
+    local media disk required work root installed_var part var_part source
     media=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
     verify_bundle "$media"
     [[ -x $media/tools/busybox ]] || die "Missing executable static BusyBox."
-    for source in coreos-installer growpart sgdisk xfs_growfs; do
+    for source in coreos-installer sgdisk partx xfs_growfs mkfs.btrfs; do
         command -v "$source" >/dev/null || die "Required live installer tool is unavailable: $source"
     done
     printf '%s\n' 'Fresh-disk installation only. Existing installations must use sophon-deploy or restart sophon-host-bootstrap.'
@@ -266,14 +281,17 @@ main() {
     source=$(lsblk -dnro PKNAME "$part")
     [[ /dev/$source == "$disk" || $source == "$disk" ]] ||
         die "Installed root partition is not on the selected disk."
-    grow_installed_root "$disk" "$part"
+    var_part=$(partition_installed_storage "$disk" "$part")
     root=$work/installed-root
-    install -d -m 0700 "$root"
+    installed_var=$work/installed-var
+    install -d -m 0700 "$root" "$installed_var"
     mount "$part" "$root"
-    trap 'umount /run/sophon-install/installed-root || true' EXIT
+    trap 'umount /run/sophon-install/installed-var 2>/dev/null || true; umount /run/sophon-install/installed-root 2>/dev/null || true' EXIT
     xfs_growfs "$root"
-    copy_artifacts "$media" "$root"
     umount "$root"
+    mount -t btrfs -o noatime,user_subvol_rm_allowed "$var_part" "$installed_var"
+    copy_artifacts "$media" "$installed_var"
+    umount "$installed_var"
     trap - EXIT
     rm -f "$work/config.ign"
     printf '%s\n' \

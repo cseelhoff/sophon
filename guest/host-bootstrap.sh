@@ -15,7 +15,13 @@ main() {
     # The address arrives later, when sophon-deploy asks for the network; until then proxy needs no DNS server.
     infravm_ip=$(jq -er '.SOPHON_INFRAVM_IP | select(type == "string" and length > 0)' "$project/site.json" 2>/dev/null) || infravm_ip=
     [[ -f /var/lib/sophon/runner.tar ]]
-    install -d -m 0700 /var/lib/sophon/stacks
+    install -d -m 0700 /var/lib/sophon/stacks "$HOME/.local/share/containers/storage" "$HOME/sophon-coarse"
+    if [[ ! -e $HOME/.local/share/containers/storage/volumes ]]; then
+        [[ $(stat -f -c %T "$HOME/.local/share/containers/storage") == btrfs ]] || {
+            echo "Persistent /var must be Btrfs for Podman volume snapshots." >&2; return 1;
+        }
+        btrfs subvolume create "$HOME/.local/share/containers/storage/volumes" >/dev/null
+    fi
     systemctl --user start podman.socket
     if ! podman --remote=false image exists sophon:latest; then
         podman --remote=false load -i /var/lib/sophon/runner.tar

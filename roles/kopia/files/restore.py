@@ -632,8 +632,6 @@ def main():
             if marker.is_symlink() or not marker.is_file():
                 backup.fail("The source volume is not an initialized backup coordination volume")
             with backup.locked("/source") as source:
-                if (source / "coarse.json").exists() or (source / "coarse.json").is_symlink():
-                    backup.fail("Finish coarse backup restart recovery before restoring")
                 existing = state_file(root) if (root / "state.json").exists() else None
                 journal = pending_restore(source, existing, args.state_volume)
                 if args.action == "cleanup":
