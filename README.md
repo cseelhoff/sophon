@@ -7,6 +7,8 @@ a container on InfraVM itself.
 
 ## Install
 
+For a complete visual walkthrough with screenshots covering clean SFTP backup server setup, first-boot console configuration, Day-1 verification in Arcane, live Btrfs snapshots, and full disaster recovery, see the **[Installation, Operations & Disaster Recovery Guide](docs/operator-guide.md)**.
+
 You do two things: run one command on your laptop, then answer prompts on the VM's console.
 The laptop needs only **Docker or Podman** (Linux, WSL, macOS or Windows). Under WSL, keep this folder on the Linux
 filesystem (`~/sophon`, not `/mnt/c/...`): building the ISOs is several times faster.
@@ -133,7 +135,9 @@ podman exec kopia cat /source/last-run.json
 
 Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
 rerun Configure, then explicitly restore state via `sophon-restore`. Configure
-never restores application state automatically. See the [operator guide](roles/kopia/README.md).
+never restores application state automatically. See the
+[full visual operator guide](docs/operator-guide.md) and the
+[Kopia role reference](roles/kopia/README.md).
 
 ### Air-gapped sites
 
