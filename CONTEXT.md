@@ -20,6 +20,8 @@ preflights the declared SFTP destination; it has no hypervisor/guest SSH or host
 
 **Deployment ISO**: `sophon-deployment.iso`; project, runner image, container archives and installer. Reusable, secret-free.
 
+**Backup Installer ISO**: `sophon-backup-installer.iso`; optional standalone hybrid BIOS/UEFI Alpine 3.24 installer ISO built by Prepare that installs a turnkey, confined OpenSSH `internal-sftp` backup server onto a single blank disk (`sophon-backup-setup` / `sophon-authorize-key`). Reusable, secret-free.
+
 **Artifact**: a file Prepare produces and a later step consumes (image archive, ISO, runner image).
 
 **Service FQDN**: `<service>.<domain>`; how everything addresses a service. Raw IPs are used only for the hypervisor and Portainer's first contact.

@@ -114,7 +114,11 @@ Writers resume before upload. Snapshots contain files, dumps and a versioned
 manifest, not images, caches, container environments or a system copy.
 
 Supply the external SFTP host/user/path, repository password and Kopia UI
-credentials at the console. Configure generates a client key, shows the public
+credentials at the console. If you do not already have an SFTP server or NAS,
+Prepare also builds `artifacts/backup/sophon-backup-installer.iso`, an
+unattended Alpine Linux SFTP backup appliance (`sophon-backup-setup` and
+`sophon-authorize-key`); see [Section 2 of the operator guide](docs/operator-guide.md#2-deploy-the-sophon-sftp-backup-appliance-or-use-an-existing-sftp-host).
+Configure generates a client key, shows the public
 line to authorize, confirms host fingerprints and runs preflight before stacks;
 see [backup inputs](docs/inputs.md#kopia-backup-inputs). Only a confirmed missing
 repository on an unused path may be created; all other errors fail closed.
