@@ -9,17 +9,24 @@ command=${1:-provision}
 [ $# -gt 0 ] && shift
 die() { echo "sophon-provision: $*" >&2; exit 1; }
 
-# Load SOPHON_* settings from .env (see .env.example); variables already set in the shell win, empty values are skipped.
-if [ -f .env ]; then
+# Load SOPHON_* settings from an env file; variables already set in the shell win, empty values are skipped.
+load_env_file() {
+    local file=$1
+    [ -f "$file" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
         line=${line%$'\r'}
         [[ $line =~ ^[[:space:]]*([A-Z][A-Z0-9_]*)=(.*)$ ]] || continue
-        key=${BASH_REMATCH[1]} value=${BASH_REMATCH[2]}
+        local key=${BASH_REMATCH[1]} value=${BASH_REMATCH[2]}
         [[ $key == SOPHON_* || $key == CF_DNS_API_TOKEN ]] || continue
         if [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]]; then value=${BASH_REMATCH[1]}; fi
         [ -z "$value" ] || [ -n "${!key:-}" ] || export "$key=$value"
-    done < .env
+    done < "$file"
+}
+
+if [ "$command" = verify-restore ]; then
+    load_env_file "${XDG_CONFIG_HOME:-$HOME/.config}/sophon/verify-restore.env"
 fi
+load_env_file .env
 
 engine=$(command -v docker >/dev/null 2>&1 && echo docker || { command -v podman >/dev/null 2>&1 && echo podman; }) ||
     true
@@ -57,6 +64,36 @@ need_secret() {
     [ -n "$value" ] || die "$1 is required."
     export "$1=$value"
 }
+
+extra_mounts=()
+if [ "$command" = verify-restore ]; then
+    if [ -t 0 ]; then
+        need SOPHON_PROXMOX_HOST 'Proxmox host name or address'
+        need SOPHON_PROXMOX_NODE 'Proxmox node' proxmox
+        need_secret SOPHON_PROXMOX_PASSWORD
+    fi
+    if [ -z "${SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64:-}" ] && [ -n "${SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE:-}" ]; then
+        key_file=${SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE/#\~/$HOME}
+        [ -f "$key_file" ] || die "SFTP key file not found: $key_file"
+        SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64=$(base64 < "$key_file" | tr -d '\r\n')
+        export SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64
+        unset SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE
+    fi
+    if [ -z "${SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64:-}" ] && [ -n "${SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE:-}" ]; then
+        kh_file=${SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE/#\~/$HOME}
+        [ -f "$kh_file" ] || die "SFTP known_hosts file not found: $kh_file"
+        SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64=$(base64 < "$kh_file" | tr -d '\r\n')
+        export SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64
+        unset SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE
+    fi
+    if [ -n "${SOPHON_VERIFY_RESTORE_CA_FILE:-}" ]; then
+        ca_file=${SOPHON_VERIFY_RESTORE_CA_FILE/#\~/$HOME}
+        [ -f "$ca_file" ] || die "CA file not found: $ca_file"
+        ca_abs=$(cd "$(dirname "$ca_file")" && pwd)/$(basename "$ca_file")
+        extra_mounts+=(-v "$ca_abs:/tmp/sophon-verify-ca.pem:ro")
+        export SOPHON_VERIFY_RESTORE_CA_FILE=/tmp/sophon-verify-ca.pem
+    fi
+fi
 
 if [ "$command" = provision ] && [ -t 0 ]; then
     if [ -z "${SOPHON_HYPERVISOR:-}" ]; then
@@ -100,4 +137,5 @@ while IFS= read -r name; do env_args+=(-e "$name"); done < <(compgen -e | grep -
 
 exec "$engine" run --rm --init ${tty[@]+"${tty[@]}"} \
     -v "$PWD:/workspace" -v "$socket:/var/run/docker.sock" -v sophon-state:/state \
+    ${extra_mounts[@]+"${extra_mounts[@]}"} \
     ${env_args[@]+"${env_args[@]}"} sophon-tools "$command" "$@"

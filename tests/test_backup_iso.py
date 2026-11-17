@@ -117,6 +117,33 @@ class BackupIsoTests(unittest.TestCase):
         self.assertNotEqual(bad.returncode, 0)
         self.assertEqual((auth_dir / 'sophon-backup').read_text().strip(), written)
 
+        # Authorizing a read-only restore key (via --readonly or sophon-restore comment) writes sophon-restore
+        # without overwriting Production's sophon-backup authorized_keys file.
+        restore_key_file = self.directory / 'restore_ed25519'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(restore_key_file)], check=True)
+        restore_pub_parts = (restore_key_file.with_suffix('.pub')).read_text().strip().split()
+        restore_line = f'restrict {restore_pub_parts[0]} {restore_pub_parts[1]} sophon-restore'
+
+        ro_auto = subprocess.run([str(auth_script), restore_line], capture_output=True, text=True)
+        self.assertEqual(ro_auto.returncode, 0, ro_auto.stderr)
+        self.assertEqual((auth_dir / 'sophon-backup').read_text().strip(), written)
+        self.assertEqual((auth_dir / 'sophon-restore').read_text().strip(), restore_line)
+
+        restore_key_file2 = self.directory / 'restore2_ed25519'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(restore_key_file2)], check=True)
+        restore_pub2 = (restore_key_file2.with_suffix('.pub')).read_text().strip()
+        ro_flag = subprocess.run([str(auth_script), '--readonly', restore_pub2], capture_output=True, text=True)
+        self.assertEqual(ro_flag.returncode, 0, ro_flag.stderr)
+        self.assertEqual((auth_dir / 'sophon-backup').read_text().strip(), written)
+        self.assertTrue((auth_dir / 'sophon-restore').read_text().strip().endswith(' sophon-restore'))
+
+    def test_backup_appliance_containerfile_provisions_readonly_restore_sftp_account(self):
+        containerfile = (ROOT / 'roles/prepare/files/backup-appliance.Containerfile').read_text()
+        self.assertIn('sophon-restore', containerfile)
+        self.assertIn('Match User sophon-restore', containerfile)
+        self.assertIn('AuthorizedKeysFile /etc/ssh/authorized_keys/sophon-restore', containerfile)
+        self.assertIn('ForceCommand internal-sftp -R', containerfile)
+
 
 if __name__ == '__main__':
     unittest.main()

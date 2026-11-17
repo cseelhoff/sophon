@@ -9,6 +9,10 @@ services:
     cgroup: host
     networks:
       - proxy
+{% if infravm_ip | default('', true) != '' %}
+    extra_hosts:
+      - "{{ keycloak_hostname | default('auth') }}.{{ keycloak_domain | default(domain_name) | lower | regex_replace('\\.$', '') }}:{{ infravm_ip }}"
+{% endif %}
     volumes:
       - /run/user/1000/podman/podman.sock:/var/run/docker.sock
       - arcane_data:/app/data

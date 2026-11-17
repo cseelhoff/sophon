@@ -50,6 +50,7 @@ FIELDS = {
     'SOPHON_CF_TOKEN': ('Cloudflare API token', 'Site', 'password', '', False),
     'SOPHON_ACME_FILE': ('Pre-issued certificates file on this VM (air-gapped sites; the secret disk is read automatically)',
                          'Site', 'path', '', False),
+    'SOPHON_CF_TUNNEL_ENABLED': ('Publish public Cloudflare tunnel and DNS records', 'Site', 'choice', 'true', False),
     'SOPHON_CF_TUNNEL_NAME': ('Cloudflare tunnel name', 'Site', 'text', 'sophon', False),
     'SOPHON_ARCANE_ADMIN_PASSWORD': ('Arcane admin password (12+ characters)', 'Access', 'password', '', True),
     'SOPHON_KEYCLOAK_REALM': ('Keycloak realm', 'Access', 'text', 'sophon', False),
@@ -88,6 +89,7 @@ LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), '
           'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
+           'SOPHON_CF_TUNNEL_ENABLED': ('false', 'true'),
            'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true'),
            'SOPHON_KOPIA_CREATE_REPOSITORY': ('false', 'true'),
            'SOPHON_KOPIA_COARSE_ENABLED': ('false', 'true')}
@@ -111,7 +113,12 @@ def step_fields(step='provision'):
 
 
 def new_control(environment, step='provision'):
-    values = {name: environment.get(name) or definition[3] for name, definition in step_fields(step).items()}
+    values = {}
+    for name, definition in step_fields(step).items():
+        if name == 'SOPHON_CF_TUNNEL_NAME' and name in environment and environment[name].strip() == '':
+            values[name] = ''
+        else:
+            values[name] = environment.get(name) or definition[3]
     return {'values': values, 'step': step}
 
 
@@ -280,9 +287,12 @@ def main(argv=None):
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
         parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
     allowed = set(step_fields(options.step))
+    if options.step == 'provision':
+        allowed.update(('SOPHON_PROXMOX_USER', 'SOPHON_PROXMOX_VALIDATE_CERTS', 'SOPHON_PROXMOX_ONBOOT'))
     if options.step == 'configure':
         allowed.add('SOPHON_ARCANE_ENCRYPTION_KEY')
         allowed.add('SOPHON_KOPIA_PREFLIGHT_COMPLETE')
+        allowed.add('SOPHON_PREPARE_RESTORE')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in allowed:
             os.environ.pop(name, None)

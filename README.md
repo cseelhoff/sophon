@@ -62,11 +62,13 @@ Needed at `sophon-deploy` (connected sites) for Let's Encrypt DNS-01 and tunnel 
    |---|---|---|---|
    | Zone | Zone | Read | find the zone (Let's Encrypt) |
    | Zone | DNS | Edit | DNS-01 challenge records and tunnel CNAMEs |
-   | Account | Cloudflare Tunnel | Edit | tunnel routes (skip if you don't use tunnels) |
+   | Account | Cloudflare Tunnel | Edit | tunnel routes (skip when `SOPHON_CF_TUNNEL_ENABLED=false`) |
 
 3. **Zone Resources:** Include > Specific zone > your domain. **Account Resources:** Include > your account.
 4. **Continue to summary** > **Create Token**, and copy it now (it is shown once). Paste it at the *Cloudflare token*
    prompt, or set `CF_DNS_API_TOKEN` for `certificates issue` (that needs only the two Zone permissions).
+   For LAN-only, dev, or standby VMs that still issue Let's Encrypt DNS-01 certificates without creating a Cloudflare
+   tunnel or repointing public DNS CNAMEs, answer `false` at `SOPHON_CF_TUNNEL_ENABLED`.
 
 ### Another hypervisor (for example VMware Workstation)
 
@@ -142,7 +144,16 @@ podman exec kopia cat /source/last-run.json
 
 Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
 rerun Configure, then explicitly restore state via `sophon-restore`. Configure
-never restores application state automatically. See the
+never restores application state automatically. For non-destructive standby or
+test restores alongside a live production server, run
+`sophon-deploy --prepare-restore` before `sophon-restore` (disables Cloudflare
+tunnels/DNS repointing and connects Kopia read-only) and pair with the backup
+appliance's confined read-only `sophon-restore` SFTP account
+(`sophon-authorize-key --readonly`). On Proxmox, `bash sophon-provision.sh verify-restore`
+(PowerShell: `.\sophon-provision.ps1 verify-restore`, plus optional weekly
+`systemd --user` timer units in [contrib/systemd/](contrib/systemd)) automates
+the entire clean-VM install, `serial0` bootstrap, restore, and direct-IP SNI
+verification end to end. See the
 [full visual operator guide](docs/operator-guide.md) and the
 [Kopia role reference](roles/kopia/README.md).
 

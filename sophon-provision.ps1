@@ -18,9 +18,9 @@ Set-Location $PSScriptRoot
 $command = if ($Rest) { $Rest[0] } else { 'provision' }
 $more = @($Rest | Select-Object -Skip 1)
 
-# Load SOPHON_* settings from .env (see .env.example); variables already set in the shell win, empty values are skipped.
-if (Test-Path -LiteralPath .env) {
-    foreach ($line in Get-Content -LiteralPath .env) {
+function Load-EnvFile([string]$FilePath) {
+    if (-not (Test-Path -LiteralPath $FilePath)) { return }
+    foreach ($line in Get-Content -LiteralPath $FilePath) {
         if ($line -cmatch '^\s*([A-Z][A-Z0-9_]*)=(.*)$') {
             $key = $Matches[1]; $value = $Matches[2].Trim()
             if ($value -match '^(["''])(.*)\1$') { $value = $Matches[2] }
@@ -31,6 +31,12 @@ if (Test-Path -LiteralPath .env) {
         }
     }
 }
+
+if ($command -eq 'verify-restore') {
+    $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
+    Load-EnvFile (Join-Path $cfgRoot 'sophon/verify-restore.env')
+}
+Load-EnvFile '.env'
 
 $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
 
@@ -70,6 +76,30 @@ if ($command -eq 'provision' -and $interactive -and -not $env:SOPHON_HYPERVISOR)
 $hypervisor = if ($env:SOPHON_HYPERVISOR) { $env:SOPHON_HYPERVISOR } else { 'proxmox' }
 $localHyperV = $hypervisor -eq 'hyperv' -and (-not $env:SOPHON_HYPERV_HOST -or
     $env:SOPHON_HYPERV_HOST -in 'localhost', '127.0.0.1', $env:COMPUTERNAME)
+
+$extraMounts = @()
+if ($command -eq 'verify-restore') {
+    if ($interactive) {
+        Need 'SOPHON_PROXMOX_HOST' 'Proxmox host name or address'
+        Need 'SOPHON_PROXMOX_NODE' 'Proxmox node' 'proxmox'
+        NeedSecret 'SOPHON_PROXMOX_PASSWORD'
+    }
+    if (-not $env:SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 -and $env:SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE) {
+        $keyBytes = [IO.File]::ReadAllBytes($env:SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE)
+        $env:SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 = [Convert]::ToBase64String($keyBytes)
+        Remove-Item Env:SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE -ErrorAction SilentlyContinue
+    }
+    if (-not $env:SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 -and $env:SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE) {
+        $khBytes = [IO.File]::ReadAllBytes($env:SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE)
+        $env:SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 = [Convert]::ToBase64String($khBytes)
+        Remove-Item Env:SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE -ErrorAction SilentlyContinue
+    }
+    if ($env:SOPHON_VERIFY_RESTORE_CA_FILE) {
+        $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
+        $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
+        $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
+    }
+}
 
 if ($command -eq 'provision' -and $interactive -and -not $localHyperV) {
     switch ($hypervisor) {
@@ -133,6 +163,7 @@ if ($LASTEXITCODE) { & $engine build -t sophon-tools -f Containerfile .; if ($LA
 $run = @('run', '--rm', '--init')
 if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) { $run += '-it' }
 $run += '-v', "${PSScriptRoot}:/workspace", '-v', "${socket}:/var/run/docker.sock", '-v', 'sophon-state:/state'
+$run += $extraMounts
 foreach ($name in $names) { $run += '-e', $name }
 & $engine @run sophon-tools $command @more
 exit $LASTEXITCODE

@@ -3,14 +3,18 @@
 set -eu
 
 optional=0
-if [ "${1:-}" = "--optional" ]; then
-    optional=1
-    shift
-fi
+readonly_mode=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --optional) optional=1; shift ;;
+        --readonly) readonly_mode=1; shift ;;
+        *) break ;;
+    esac
+done
 
 normalize_and_install() {
     raw=$1
-    # Trim leading/trailing whitespace and accept either "restrict <type> <key> ..." or "<type> <key> ..."
+    # Trim leading/trailing whitespace and accept either "restrict <type> <key> [account]" or "<type> <key> [account]"
     set -- $raw
     [ $# -ge 2 ] || return 1
     if [ "$1" = "restrict" ]; then
@@ -19,6 +23,11 @@ normalize_and_install() {
     [ $# -ge 2 ] || return 1
     ktype=$1
     kdata=$2
+    kcomment=${3:-}
+    target_user="sophon-backup"
+    if [ "$readonly_mode" -eq 1 ] || [ "$kcomment" = "sophon-restore" ]; then
+        target_user="sophon-restore"
+    fi
     case "$ktype" in
         ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa) ;;
         *) echo "Unsupported key type '$ktype' (expected ssh-ed25519, ecdsa-sha2-nistp*, or ssh-rsa)." >&2; return 1 ;;
@@ -32,11 +41,11 @@ normalize_and_install() {
     fi
     rm -f "$tmp"
     if [ "$(id -u)" -eq 0 ]; then
-        printf 'restrict %s %s sophon-backup\n' "$ktype" "$kdata" | /usr/local/sbin/sophon-backup-apply authorize-key
+        printf 'restrict %s %s %s\n' "$ktype" "$kdata" "$target_user" | /usr/local/sbin/sophon-backup-apply authorize-key
     else
-        printf 'restrict %s %s sophon-backup\n' "$ktype" "$kdata" | doas /usr/local/sbin/sophon-backup-apply authorize-key
+        printf 'restrict %s %s %s\n' "$ktype" "$kdata" "$target_user" | doas /usr/local/sbin/sophon-backup-apply authorize-key
     fi
-    printf 'Authorized client key (%s).\n' "$fp"
+    printf 'Authorized %s client key (%s).\n' "$target_user" "$fp"
     printf 'Return to InfraVM and answer y to continue sophon-deploy.\n'
 }
 

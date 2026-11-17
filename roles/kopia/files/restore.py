@@ -552,7 +552,7 @@ def connection_environment(stdin=False):
 
 
 def plan(api, root, environment, snapshot_id, group):
-    runtime.connect(environment)
+    runtime.connect(environment, readonly=True)
     if snapshot_id == "latest":
         source = environment["KOPIA_CLIENT_USERNAME"] + "@" + environment["KOPIA_CLIENT_HOSTNAME"] + ":/sophon-state"
         snapshots = json.loads(runtime.kopia(environment, "snapshot", "list", source, "--json"))
@@ -588,7 +588,7 @@ GROUP_ORDER = ("traefik", "ldap", "keycloak", "gitea")
 
 
 def inspect_snapshot(environment, snapshot_id, selected_group=None):
-    runtime.connect(environment)
+    runtime.connect(environment, readonly=True)
     source = environment["KOPIA_CLIENT_USERNAME"] + "@" + environment["KOPIA_CLIENT_HOSTNAME"] + ":/sophon-state"
     snapshots = json.loads(runtime.kopia(environment, "snapshot", "list", source, "--json"))
     if not snapshots:

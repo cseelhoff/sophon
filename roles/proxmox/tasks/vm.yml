@@ -98,7 +98,7 @@
         memory: "{{ infravm_memory }}"
         cpu: "{{ proxmox_cpu_type }}"
         ostype: l26
-        onboot: true
+        onboot: "{{ proxmox_onboot }}"
         net:
           net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
         virtio:

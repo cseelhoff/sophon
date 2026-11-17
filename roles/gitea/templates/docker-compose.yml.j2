@@ -51,6 +51,10 @@ services:
       - "{{ gitea_port_ssh }}:22"
     networks:
       - proxy
+{% if infravm_ip | default('', true) != '' %}
+    extra_hosts:
+      - "{{ keycloak_hostname | default('auth') }}.{{ keycloak_domain | default(gitea_domain) | lower | regex_replace('\\.$', '') }}:{{ infravm_ip }}"
+{% endif %}
     depends_on:
       gitea-db:
         condition: service_healthy
@@ -169,6 +173,10 @@ services:
       - gitea_data:/data
     networks:
       - proxy
+{% if infravm_ip | default('', true) != '' %}
+    extra_hosts:
+      - "{{ keycloak_hostname | default('auth') }}.{{ keycloak_domain | default(gitea_domain) | lower | regex_replace('\\.$', '') }}:{{ infravm_ip }}"
+{% endif %}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -190,7 +198,7 @@ services:
             --admin --must-change-password=false
         fi
 
-{% if gitea_oauth_enabled %}
+{% if gitea_oauth_enabled and not (prepare_restore | default(false) | bool) %}
         echo "gitea-init: syncing Keycloak OIDC auth source..."
         # Look up existing source by name. `gitea admin auth list` columns:
         #   ID  Name  Type  Enabled

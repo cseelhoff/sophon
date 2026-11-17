@@ -101,7 +101,7 @@ def host_keys(path, destination):
     return {kind: key.asbytes() for kind, key in keys.items()}
 
 
-def prepare(values, *, root, confirm=None):
+def prepare(values, *, root, confirm=None, readonly=False):
     """Return deployable SSH material after authenticated SFTP and Kopia checks."""
     values = dict(values)
     state = Path(root)
@@ -136,8 +136,12 @@ def prepare(values, *, root, confirm=None):
             key = paramiko.PKey.from_path(keyfile)
         except (ValueError, TypeError, paramiko.SSHException):
             raise ValueError('Supply a valid unencrypted SSH private key or repair the saved client identity.') from None
-        print('Authorize this line on the confined SFTP destination account:')
-        print(f'restrict {key.get_name()} {key.get_base64()} sophon-backup')
+        if readonly:
+            print('Authorize this line on the confined read-only SFTP restore account:')
+            print(f'restrict {key.get_name()} {key.get_base64()} sophon-restore')
+        else:
+            print('Authorize this line on the confined SFTP destination account:')
+            print(f'restrict {key.get_name()} {key.get_base64()} sophon-backup')
         known_hosts = directory / 'known_hosts'
         scan = subprocess.run(['ssh-keyscan', '-T', '10', '-t', 'rsa,ecdsa,ed25519', '-p', str(port), host],
                               capture_output=True, text=True, timeout=45)
@@ -184,43 +188,53 @@ def prepare(values, *, root, confirm=None):
                 path = values['SOPHON_KOPIA_SFTP_PATH']
                 if not stat.S_ISDIR(sftp.stat(path).st_mode):
                     raise ValueError('The SFTP repository path is not a directory.')
-                available = free_space(values, keyfile, known_hosts)
-                payload = os.urandom(64)
-                if available is not None and available < len(payload):
-                    raise ValueError('The SFTP destination has insufficient free space for the write check.')
-                probe = path.rstrip('/') + '/.sophon-preflight-' + uuid.uuid4().hex
-                created = False
-                try:
-                    with sftp.open(probe, 'wx') as stream:
-                        created = True
-                        stream.write(payload)
-                    with sftp.open(probe, 'rb') as stream:
-                        if stream.read() != payload:
-                            raise ValueError('SFTP read/write integrity check failed.')
-                finally:
-                    if created:
-                        sftp.remove(probe)
-                print('SFTP reachability/authentication/read/write/delete passed; ' +
-                      (f'{available // (1024 * 1024)} MiB available (not a backup-size guarantee).'
-                       if available is not None else 'the server does not report free space.'))
-                result = repository(values, directory, keyfile, known_hosts, 'connect')
-                created_repository = False
-                if result.returncode and result.stderr.strip() == NOT_INITIALIZED:
-                    if not unused_destination(sftp, path):
-                        raise ValueError('No Kopia repository found, but the destination is not empty; refusing creation.')
-                    approved = values.get('SOPHON_KOPIA_CREATE_REPOSITORY') == 'true'
-                    if not approved and (confirm is None or not confirm('No repository found here. Create a new encrypted repository?')):
-                        raise ValueError('Repository creation requires explicit confirmation or SOPHON_KOPIA_CREATE_REPOSITORY=true.')
-                    if not unused_destination(sftp, path):
-                        raise ValueError('The destination changed during confirmation; refusing repository creation.')
-                    check_repository_result(repository(values, directory, keyfile, known_hosts, 'create'), values)
+                if readonly:
+                    sftp.listdir(path)
+                    print('SFTP reachability/authentication/read-only directory check passed.')
                     result = repository(values, directory, keyfile, known_hosts, 'connect')
-                    created_repository = True
-                check_repository_result(result, values)
-                if (not created_repository and generated and confirm is not None
-                        and values.get('SOPHON_KOPIA_BACKUPS_ENABLED') == 'true'):
-                    if not confirm('Existing backup repository found on this new VM. Start scheduled backups immediately (answer n if restoring first)?'):
-                        values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+                    if result.returncode and result.stderr.strip() == NOT_INITIALIZED:
+                        raise ValueError('No Kopia repository found at the SFTP destination; '
+                                         '--prepare-restore requires an existing backup repository.')
+                    check_repository_result(result, values)
+                    values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+                else:
+                    available = free_space(values, keyfile, known_hosts)
+                    payload = os.urandom(64)
+                    if available is not None and available < len(payload):
+                        raise ValueError('The SFTP destination has insufficient free space for the write check.')
+                    probe = path.rstrip('/') + '/.sophon-preflight-' + uuid.uuid4().hex
+                    created = False
+                    try:
+                        with sftp.open(probe, 'wx') as stream:
+                            created = True
+                            stream.write(payload)
+                        with sftp.open(probe, 'rb') as stream:
+                            if stream.read() != payload:
+                                raise ValueError('SFTP read/write integrity check failed.')
+                    finally:
+                        if created:
+                            sftp.remove(probe)
+                    print('SFTP reachability/authentication/read/write/delete passed; ' +
+                          (f'{available // (1024 * 1024)} MiB available (not a backup-size guarantee).'
+                           if available is not None else 'the server does not report free space.'))
+                    result = repository(values, directory, keyfile, known_hosts, 'connect')
+                    created_repository = False
+                    if result.returncode and result.stderr.strip() == NOT_INITIALIZED:
+                        if not unused_destination(sftp, path):
+                            raise ValueError('No Kopia repository found, but the destination is not empty; refusing creation.')
+                        approved = values.get('SOPHON_KOPIA_CREATE_REPOSITORY') == 'true'
+                        if not approved and (confirm is None or not confirm('No repository found here. Create a new encrypted repository?')):
+                            raise ValueError('Repository creation requires explicit confirmation or SOPHON_KOPIA_CREATE_REPOSITORY=true.')
+                        if not unused_destination(sftp, path):
+                            raise ValueError('The destination changed during confirmation; refusing repository creation.')
+                        check_repository_result(repository(values, directory, keyfile, known_hosts, 'create'), values)
+                        result = repository(values, directory, keyfile, known_hosts, 'connect')
+                        created_repository = True
+                    check_repository_result(result, values)
+                    if (not created_repository and generated and confirm is not None
+                            and values.get('SOPHON_KOPIA_BACKUPS_ENABLED') == 'true'):
+                        if not confirm('Existing backup repository found on this new VM. Start scheduled backups immediately (answer n if restoring first)?'):
+                            values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
         values[MATERIAL[0]] = base64.b64encode(keyfile.read_bytes()).decode()
         values[MATERIAL[1]] = base64.b64encode(known_hosts.read_bytes()).decode()
     print('Kopia repository preflight passed. Service deployment can proceed.')

@@ -173,6 +173,65 @@ class KopiaRoleTests(unittest.TestCase):
             self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
             self.assertNotIn("fixture-private-key", result.stdout + result.stderr)
 
+    def test_prepare_restore_and_tunnel_disable_templates_isolate_production_dns_and_certs(self):
+        variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
+        for role in ("coredns", "gitea", "arcane", "kopia"):
+            variables.update(yaml.safe_load((ROOT / f"roles/{role}/defaults/main.yml").read_text()))
+        variables.update(
+            domain_name="dev.invalid",
+            infravm_ip="192.0.2.3",
+            vnet_dns="1.1.1.1",
+            coredns_dns_port=53,
+            coredns_cf_token="live-token-for-dns01-only",
+            coredns_cf_account_id="acct-123",
+            coredns_cf_zone_id="zone-123",
+            coredns_cf_tunnel_id="tun-123",
+            cf_tunnel_enabled=False,
+            prepare_restore=True,
+            kopia_readonly=True,
+            sophon_version="fixture",
+            kopia_volume_names=["gitea_gitea_data", "traefik_traefik_data"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            tasks = [
+                {"ansible.builtin.template": {
+                    "src": str(ROOT / f"roles/{role}/templates/docker-compose.yml.j2"),
+                    "dest": str(directory / f"{role}.yml")}, "vars": variables}
+                for role in ("coredns", "gitea", "arcane", "kopia")
+            ]
+            # Verify cloudflared role skips completely when cf_tunnel_enabled is false.
+            tasks.append({"ansible.builtin.include_role": {"name": str(ROOT / "roles/cloudflared")}, "vars": variables})
+            # Verify traefik certificate validation guard skips during prepare_restore even with empty token.
+            traefik_guard = next(
+                task for task in yaml.safe_load((ROOT / "roles/traefik/tasks/main.yml").read_text())
+                if task.get("name") == "Validate imported certificates"
+            )
+            tasks.append(dict(traefik_guard, vars=dict(variables, coredns_cf_token="", traefik_acme_replace_existing=False)))
+            env = dict(os.environ, ANSIBLE_ROLES_PATH=str(ROOT / "roles"))
+            with patch.dict(os.environ, env, clear=True):
+                result = run_fixture(directory, tasks)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            coredns = yaml.safe_load((directory / "coredns.yml").read_text())["services"]["coredns"]
+            coredns_env = dict(entry.split("=", 1) for entry in coredns["environment"])
+            self.assertEqual(coredns_env["CF_TOKEN"], "")
+            self.assertEqual(coredns_env["CF_ACCOUNT_ID"], "")
+            self.assertEqual(coredns_env["CF_TUNNEL_ID"], "")
+            self.assertEqual(coredns_env["CF_ZONE_ID"], "")
+
+            gitea_services = yaml.safe_load((directory / "gitea.yml").read_text())["services"]
+            self.assertEqual(set(gitea_services), {"gitea", "gitea-db", "gitea-init"})
+            self.assertEqual(gitea_services["gitea"]["extra_hosts"], ["auth.dev.invalid:192.0.2.3"])
+            self.assertEqual(gitea_services["gitea-init"]["extra_hosts"], ["auth.dev.invalid:192.0.2.3"])
+            self.assertNotIn("gitea admin auth", "\n".join(gitea_services["gitea-init"]["command"]))
+
+            arcane = yaml.safe_load((directory / "arcane.yml").read_text())["services"]["arcane"]
+            self.assertEqual(arcane["extra_hosts"], ["auth.dev.invalid:192.0.2.3"])
+
+            kopia = yaml.safe_load((directory / "kopia.yml").read_text())["services"]["kopia"]
+            self.assertEqual(kopia["environment"]["KOPIA_READONLY"], "${KOPIA_READONLY:-false}")
+
 
 if __name__ == "__main__":
     unittest.main()

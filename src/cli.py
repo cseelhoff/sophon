@@ -9,6 +9,7 @@ import sys
 COMMANDS = {
     'prepare': lambda args: ['ansible-playbook', '1-prepare.yml', *args],
     'provision': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision.yml'],
+    'verify-restore': lambda args: ['python3', 'src/verify_restore.py', *args],
     'certificates': lambda args: ['python3', 'src/certificates.py', *args],
     # </dev/null: the wizard tests assume no terminal, and `docker run -it` would make them wait for keystrokes.
     'test': lambda args: ['sh', '-c', 'exec </dev/null; python3 -m unittest discover -s tests "$@" && '
@@ -21,6 +22,7 @@ HELP = """usage: docker run --rm -it -v <project>:/workspace -v <engine socket>:
 
   prepare                 step 1: cache downloads, build the runner image, the installer ISO and the deployment ISO
   provision               steps 1-2: create the blank InfraVM (settings via -e SOPHON_*)
+  verify-restore          step 7: automated Proxmox restore drill over serial0 (tunnel disabled, read-only Kopia)
   certificates issue ...  air-gapped sites: issue the wildcard certificate and write the secret certificate ISO
                           (artifacts/secrets/sophon-certificates.iso; --output-iso, --output-file)
   test | shell            development helpers

@@ -17,4 +17,5 @@ kopia_environment:
   - {name: KOPIA_CLIENT_USERNAME, value: "{{ kopia_client_username }}"}
   - {name: KOPIA_CLIENT_HOSTNAME, value: "{{ kopia_client_hostname }}"}
   - {name: KOPIA_BACKUPS_ENABLED, value: "{{ kopia_backups_enabled | string }}"}
+  - {name: KOPIA_READONLY, value: "{{ (kopia_readonly | default(false) | bool) | ternary('true', 'false') }}"}
   - {name: KOPIA_SNAPSHOT_INTERVAL, value: "{{ kopia_snapshot_interval }}"}

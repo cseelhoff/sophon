@@ -42,23 +42,27 @@ EOF
         [ $# -eq 1 ] || die "Usage: sophon-backup-apply authorize-key < stdin"
         IFS= read -r line || die "Empty key input."
         set -- $line
-        [ $# -eq 4 ] || die "Expected: restrict <key-type> <base64-key> sophon-backup"
-        [ "$1" = "restrict" ] && [ "$4" = "sophon-backup" ] || die "Unexpected key wrapper."
+        [ $# -eq 4 ] || die "Expected: restrict <key-type> <base64-key> <sophon-backup|sophon-restore>"
+        [ "$1" = "restrict" ] || die "Unexpected key wrapper."
+        case "$4" in
+            sophon-backup|sophon-restore) target_user=$4 ;;
+            *) die "Unexpected key account: $4" ;;
+        esac
         case "$2" in
             ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa) ;;
             *) die "Unsupported SSH key type: $2" ;;
         esac
         case "$3" in *[!A-Za-z0-9+/=]*|"") die "Invalid base64 key material." ;; esac
         install -d -o root -g root -m 0755 /etc/ssh/authorized_keys
-        tmp=$(mktemp /etc/ssh/authorized_keys/.sophon-backup.XXXXXX)
+        tmp=$(mktemp "/etc/ssh/authorized_keys/.${target_user}.XXXXXX")
         trap 'rm -f "$tmp"' EXIT INT TERM
-        printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" > "$tmp"
+        printf '%s %s %s %s\n' "$1" "$2" "$3" "$target_user" > "$tmp"
         if ! ssh-keygen -lf "$tmp" >/dev/null 2>&1; then
             die "Rejected invalid SSH public key."
         fi
         chown root:root "$tmp"
         chmod 0644 "$tmp"
-        mv "$tmp" /etc/ssh/authorized_keys/sophon-backup
+        mv "$tmp" "/etc/ssh/authorized_keys/$target_user"
         trap - EXIT INT TERM
         /usr/sbin/sshd -t
         ;;

@@ -66,6 +66,46 @@ class RuntimeTests(unittest.TestCase):
                     server.terminate.assert_called_once()
                     self.assertFalse(any("create" in call.args[0] for call in commands.call_args_list))
 
+    def test_readonly_mode_connects_readonly_and_skips_repository_mutations_and_workers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_env = dict(
+                os.environ, KOPIA_PASSWORD="fixture-repository-password",
+                KOPIA_SERVER_PASSWORD="fixture-ui-password", KOPIA_SFTP_HOST="dev.invalid",
+                KOPIA_SFTP_USERNAME="sophon-restore", KOPIA_SFTP_PATH="/repository", KOPIA_SFTP_PORT="22",
+                KOPIA_CLIENT_USERNAME="backup", KOPIA_CLIENT_HOSTNAME="sophon",
+                KOPIA_SFTP_PRIVATE_KEY_B64=base64.b64encode(b"fixture-key").decode(),
+                KOPIA_SFTP_KNOWN_HOSTS_B64=base64.b64encode(b"fixture-pins").decode(),
+                KOPIA_BACKUPS_ENABLED="false", KOPIA_READONLY="true",
+                KOPIA_SNAPSHOT_INTERVAL="6h", SOURCE_ROOT=temporary,
+                ENGINE_URL="http://engine:2375",
+            )
+            with self.assertRaisesRegex(ValueError, "KOPIA_READONLY"):
+                runtime.start(base_env | {"KOPIA_BACKUPS_ENABLED": "true"})
+
+            callbacks = {}
+            server = Mock()
+            server.poll.return_value = None
+
+            def sleep(_):
+                callbacks[signal.SIGTERM](signal.SIGTERM, None)
+
+            with patch.object(runtime, "Path", side_effect=lambda path:
+                              root / "credentials" if path == "/tmp/credentials" else Path(path)), \
+                    patch.object(runtime.backup, "recover"), \
+                    patch.object(runtime.subprocess, "run",
+                                 return_value=subprocess.CompletedProcess([], 0, b"", b"")) as commands, \
+                    patch.object(runtime.subprocess, "Popen", return_value=server) as processes, \
+                    patch.object(runtime.signal, "signal", side_effect=lambda sig, fn: callbacks.update({sig: fn})), \
+                    patch.object(runtime.time, "sleep", side_effect=sleep):
+                runtime.start(base_env)
+            self.assertEqual(processes.call_count, 1)
+            self.assertEqual(len(commands.call_args_list), 1)
+            connect_argv = commands.call_args_list[0].args[0]
+            self.assertIn("--readonly", connect_argv)
+            self.assertFalse(any("maintenance" in call.args[0] or "policy" in call.args[0]
+                                 or "set-client" in call.args[0] for call in commands.call_args_list))
+
 
 if __name__ == "__main__":
     unittest.main()

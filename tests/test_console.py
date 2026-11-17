@@ -150,22 +150,70 @@ class ConsoleTests(unittest.TestCase):
 
     def test_connected_site_asks_for_email_and_token_but_not_certificates(self):
         values = service_values() | {'SOPHON_ARCANE_ADMIN_PASSWORD': '', 'SOPHON_ACME_EMAIL': ''}
-        # Inputs: internet access?, same password?, then DNS, IP, domain, email, tunnel, realm, realm name.
+        # Inputs: internet access?, same password?, then DNS, IP, domain, email, tunnel enabled, tunnel, realm, realm name.
         code, prompts, hidden, _ = self.wizard(
-            values, ['y', '', '', '', '', 'me@example.test', '', '', ''],
+            values, ['y', '', '', '', '', 'me@example.test', '', '', '', ''],
             ['token', 'long-enough-password', ''])
         self.assertEqual(code, 0)
         text = ' '.join(prompts + hidden)
         self.assertIn('SOPHON_ACME_EMAIL', text)
         self.assertIn('SOPHON_CF_TOKEN', text)
+        self.assertIn('SOPHON_CF_TUNNEL_ENABLED', text)
         self.assertIn('SOPHON_CF_TUNNEL_NAME', text)
         self.assertNotIn('SOPHON_ACME_FILE', text)
         self.assertTrue([prompt for prompt in hidden if 'SOPHON_ARCANE_ADMIN_PASSWORD' in prompt])
 
+    def test_connected_site_can_disable_cloudflare_tunnel_without_prompting_tunnel_name(self):
+        values = service_values() | {'SOPHON_ACME_EMAIL': 'me@example.test'}
+        # Inputs: internet access?, then DNS, IP, domain, email, tunnel enabled=false, realm, realm name.
+        code, prompts, hidden, _ = self.wizard(
+            values, ['y', '', '', '', '', 'false', '', ''],
+            ['token', ''])
+        self.assertEqual(code, 0)
+        text = ' '.join(prompts + hidden)
+        self.assertIn('SOPHON_CF_TUNNEL_ENABLED', text)
+        self.assertNotIn('SOPHON_CF_TUNNEL_NAME', text)
+
+    def test_prepare_restore_disables_cloudflare_and_writes_without_requiring_certificate_file(self):
+        captured = {}
+
+        def fake_prepare(values, **kwargs):
+            captured['readonly'] = kwargs.get('readonly')
+            captured['values'] = dict(values)
+            return values
+
+        def fake_launch(_args):
+            captured['env'] = {k: v for k, v in os.environ.items() if k.startswith('SOPHON_')}
+            return 0
+
+        env = service_values() | {
+            'SOPHON_CF_TOKEN': 'LIVE_PRODUCTION_TOKEN',
+            'SOPHON_CF_TUNNEL_ENABLED': 'true',
+            'SOPHON_CF_TUNNEL_NAME': 'sophon',
+            'SOPHON_KOPIA_BACKUPS_ENABLED': 'true',
+            'SOPHON_KOPIA_COARSE_ENABLED': 'true',
+            'SOPHON_KOPIA_CREATE_REPOSITORY': 'true',
+            'SOPHON_ACME_FILE': '',
+        }
+        with patch.dict(os.environ, env, clear=True), \
+                patch('console.deployment.load_site_settings', return_value={}), \
+                patch('console.backup_destination.prepare', side_effect=fake_prepare), \
+                patch('console.deployment.launch', side_effect=fake_launch):
+            self.assertEqual(console.main(['--run', '--prepare-restore']), 0)
+        self.assertTrue(captured['readonly'])
+        self.assertEqual(captured['values']['SOPHON_CF_TOKEN'], '')
+        self.assertEqual(captured['values']['SOPHON_CF_TUNNEL_ENABLED'], 'false')
+        self.assertEqual(captured['values']['SOPHON_KOPIA_BACKUPS_ENABLED'], 'false')
+        self.assertEqual(captured['values']['SOPHON_KOPIA_COARSE_ENABLED'], 'false')
+        self.assertEqual(captured['values']['SOPHON_KOPIA_CREATE_REPOSITORY'], 'false')
+        self.assertEqual(captured['env'].get('SOPHON_PREPARE_RESTORE'), 'true')
+        self.assertEqual(captured['env'].get('SOPHON_CF_TOKEN'), '')
+        self.assertEqual(captured['env'].get('SOPHON_CF_TUNNEL_ENABLED'), 'false')
+
     def test_connected_is_the_default_even_when_a_certificate_file_was_found(self):
         values = service_values() | {'SOPHON_ACME_FILE': '/workspace/imports/acme.json', 'SOPHON_ACME_EMAIL': 'me@example.test'}
         # Enter at the internet question means "yes": the certificate file is dropped and the token is asked for.
-        code, prompts, hidden, _ = self.wizard(values, [''] * 12, ['token'] * 4)
+        code, prompts, hidden, _ = self.wizard(values, [''] * 13, ['token'] * 4)
         self.assertEqual(code, 0)
         self.assertTrue(prompts[0].startswith('Does this site have internet access?') and prompts[0].endswith('[Y/n] '), prompts[0])
         text = ' '.join(prompts + hidden)
@@ -185,6 +233,7 @@ class ConsoleTests(unittest.TestCase):
         text = ' '.join(prompts + hidden)
         self.assertNotIn('SOPHON_ACME_EMAIL', text)
         self.assertNotIn('SOPHON_CF_TOKEN', text)
+        self.assertNotIn('SOPHON_CF_TUNNEL_ENABLED', text)
         self.assertNotIn('SOPHON_CF_TUNNEL_NAME', text)
         self.assertIn('File not found', output)
         self.assertIn('SOPHON_CERTS', output)
@@ -194,7 +243,7 @@ class ConsoleTests(unittest.TestCase):
     def test_required_values_are_asked_again_and_arcane_password_has_a_minimum(self):
         values = service_values() | {'SOPHON_ARCANE_ADMIN_PASSWORD': ''}
         code, prompts, hidden, output = self.wizard(
-            values, ['y', '', '', '', '', 'me@example.test', '', '', ''],
+            values, ['y', '', '', '', '', 'me@example.test', '', '', '', ''],
             ['token', '', 'short', 'long-enough-password', ''])
         self.assertEqual(code, 0)
         self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_ARCANE_ADMIN_PASSWORD' in prompt]), 3)
@@ -204,7 +253,7 @@ class ConsoleTests(unittest.TestCase):
         values = service_values() | {name: '' for name, field in deployment.step_fields('configure').items()
                                       if field[2] == 'password'}
         code, prompts, hidden, output = self.wizard(
-            values, ['y', 'y'] + [''] * 7,
+            values, ['y', 'y'] + [''] * 8,
             ['same-password-123', 'same-password-123', 'token', 'existing-repository-password'])
         self.assertEqual(code, 0, output)
         asked = [prompt.split('(')[-1].split(')')[0] for prompt in hidden if 'SOPHON_' in prompt]

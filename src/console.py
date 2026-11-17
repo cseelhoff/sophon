@@ -14,7 +14,7 @@ import backup_destination
 
 NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_KOPIA_PASSWORD',
               'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'}
-INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_NAME'}
+INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_ENABLED', 'SOPHON_CF_TUNNEL_NAME'}
 
 
 def read_secret(prompt):
@@ -111,6 +111,8 @@ def main(argv=None):
     parser.add_argument('--run', action='store_true', help='Validate exported settings and run without prompting')
     parser.add_argument('--refresh-certificates', action='store_true',
                         help='Replace an existing Traefik certificate store with the validated local handoff')
+    parser.add_argument('--prepare-restore', action='store_true',
+                        help='Deploy services as a read-only standby ready for sophon-restore without touching Cloudflare or writing backups')
     options = parser.parse_args(argv)
     if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
         parser.error('Start this program using sophon-deploy on installed InfraVM.')
@@ -120,8 +122,15 @@ def main(argv=None):
             os.environ.setdefault(name, value)
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    prepare_restore = options.prepare_restore or os.environ.get('SOPHON_PREPARE_RESTORE', '').strip().lower() == 'true'
     arguments = ['--step', 'configure']
     values = deployment.new_control(os.environ, 'configure')['values']
+    if prepare_restore:
+        values['SOPHON_CF_TOKEN'] = ''
+        values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
+        values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+        values['SOPHON_KOPIA_COARSE_ENABLED'] = 'false'
+        values['SOPHON_KOPIA_CREATE_REPOSITORY'] = 'false'
     if not options.run:
         if not sys.stdin.isatty():
             parser.error('Interactive setup requires a terminal; use --run with exported settings for automation.')
@@ -130,17 +139,22 @@ def main(argv=None):
         print('Settings already exported in the environment are used; Enter keeps a displayed default.')
         fields = deployment.step_fields('configure')
         try:
-            # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
-            # Connected is the normal case; only an explicit "n" selects the pre-issued certificate path.
-            has_internet = ask_yes_no('Does this site have internet access?', default=True)
-            skipped = {'SOPHON_ACME_FILE'} if has_internet else INTERNET_ONLY
-            if not has_internet:
-                values['SOPHON_CF_TOKEN'] = ''
-                if not values['SOPHON_ACME_FILE']:
-                    print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
-                          'run sophon-deploy again, or give the path of an acme.json already under /workspace.')
+            if prepare_restore:
+                has_internet = False
+                skipped = INTERNET_ONLY | {'SOPHON_ACME_FILE', 'SOPHON_KOPIA_BACKUPS_ENABLED',
+                                           'SOPHON_KOPIA_SNAPSHOT_INTERVAL', 'SOPHON_KOPIA_COARSE_ENABLED'}
             else:
-                values['SOPHON_ACME_FILE'] = ''
+                # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
+                # Connected is the normal case; only an explicit "n" selects the pre-issued certificate path.
+                has_internet = ask_yes_no('Does this site have internet access?', default=True)
+                skipped = {'SOPHON_ACME_FILE'} if has_internet else INTERNET_ONLY
+                if not has_internet:
+                    values['SOPHON_CF_TOKEN'] = ''
+                    if not values['SOPHON_ACME_FILE']:
+                        print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
+                              'run sophon-deploy again, or give the path of an acme.json already under /workspace.')
+                else:
+                    values['SOPHON_ACME_FILE'] = ''
             prompt_shared_password(values, {name: field for name, field in fields.items() if name not in skipped})
             for name, (label, group, kind, default, required) in fields.items():
                 value = values[name]
@@ -150,6 +164,8 @@ def main(argv=None):
                     continue
                 if name in skipped:
                     continue
+                if name == 'SOPHON_CF_TUNNEL_NAME' and values.get('SOPHON_CF_TUNNEL_ENABLED') != 'true':
+                    continue
                 if name in (*backup_destination.MATERIAL, 'SOPHON_KOPIA_CREATE_REPOSITORY'):
                     continue
                 if name in ('SOPHON_KOPIA_COARSE_VOLUMES_DIR', 'SOPHON_KOPIA_COARSE_WORK_DIR') and values['SOPHON_KOPIA_COARSE_ENABLED'] != 'true':
@@ -157,7 +173,7 @@ def main(argv=None):
                 if kind == 'password' and value:
                     # Supplied by the environment or the shared password; keep it without asking again.
                     continue
-                needed = required or (name == 'SOPHON_ACME_FILE' and not has_internet) or (
+                needed = required or (name == 'SOPHON_ACME_FILE' and not has_internet and not prepare_restore) or (
                     name == 'SOPHON_CF_TOKEN' and has_internet)
                 values[name] = prompt_field(name, label, kind, value, needed)
             values, error = deployment.validate_settings(values, {}, 'configure')
@@ -177,7 +193,8 @@ def main(argv=None):
             return 2
     try:
         values = backup_destination.prepare(values, root=deployment.ROOT,
-                                            confirm=None if options.run else ask_yes_no)
+                                            confirm=None if options.run else ask_yes_no,
+                                            readonly=prepare_restore)
         values = deployment.stage_certificates(values)
         values['SOPHON_ARCANE_ENCRYPTION_KEY'] = deployment.ensure_arcane_encryption_key(deployment.ROOT)
     except KeyboardInterrupt:
@@ -193,6 +210,10 @@ def main(argv=None):
     os.environ.pop('SOPHON_ACME_FILE', None)
     os.environ.update(values)
     os.environ['SOPHON_KOPIA_PREFLIGHT_COMPLETE'] = 'true'
+    if prepare_restore:
+        os.environ['SOPHON_PREPARE_RESTORE'] = 'true'
+    else:
+        os.environ.pop('SOPHON_PREPARE_RESTORE', None)
     extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
     return deployment.main(arguments + ['--', '4-configure.yml', *extra])
 

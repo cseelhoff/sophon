@@ -15,6 +15,8 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(cli.COMMANDS['provision']([])[-2:], ['--', '2-provision.yml'])
         self.assertIn('--step', cli.COMMANDS['provision']([]))
         self.assertNotIn('dashboard', cli.COMMANDS)
+        self.assertEqual(cli.COMMANDS['verify-restore'](['--teardown', 'destroy']),
+                         ['python3', 'src/verify_restore.py', '--teardown', 'destroy'])
         self.assertEqual(cli.COMMANDS['certificates'](['issue']), ['python3', 'src/certificates.py', 'issue'])
 
     def test_every_script_the_commands_run_exists(self):

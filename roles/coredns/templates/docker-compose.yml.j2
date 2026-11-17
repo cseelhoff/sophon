@@ -27,10 +27,10 @@ services:
     environment:
       - TRAEFIK_CNAME=traefik.{{ coredns_domain_name }}
       - HOST_IP={{ infravm_ip }}
-      - CF_TOKEN={{ coredns_cf_token }}
-      - CF_ACCOUNT_ID={{ coredns_cf_account_id }}
-      - CF_TUNNEL_ID={{ coredns_cf_tunnel_id }}
-      - CF_ZONE_ID={{ coredns_cf_zone_id }}
+      - CF_TOKEN={{ coredns_cf_token if (coredns_cf_tunnel_enabled | default(true) | bool) else '' }}
+      - CF_ACCOUNT_ID={{ coredns_cf_account_id if (coredns_cf_tunnel_enabled | default(true) | bool) else '' }}
+      - CF_TUNNEL_ID={{ coredns_cf_tunnel_id if (coredns_cf_tunnel_enabled | default(true) | bool) else '' }}
+      - CF_ZONE_ID={{ coredns_cf_zone_id if (coredns_cf_tunnel_enabled | default(true) | bool) else '' }}
       - CF_ZONE_DOMAIN={{ coredns_domain_name }}
       - CF_TUNNEL_TARGET=https://traefik.{{ coredns_domain_name }}
       - INVENTORY_ADDR=:8081

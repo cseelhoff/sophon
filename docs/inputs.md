@@ -60,8 +60,9 @@ installation never reinstalls; it rechecks that right before writing and waits 1
 single blank disk, `--auto` stops with a message; run `sudo bash <deployment-iso-mount>/install.sh` to be asked which
 disk to use. No network settings or password are baked in.
 
-On the first boot of the installed system `sophon-set-password.service` asks for the `core` console password on tty1,
-before the login prompt (the account stays locked until then). The VM starts on DHCP.
+On the first boot of the installed system `sophon-set-password.service` (on `tty1`) and
+`sophon-set-password-serial.service` (on `ttyS0` / Proxmox `serial0`) ask for the `core` console password before the
+login prompt; setting the password on either console satisfies both. The VM starts on DHCP.
 
 ## On the VM console: sophon-deploy
 
@@ -82,14 +83,20 @@ service accounts** (default no), then asks for:
 |---|---|
 | Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
 | ACME email | Connected sites only. A real address. |
-| Cloudflare token | Connected sites only, required. A custom token with three permissions: Zone / Zone / Read, Zone / DNS / Edit and Account / Cloudflare Tunnel / Edit (tunnel permission only if you use tunnels), scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
-| Cloudflare tunnel name | Connected sites only (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
+| Cloudflare token | Connected sites only, required unless running `sophon-deploy --prepare-restore`. A custom token with Zone / Zone / Read, Zone / DNS / Edit and (when `SOPHON_CF_TUNNEL_ENABLED=true`) Account / Cloudflare Tunnel / Edit, scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
+| Publish Cloudflare tunnel (`SOPHON_CF_TUNNEL_ENABLED`) | Default `true`. Set `false` on non-production, lab, or restore-verification instances so `coredns` never creates/updates Cloudflare tunnels or public CNAMEs and `cloudflared` is not deployed, even if a Cloudflare token is supplied for Let's Encrypt DNS-01. |
+| Cloudflare tunnel name | Connected sites with `SOPHON_CF_TUNNEL_ENABLED=true` (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
 | Passwords | Arcane admin (12+ characters), Keycloak admin and database, Arcane OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Arcane password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, existing Kopia repository password and SSH material. Configure generates and reuses Arcane's local SQLite encryption key under `credentials/arcane/` automatically. |
 | Kopia | External SFTP host/user/path, repository password and backup policy; Configure generates the client key and confirms host fingerprints. |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
-(passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
+(passwords are skipped silently). `sophon-deploy --run` does the same non-interactively; pass `--accept-dhcp` (or
+`--network-cidr <ip/prefix> --gateway <gw> [--dns <dns>]`) to apply the guest network without prompts, and pass
+`--prepare-restore` when staging a clean VM for `sophon-restore` (automatically disables Cloudflare tunnel/DNS
+publishing, skips pre-restore certificate requirements since `sophon-restore` restores `acme.json`, connects Kopia in
+read-only standby mode against `sophon-restore` if configured, and defers OIDC client registration until after
+`sophon-restore`).
 
 Service names (`traefik`, `arcane`, `dns`, `kopia`, `ldap`, `auth`, `git` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.

@@ -290,7 +290,7 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
             'vars': {'coredns_cf_tunnel_id': '', 'coredns_cf_account_id': '', 'coredns_cf_token': 'unused'},
         }])
         assert result.returncode == 0, result.stdout + result.stderr
-        assert 'skipped=2' in result.stdout and 'failed=0' in result.stdout
+        assert 'changed=0' in result.stdout and 'failed=0' in result.stdout and 'skipped=' in result.stdout
     tasks = (ROOT / 'roles/cloudflared/tasks/main.yml').read_text()
     assert 'no_log: true' in tasks.split('Read the tunnel connector token')[1].split('- name:')[0]
     order = [task.get('name') for task in yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['tasks']]

@@ -65,22 +65,56 @@ ask() {
 main() {
     # Not the DHCP-provided server: that is often the PC or router in front of this VM, which can forward back to it.
     local default_dns=1.1.1.1
+    local accept_dhcp=0 explicit_cidr="" explicit_gateway="" explicit_dns=""
+    while (( $# > 1 )); do
+        case $1 in
+            --accept-dhcp) accept_dhcp=1; shift ;;
+            --network-cidr)
+                (( $# >= 3 )) || die "Usage: sophon-network [--accept-dhcp | --network-cidr <ip/prefix> --gateway <gw> [--dns <dns>]] /path/to/site.json"
+                explicit_cidr=$2; shift 2 ;;
+            --gateway)
+                (( $# >= 3 )) || die "Usage: sophon-network [--accept-dhcp | --network-cidr <ip/prefix> --gateway <gw> [--dns <dns>]] /path/to/site.json"
+                explicit_gateway=$2; shift 2 ;;
+            --dns)
+                (( $# >= 3 )) || die "Usage: sophon-network [--accept-dhcp | --network-cidr <ip/prefix> --gateway <gw> [--dns <dns>]] /path/to/site.json"
+                explicit_dns=$2; shift 2 ;;
+            *) break ;;
+        esac
+    done
     local site=${1:?Usage: sophon-network /path/to/site.json} ip prefix gateway dns network
     local connection=/etc/NetworkManager/system-connections/sophon-static.nmconnection
     detect_network
-    printf '%s\n' 'Network for this InfraVM. Press Enter to accept the [default].' \
-        'DNS server: use a real resolver (your router or a public one). Do not use a PC that forwards its DNS to this VM,' \
-        'for example the Hyper-V Default Switch address, or lookups loop once that PC uses this VM for DNS.'
-    [[ -z $detected_dns ]] || printf 'Current DNS server (from DHCP): %s\n' "$detected_dns"
-    while true; do
-        ask ip 'InfraVM IPv4 address' "$detected_ip"
-        ask prefix 'IPv4 prefix length (1-30)' "$detected_prefix"
-        ask gateway 'IPv4 gateway' "$detected_gateway"
-        ask dns 'DNS server IPv4 address' "$default_dns"
-        # validate_network exits on failure, so it runs in a subshell and the questions are asked again.
-        ( validate_network "$ip" "$prefix" "$gateway" "$dns" ) && break
-        printf '%s\n' 'Please enter the network again.'
-    done
+    if [[ -n $explicit_cidr || -n $explicit_gateway ]]; then
+        [[ $explicit_cidr == */* && -n $explicit_gateway ]] ||
+            die "Supply both --network-cidr <ip/prefix> and --gateway <gw>."
+        ip=${explicit_cidr%/*}
+        prefix=${explicit_cidr#*/}
+        gateway=$explicit_gateway
+        dns=${explicit_dns:-${SOPHON_VNET_DNS:-$default_dns}}
+        validate_network "$ip" "$prefix" "$gateway" "$dns"
+    elif (( accept_dhcp )); then
+        [[ -n $detected_ip && -n $detected_prefix && -n $detected_gateway ]] ||
+            die "No active IPv4 DHCP lease detected yet; retry once DHCP is ready or pass --network-cidr and --gateway."
+        ip=$detected_ip
+        prefix=$detected_prefix
+        gateway=$detected_gateway
+        dns=${explicit_dns:-${SOPHON_VNET_DNS:-$default_dns}}
+        validate_network "$ip" "$prefix" "$gateway" "$dns"
+    else
+        printf '%s\n' 'Network for this InfraVM. Press Enter to accept the [default].' \
+            'DNS server: use a real resolver (your router or a public one). Do not use a PC that forwards its DNS to this VM,' \
+            'for example the Hyper-V Default Switch address, or lookups loop once that PC uses this VM for DNS.'
+        [[ -z $detected_dns ]] || printf 'Current DNS server (from DHCP): %s\n' "$detected_dns"
+        while true; do
+            ask ip 'InfraVM IPv4 address' "$detected_ip"
+            ask prefix 'IPv4 prefix length (1-30)' "$detected_prefix"
+            ask gateway 'IPv4 gateway' "$detected_gateway"
+            ask dns 'DNS server IPv4 address' "$default_dns"
+            # validate_network exits on failure, so it runs in a subshell and the questions are asked again.
+            ( validate_network "$ip" "$prefix" "$gateway" "$dns" ) && break
+            printf '%s\n' 'Please enter the network again.'
+        done
+    fi
     network=$(printf '[connection]\nid=sophon-static\ntype=ethernet\n\n[ipv4]\nmethod=manual\naddress1=%s/%s,%s\ndns=%s;\n\n[ipv6]\nmethod=disabled\n' \
         "$ip" "$prefix" "$gateway" "$dns")
     printf '%s\n' "$network" | sudo sh -c 'umask 077; cat > "$0"' "$connection"

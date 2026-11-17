@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly schedule for Sophon disaster-recovery restore drill
+
+[Timer]
+# Run every Sunday morning; Persistent=true runs immediately on next wake/login if the laptop was asleep.
+OnCalendar=Sun *-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

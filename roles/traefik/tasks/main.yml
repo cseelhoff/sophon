@@ -13,7 +13,7 @@
       - "{{ traefik_acme_backup_path }}"
       - --domain
       - "{{ domain_name }}"
-  when: coredns_cf_token | default('', true) == '' or traefik_acme_replace_existing | bool
+  when: (not (prepare_restore | default(false) | bool) and coredns_cf_token | default('', true) == '') or (traefik_acme_replace_existing | bool)
   changed_when: false
 
 - name: Seed acme.json into the traefik_data volume before the stack starts
@@ -29,9 +29,11 @@
     compose_stack_image_tars: "{{ traefik_image_tars }}"
 
 # Snapshot the live acme.json back to artifacts/. A 404 just means Traefik has
-# not issued anything yet.
+# not issued anything yet. Skip during --prepare-restore so a temporary bootstrap
+# certificate is never persisted to artifacts/traefik/acme.json.
 - name: Snapshot acme.json
   ansible.builtin.include_tasks: backup_acme.yml
+  when: not (prepare_restore | default(false) | bool)
   tags: [traefik-backup-acme]
 
 - name: Display Traefik status

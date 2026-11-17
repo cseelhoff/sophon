@@ -54,6 +54,10 @@ RUN set -eu; \
       addgroup -S sophon-backup; \
       adduser -D -S -G sophon-backup -h /repository -s /sbin/nologin sophon-backup; \
       sed -i "s|^sophon-backup:[^:]*:|sophon-backup:*:|" /etc/shadow; \
+      bk_uid=$(awk -F: "\$1==\"sophon-backup\"{print \$3}" /etc/passwd); \
+      bk_gid=$(awk -F: "\$1==\"sophon-backup\"{print \$4}" /etc/passwd); \
+      printf "sophon-restore:x:%s:%s:Sophon Read-Only Restore:/repository:/sbin/nologin\n" "$bk_uid" "$bk_gid" >> /etc/passwd; \
+      printf "sophon-restore:*:19797:0:99999:7:::\n" >> /etc/shadow; \
     '; \
     install -d -m 0750 /rootfs/etc/doas.d; \
     printf '%s\n' \
@@ -62,6 +66,7 @@ RUN set -eu; \
     chmod 0600 /rootfs/etc/doas.d/sophon-backup.conf; \
     install -d -m 0755 /rootfs/var/lib/sophon-backups /rootfs/etc/ssh/authorized_keys /rootfs/etc/ssh/sshd_config.d; \
     install -m 0644 /dev/null /rootfs/etc/ssh/authorized_keys/sophon-backup; \
+    install -m 0644 /dev/null /rootfs/etc/ssh/authorized_keys/sophon-restore; \
     printf '%s\n' \
       'PermitRootLogin no' \
       'PasswordAuthentication no' \
@@ -71,6 +76,16 @@ RUN set -eu; \
       '    AuthorizedKeysFile /etc/ssh/authorized_keys/sophon-backup' \
       '    ChrootDirectory /var/lib/sophon-backups' \
       '    ForceCommand internal-sftp' \
+      '    PasswordAuthentication no' \
+      '    KbdInteractiveAuthentication no' \
+      '    AllowTcpForwarding no' \
+      '    X11Forwarding no' \
+      '    PermitTunnel no' \
+      '    PermitTTY no' \
+      'Match User sophon-restore' \
+      '    AuthorizedKeysFile /etc/ssh/authorized_keys/sophon-restore' \
+      '    ChrootDirectory /var/lib/sophon-backups' \
+      '    ForceCommand internal-sftp -R' \
       '    PasswordAuthentication no' \
       '    KbdInteractiveAuthentication no' \
       '    AllowTcpForwarding no' \
@@ -98,7 +113,7 @@ RUN set -eu; \
       'if [ -t 1 ]; then' \
       '    _ip=$(ip -4 -o addr show scope global 2>/dev/null | awk "{split(\$4,a,\"/\"); print a[1]; exit}")' \
       '    printf "\n== Sophon Backup Server ==\n"' \
-      '    [ -z "$_ip" ] || printf "  Address : %s (SFTP user: sophon-backup, path: /repository)\n" "$_ip"' \
+      '    [ -z "$_ip" ] || printf "  Address : %s (SFTP users: sophon-backup, sophon-restore [ro], path: /repository)\n" "$_ip"' \
       '    for _pub in /etc/ssh/ssh_host_*_key.pub; do' \
       '        [ -f "$_pub" ] || continue' \
       '        printf "  Hostkey : %s %s\n" "$(awk "{print \$1}" "$_pub")" "$(ssh-keygen -lf "$_pub" | awk "{print \$2}")"' \

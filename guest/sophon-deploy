@@ -10,17 +10,30 @@ export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
 
 # `--network` asks the network questions again; the first run asks them because nothing is saved yet.
+# `--accept-dhcp` or `--network-cidr`/`--gateway` configure static networking non-interactively for serial automation.
 site=/var/lib/sophon/project/site.json
 redo_network=0
+explicit_network=0
+network_args=()
 forwarded=()
-for argument in "$@"; do
-    if [[ $argument == --network ]]; then redo_network=1; else forwarded+=("$argument"); fi
+while (( $# )); do
+    case $1 in
+        --network) redo_network=1; shift ;;
+        --accept-dhcp) network_args+=(--accept-dhcp); shift ;;
+        --network-cidr|--gateway|--dns)
+            (( $# >= 2 )) || { echo "$1 requires a value." >&2; exit 2; }
+            explicit_network=1
+            network_args+=("$1" "$2")
+            shift 2
+            ;;
+        *) forwarded+=("$1"); shift ;;
+    esac
 done
 set -- "${forwarded[@]}"
 network_changed=0
-if (( redo_network )) ||
+if (( redo_network || explicit_network )) ||
     ! jq -e '(.SOPHON_INFRAVM_IP // "") != "" and (.SOPHON_VNET_DNS // "") != ""' "$site" >/dev/null 2>&1; then
-    /usr/local/libexec/sophon-network "$site"
+    /usr/local/libexec/sophon-network "${network_args[@]}" "$site"
     network_changed=1
 fi
 # Host setup (loading the runner image, starting Podman socket) begins at boot; wait for it, and redo it once the
@@ -72,7 +85,8 @@ if [[ -e $certs_device ]]; then
 fi
 for name in \
     SOPHON_ACME_FILE SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
-    SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_NAME SOPHON_KEYCLOAK_REALM \
+    SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_ENABLED SOPHON_CF_TUNNEL_NAME \
+    SOPHON_KEYCLOAK_REALM \
     SOPHON_KEYCLOAK_REALM_DISPLAY_NAME SOPHON_KEYCLOAK_ADMIN_PASSWORD \
     SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET \
     SOPHON_GITEA_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
@@ -90,4 +104,7 @@ do
         args+=(--env "$name")
     fi
 done
+if [[ -v SOPHON_PREPARE_RESTORE ]]; then
+    args+=(--env SOPHON_PREPARE_RESTORE)
+fi
 exec podman "${args[@]}" sophon:latest python3 src/console.py "$@"

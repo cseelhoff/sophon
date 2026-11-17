@@ -21,7 +21,10 @@ coredns_cf_zone_id: ""
 coredns_cf_account_id: ""
 coredns_cf_tunnel_id: ""
 # Looked up by name so a recreated tunnel is picked up without editing an id.
+# Set SOPHON_CF_TUNNEL_ENABLED=false (or SOPHON_CF_TUNNEL_NAME="") to keep public tunnel routes and CNAMEs untouched.
 coredns_cf_tunnel_name: "{{ lookup('env', 'SOPHON_CF_TUNNEL_NAME') | default('sophon', true) }}"
+coredns_cf_tunnel_enabled: >-
+  {{ (cf_tunnel_enabled | default(true) | bool) and ((coredns_cf_tunnel_name | default('', true) | trim) != '') }}
 # Written and deleted by the preflight to prove the token holds Zone:DNS:Edit.
 coredns_cf_probe_record: "_sophon-preflight.{{ coredns_domain_name }}"
 # Service names published through the tunnel (<name>.<domain>).

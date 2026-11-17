@@ -2,7 +2,7 @@
 
 import argparse
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import getpass
 import json
 import os
@@ -17,13 +17,16 @@ import time
 
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
 
 
 SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git')
 MAX_FILE = 2 * 1024 * 1024
 KEY_TYPE = 'EC256'
+BOOTSTRAP_CN = 'SOPHON PRE-RESTORE BOOTSTRAP'
 # The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (it contains a private key).
 CERTIFICATE_LABEL = 'SOPHON_CERTS'
 CERTIFICATE_ISO = Path(__file__).resolve().parents[1] / 'artifacts/secrets/sophon-certificates.iso'
@@ -291,10 +294,56 @@ def issue_main(argv):
     return 0
 
 
+def bootstrap_store(domain):
+    """Generate a temporary 24h self-signed acme.json so OpenLDAP can initialize slapd.d before sophon-restore."""
+    domain = normalize_domain(domain)
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, BOOTSTRAP_CN)])
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(hours=24))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(domain), x509.DNSName(f'*.{domain}')]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    entry = {
+        'domain': {'main': domain, 'sans': [f'*.{domain}']},
+        'certificate': base64.b64encode(cert_pem).decode('ascii'),
+        'key': base64.b64encode(key_pem).decode('ascii'),
+        'Store': 'default',
+    }
+    return json.dumps({'letsencrypt': {'Certificates': [entry]}}, separators=(',', ':')).encode('utf-8')
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ['issue']:
         return issue_main(argv[1:])
+    if argv[:1] == ['bootstrap']:
+        parser = argparse.ArgumentParser(description='Write a temporary pre-restore bootstrap acme.json')
+        parser.add_argument('--domain', required=True)
+        parser.add_argument('--output', type=Path, required=True)
+        options = parser.parse_args(argv[1:])
+        data = bootstrap_store(options.domain)
+        options.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(options.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(data)
+        return 0
     parser = argparse.ArgumentParser(description=__doc__, epilog='Connected issuance/renewal: python3 certificates.py issue')
     parser.add_argument('command', choices=['check'], help='Validate an acme.json file')
     parser.add_argument('--source', type=Path, required=True, help='Traefik-format acme.json')

@@ -104,7 +104,7 @@ ignition_file() {
 }
 
 render_ignition() {
-    local media=$1 unit password_unit var_mount_unit
+    local media=$1 unit password_unit serial_password_unit var_mount_unit
     unit='[Unit]
 Description=Sophon offline host bootstrap
 After=network-online.target user@1000.service
@@ -128,12 +128,13 @@ TimeoutStartSec=0
 [Install]
 WantedBy=multi-user.target
 '
-    # The console login is locked until the operator chooses a password here, before the first login prompt.
+    # Both tty1 and ttyS0 stay locked until the first-boot core password is set on either console;
+    # whichever finishes first stops the sibling unit so getty starts on both consoles immediately.
     password_unit='[Unit]
-Description=Sophon first-boot console password
+Description=Sophon first-boot console password (tty1)
 ConditionPathExists=!/var/lib/sophon-core-password-set
 After=systemd-user-sessions.service plymouth-quit-wait.service
-Before=getty@tty1.service getty.target
+Before=getty@tty1.service
 
 [Service]
 Type=oneshot
@@ -143,7 +144,27 @@ StandardError=tty
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
-ExecStart=/usr/local/libexec/sophon-set-password
+ExecStart=/usr/local/libexec/sophon-set-password tty1
+
+[Install]
+WantedBy=multi-user.target
+'
+    serial_password_unit='[Unit]
+Description=Sophon first-boot serial console password (ttyS0)
+ConditionPathExists=!/var/lib/sophon-core-password-set
+ConditionPathExists=/dev/ttyS0
+After=systemd-user-sessions.service plymouth-quit-wait.service
+Before=serial-getty@ttyS0.service
+
+[Service]
+Type=oneshot
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+TTYReset=yes
+TTYVHangup=yes
+ExecStart=/usr/local/libexec/sophon-set-password ttyS0
 
 [Install]
 WantedBy=multi-user.target
@@ -180,6 +201,8 @@ RequiredBy=local-fs.target
     json_string "$unit"
     printf '},{"name":"sophon-set-password.service","enabled":true,"contents":'
     json_string "$password_unit"
+    printf '},{"name":"sophon-set-password-serial.service","enabled":true,"contents":'
+    json_string "$serial_password_unit"
     printf '}]}}\n'
 }
 

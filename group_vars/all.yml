@@ -46,6 +46,9 @@ vnet_dns: "{{ lookup('env', 'SOPHON_VNET_DNS') | default('', true) }}"
 domain_name: "{{ lookup('env', 'SOPHON_DOMAIN') | default('', true) }}"
 traefik_acme_email: "{{ lookup('env', 'SOPHON_ACME_EMAIL') | default('admin@example.com', true) }}"
 coredns_cf_token: "{{ lookup('env', 'SOPHON_CF_TOKEN') | default('', true) }}"
+cf_tunnel_enabled: "{{ (lookup('env', 'SOPHON_CF_TUNNEL_ENABLED') | default('true', true) | lower) == 'true' }}"
+prepare_restore: "{{ (lookup('env', 'SOPHON_PREPARE_RESTORE') | default('false', true) | lower) == 'true' }}"
+kopia_readonly: "{{ prepare_restore | bool }}"
 
 keycloak_realm: "{{ lookup('env', 'SOPHON_KEYCLOAK_REALM') | default('sophon', true) }}"
 keycloak_realm_display_name: >-
