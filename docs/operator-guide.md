@@ -20,11 +20,67 @@ Sophon runs on a single **Fedora CoreOS** virtual machine (**InfraVM**) with a d
 
 ---
 
-## 2. Prepare a Clean SFTP Backup Server
+## 2. Create & Configure a Confined SFTP Backup Server from Scratch
 
-Before running `sophon-deploy`, prepare a confined, key-only SFTP account on a separate Linux host or NAS (reachable from InfraVM over TCP port `22` or a custom port). You do **not** need to generate SSH client keys or `known_hosts` files by hand—InfraVM generates its own `ed25519` client identity and scans the server's host keys interactively.
+Sophon stores encrypted Kopia snapshots on an external SFTP server (preferably on a separate physical host, NAS, or storage pool from InfraVM so backups survive storage or host loss). You do **not** need to generate SSH client keys or `known_hosts` files by hand—InfraVM generates its own `ed25519` client identity and scans the server's host keys interactively.
 
-On a clean Debian/Ubuntu/RHEL backup host, run:
+If you already have an existing Linux host or NAS, skip straight to **Section 2.2**. If you do **not** yet have a backup server, follow **Section 2.1** to provision a clean Debian 13 Cloud-Init VM in Proxmox VE in under two minutes.
+
+### 2.1 Provision a new Debian 13 SFTP backup VM (Proxmox VE)
+
+#### Step A — Import the official Debian 13 Cloud-Init image
+
+1. In the Proxmox web UI, select a storage pool that has **Import** enabled (Datacenter -> Storage -> Edit -> Content: include `Import`, `Disk image`, `ISO image`), then open its **Import** tab.
+2. Click **Download from URL**, paste the official Debian 13 (`trixie`) generic cloud image URL, click **Query URL**, and download it:
+   - URL: `https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2`
+   - Verify the SHA-512 checksum against `https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS` (`Hash algorithm: sha512`).
+
+![Proxmox storage Import tab with Debian 13 genericcloud qcow2 image](./images/00a-backup-storage-import.png)
+
+#### Step B — Create the VM, resize disk & attach Cloud-Init
+
+You can create the backup VM either in the Proxmox GUI or with `qm` on the Proxmox node:
+
+- **Option 1 — Proxmox GUI:**
+  1. Select the downloaded `.qcow2` row in **Import** and click **Import** (or click **Create VM** -> **OS: Do not use any media**, **System: VirtIO SCSI single**, `2` cores `x86-64-v2-AES`, `2048 MiB` RAM, **Network: VirtIO** on your target bridge/VLAN, and import the disk onto **Hard Disk (`virtio0`)** with `Discard` enabled).
+  2. In the VM's **Hardware** tab, select **Hard Disk (`virtio0`)** -> **Disk Action -> Resize** and grow the disk to your desired backup capacity (for example `+30G` for a `32 GiB` dev target, or `200G+` for production).
+  3. Click **Add -> CloudInit Drive** on your target storage, and add **Add -> Serial Port (`serial0`)** if desired. Check **Options -> Boot Order** so `virtio0` is enabled first.
+
+![Proxmox Hardware tab for the dedicated Debian 13 SFTP backup VM](./images/00b-backup-vm-hardware.png)
+
+  4. Open the VM's **Cloud-Init** tab and set:
+     - **User:** `admin`
+     - **DNS servers:** `1.1.1.1` (or your upstream resolver)
+     - **SSH public key:** paste your operator workstation's SSH public key (for administrative access to set up the confined SFTP account)
+     - **IP Config (`net0`):** Static IPv4 address and gateway on the backup network (for example `10.0.60.65/24`, gateway `10.0.60.1`)
+  5. Click **Regenerate Image**, then click **Start** at the top right.
+
+![Proxmox Cloud-Init tab configuring admin SSH key and static IPv4 address](./images/00c-backup-vm-cloudinit.png)
+
+- **Option 2 — Proxmox `qm` CLI equivalent (run on the Proxmox node):**
+
+  ```bash
+  VMID=113
+  STORAGE=your-backup-storage
+  BRIDGE=vmbr1
+  VLAN=60
+  BACKUP_IP=10.0.60.65/24
+  GATEWAY=10.0.60.1
+
+  qm create "$VMID" --name sophon-sftp --cores 2 --memory 2048 --balloon 0 \
+      --cpu x86-64-v2-AES --ostype l26 --scsihw virtio-scsi-single \
+      --net0 "virtio,bridge=${BRIDGE},tag=${VLAN}" \
+      --virtio0 "${STORAGE}:0,import-from=${STORAGE}:import/debian-13-genericcloud-amd64.qcow2,format=qcow2,discard=on" \
+      --ide2 "${STORAGE}:cloudinit" --ciuser admin --sshkeys ~/.ssh/authorized_keys \
+      --ipconfig0 "ip=${BACKUP_IP},gw=${GATEWAY}" --nameserver 1.1.1.1 \
+      --boot order=virtio0 --serial0 socket --vga std
+  qm disk resize "$VMID" virtio0 100G
+  qm start "$VMID"
+  ```
+
+### 2.2 Configure the confined OpenSSH `internal-sftp` chroot
+
+SSH into the backup server (`ssh admin@<backup-server-ip>`) and create a locked `sophon-backup` system account jailed inside `/var/lib/sophon-backups` with `ForceCommand internal-sftp`:
 
 ```bash
 # 1. Create a locked system user with no interactive shell
@@ -33,6 +89,7 @@ sudo useradd --system --user-group --no-create-home \
 sudo usermod -p '*' sophon-backup
 
 # 2. Create the root-owned chroot directory and writable repository subdirectory
+#    (OpenSSH requires ChrootDirectory itself to be owned by root:root, mode 0755)
 sudo install -d -o root -g root -m 0755 /var/lib/sophon-backups /etc/ssh/authorized_keys
 sudo install -d -o sophon-backup -g sophon-backup -m 0700 /var/lib/sophon-backups/repository
 sudo install -o root -g root -m 0600 /dev/null /etc/ssh/authorized_keys/sophon-backup
@@ -57,6 +114,8 @@ sudo sshd -t && sudo systemctl reload ssh
 # 4. Print the server's SSH host-key SHA256 fingerprints for out-of-band verification
 for pub in /etc/ssh/ssh_host_*_key.pub; do sudo ssh-keygen -lf "$pub"; done
 ```
+
+![Backup VM console showing confined SFTP chroot permissions and SSH host-key SHA256 fingerprints](./images/00d-backup-sftp-setup.png)
 
 Keep those `SHA256:...` fingerprints visible so you can compare them when `sophon-deploy` scans the backup server. Because `ChrootDirectory` is `/var/lib/sophon-backups`, the SFTP path you enter in `sophon-deploy` is `/repository`.
 
@@ -130,7 +189,11 @@ Before deploying any container stack, `sophon-deploy` generates `/var/lib/sophon
 
 ![SFTP preflight free-space report and encrypted Kopia repository creation prompt](./images/06-sophon-repo-create.png)
 
-Confirm with `y`. Ansible (`4-configure.yml`) then reconciles all core Compose projects (`coredns`, `traefik`, `openldap`, `keycloak`, `gitea`, `arcane`, and `kopia`) and waits for health checks to pass. Once complete, you can detach the installer and deployment ISOs from the VM.
+Confirm with `y`. Ansible (`4-configure.yml`) then reconciles all core Compose projects (`coredns`, `traefik`, `openldap`, `keycloak`, `gitea`, `arcane`, and `kopia`) and waits for health checks to pass. On the backup server, `/var/lib/sophon-backups/repository` now contains the encrypted Kopia repository shards owned by `sophon-backup:sophon-backup`:
+
+![Encrypted Kopia repository initialized inside the confined SFTP chroot on the backup server](./images/05b-backup-authorize-key.png)
+
+Once `sophon-deploy` finishes, detach the installer and deployment ISOs from InfraVM.
 
 ---
 
