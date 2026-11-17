@@ -123,8 +123,11 @@ line to authorize, confirms host fingerprints and runs preflight before stacks;
 see [backup inputs](docs/inputs.md#kopia-backup-inputs). Only a confirmed missing
 repository on an unused path may be created; all other errors fail closed.
 Keep repository decryption credentials
-outside the encrypted repository. Scheduled backups remain an explicit setting:
-verify a first backup before enabling the six-hour schedule.
+outside the encrypted repository. `SOPHON_KOPIA_BACKUPS_ENABLED` defaults to
+`true`: Configure automatically runs and verifies the first snapshot and enables
+the six-hour schedule in one step (while offering to pause scheduled backups
+when a newly installed VM reconnects to an existing repository before
+`sophon-restore`).
 
 Core roles use only `sophon.backup.version=3` labels. Outside workloads need
 [explicit migration](docs/kopia-v3-migration.md) and a site volume list.

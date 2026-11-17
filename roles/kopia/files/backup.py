@@ -614,6 +614,8 @@ def run(environment):
         manifest["upload_status"] = "complete"
         write_json(root / "last-run.json", manifest)
         shutil.rmtree(result["path"])
+        import runtime
+        runtime.sync_ui(environment)
         print(json.dumps({"status": manifest["status"], "failures": manifest["failures"],
                           "snapshot": manifest["snapshot"]}))
         return 1 if manifest["failures"] else 0

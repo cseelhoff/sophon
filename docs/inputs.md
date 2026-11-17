@@ -114,7 +114,7 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 | `SOPHON_KOPIA_CREATE_REPOSITORY` | Optional unattended creation confirmation (`true`); default `false`. Used only for an exact missing repository on an unused path, never an existing repository or other error. No reset/rerun step is needed. |
 | `SOPHON_KOPIA_CLIENT_USERNAME`, `_CLIENT_HOSTNAME` | Stable snapshot source identity, default `backup@sophon`. Preserve it on reruns/recovery. |
 | `SOPHON_KOPIA_EXTRA_VOLUMES` | Site workload volume names as a JSON array, default `[]`. Core roles declare their own list. These become read-only mounts, not host paths. Retain the list in site IaC and redeploy after changes. |
-| `SOPHON_KOPIA_BACKUPS_ENABLED` | `false` until a first full backup is verified. Set `true` to enable scheduled backups; keep the existing value on reruns. |
+| `SOPHON_KOPIA_BACKUPS_ENABLED` | Default `true` (Configure runs and verifies the initial primary snapshot automatically and enables the schedule in one step; interactive pairing of a new VM to an existing repository offers to pause until `sophon-restore` runs). |
 | `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix. The container supervisor schedules collector runs, not raw filesystem snapshots. |
 | `SOPHON_KOPIA_COARSE_ENABLED` | Optional last-resort weekly live Btrfs subvolume snapshot layer, default `false`, independent of the primary schedule. |
 | `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | Host rootless Podman Btrfs `volumes` subvolume (default `/var/home/core/.local/share/containers/storage/volumes`), mounted read-only. |
@@ -166,7 +166,7 @@ before expecting them to be protected. Configure never restores state.
 
 ### Console recovery inputs
 
-`sophon-restore plan --group GROUP --snapshot latest` uses the existing `kopia`
+`sophon-restore` (or low-level `sophon-restore plan --group GROUP --snapshot latest`) uses the existing `kopia`
 container's connection settings, or the same `SOPHON_KOPIA_*` destination,
 password/key/pins and stable source identity overrides above when it is absent.
 It never uses Arcane or Gitea. Supply `SOPHON_RESTORE_SOURCE_VOLUME` when the

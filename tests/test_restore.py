@@ -170,6 +170,38 @@ class RestoreTests(unittest.TestCase):
             self.assertTrue(all(value["State"]["Running"] for value in members.values()))
             self.assertEqual(helpers, {})
 
+    def test_inspect_snapshot_returns_ordered_stateful_groups_and_omits_reconstructible_groups(self):
+        from unittest.mock import patch
+        snap_id = "d" * 32
+        manifest = {
+            "version": 3,
+            "failures": [],
+            "groups": [
+                {"name": "arcane", "paths": [], "dumps": []},
+                {"name": "gitea", "paths": [{"name": "repos"}], "dumps": [{"name": "db"}]},
+                {"name": "coredns", "paths": [], "dumps": []},
+                {"name": "traefik", "paths": [{"name": "acme"}], "dumps": []},
+                {"name": "keycloak", "paths": [], "dumps": [{"name": "db"}]},
+                {"name": "ldap", "paths": [], "dumps": [{"name": "ldif"}]},
+            ],
+        }
+
+        def fake_kopia(env, *args, **kwargs):
+            if args[:2] == ("snapshot", "list"):
+                return json.dumps([{"id": snap_id, "endTime": "2026-11-17T16:34:23Z",
+                                    "rootEntry": {"obj": "kroot"}}]).encode()
+            if args == ("show", "kroot"):
+                return json.dumps({"entries": [{"name": "manifest.json", "obj": "kman"}]}).encode()
+            if args == ("show", "kman"):
+                return json.dumps(manifest).encode()
+            raise AssertionError(args)
+
+        with patch.object(restore.runtime, "connect"), patch.object(restore.runtime, "kopia", side_effect=fake_kopia):
+            summary = restore.inspect_snapshot(
+                {"KOPIA_CLIENT_USERNAME": "backup", "KOPIA_CLIENT_HOSTNAME": "sophon"}, "latest")
+        self.assertEqual(summary["snapshot"], snap_id)
+        self.assertEqual([g["name"] for g in summary["groups"]], ["traefik", "ldap", "keycloak", "gitea"])
+
 
 if __name__ == "__main__":
     unittest.main()

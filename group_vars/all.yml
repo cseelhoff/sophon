@@ -87,7 +87,7 @@ kopia_client_username: "{{ lookup('env', 'SOPHON_KOPIA_CLIENT_USERNAME') | defau
 kopia_client_hostname: "{{ lookup('env', 'SOPHON_KOPIA_CLIENT_HOSTNAME') | default('sophon', true) }}"
 kopia_extra_volumes: "{{ lookup('env', 'SOPHON_KOPIA_EXTRA_VOLUMES') | default('[]', true) | from_json }}"
 sophon_version: "{{ lookup('file', playbook_dir ~ '/bootstrap/sophon-version') | trim }}"
-kopia_backups_enabled: "{{ lookup('env', 'SOPHON_KOPIA_BACKUPS_ENABLED') | default('false', true) }}"
+kopia_backups_enabled: "{{ lookup('env', 'SOPHON_KOPIA_BACKUPS_ENABLED') | default('true', true) }}"
 kopia_snapshot_interval: "{{ lookup('env', 'SOPHON_KOPIA_SNAPSHOT_INTERVAL') | default('6h', true) }}"
 kopia_coarse_enabled: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_ENABLED') | default('false', true) }}"
 kopia_coarse_volumes_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_VOLUMES_DIR') | default('/var/home/core/.local/share/containers/storage/volumes', true) }}"

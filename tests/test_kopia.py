@@ -117,6 +117,8 @@ class KopiaRoleTests(unittest.TestCase):
                 "args = sys.argv[1:]\n"
                 "if 'inspect' in args:\n"
                 f"    print('unhealthy' if pathlib.Path({str(state)!r}).exists() else 'healthy')\n"
+                "elif 'exec' in args:\n"
+                "    print(json.dumps({'status': 'complete', 'failures': []}))\n"
                 "elif 'logs' in args:\n"
                 "    sys.stderr.write('KOPIA_STARTUP_ERROR_JSON=' + json.dumps({\n"
                 "        'message': 'invalid repository password FIXTURE_SECRET_VALUE fixture-private-key'}) + '\\n')\n"

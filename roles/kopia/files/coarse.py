@@ -202,6 +202,7 @@ def run(environment):
                                                    "source": identity, "run": pending["run"]})
         (work / "pending.json").unlink()
         cleanup_staging(work)
+        runtime.sync_ui(environment)
         print(json.dumps({"status": "complete", "snapshot": result["id"], "source": identity}), flush=True)
 
 

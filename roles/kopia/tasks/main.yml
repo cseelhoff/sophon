@@ -117,6 +117,34 @@
       ansible.builtin.fail:
         msg: "Kopia deployment failed: {{ kopia_startup_error }}"
 
+- name: Wait for the initial primary backup to finish when scheduled backups are enabled
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+      - exec
+      - kopia
+      - cat
+      - /source/last-run.json
+  register: kopia_initial_backup
+  until: >-
+    kopia_initial_backup.rc == 0 and
+    (kopia_initial_backup.stdout | trim | length > 0) and
+    ((kopia_initial_backup.stdout | from_json).upload_status | default('')) != 'pending'
+  retries: 60
+  delay: 5
+  changed_when: false
+  when: kopia_backups_enabled | bool
+
+- name: Require a verified initial primary backup when scheduled backups are enabled
+  ansible.builtin.assert:
+    that:
+      - (kopia_initial_backup.stdout | from_json).status == 'complete'
+      - ((kopia_initial_backup.stdout | from_json).failures | default([])) == []
+    fail_msg: "Initial Kopia backup failed or was incomplete: {{ kopia_initial_backup.stdout }}"
+  when: kopia_backups_enabled | bool
+
 - name: Report the management-independent backup command
   ansible.builtin.debug:
-    msg: "Kopia ready. Run a backup from the console: podman exec kopia python3 /app/backup.py run"
+    msg: "Kopia ready. Run an on-demand backup from the console: podman exec kopia python3 /app/backup.py run"

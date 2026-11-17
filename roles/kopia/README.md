@@ -63,12 +63,16 @@ reports the volume name and asks you to add it to
 staging for diagnosis. Never treat a healthy UI/repository connection as proof
 that the last backup was complete.
 
-After verifying a first manual backup, set `SOPHON_KOPIA_BACKUPS_ENABLED=true`
-and rerun Configure. The container supervisor runs backups at
-`SOPHON_KOPIA_SNAPSHOT_INTERVAL` (default `6h`); positive integer `s`, `m`, `h`
-or `d` intervals are accepted. It logs nonzero runs and keeps the UI server
-independent. Native Kopia scheduling is disabled: UI “Snapshot now” on the
-logical source is not the collector. Use the command above.
+`SOPHON_KOPIA_BACKUPS_ENABLED` defaults to `true`: Configure waits for and
+verifies the initial primary snapshot before succeeding, leaving the `6h`
+schedule active in a single deployment pass (when a newly installed VM connects
+to an existing repository interactively, `sophon-deploy` offers to pause
+scheduled backups until `sophon-restore` runs). The container supervisor runs
+backups at `SOPHON_KOPIA_SNAPSHOT_INTERVAL` (default `6h`); positive integer `s`,
+`m`, `h` or `d` intervals are accepted. It logs nonzero runs, refreshes the UI
+server's index after each upload, and keeps the UI server independent. Native
+Kopia scheduling is disabled: UI “Snapshot now” on the logical source is not the
+collector. Use the command above.
 
 Snapshots use stable identity `backup@sophon:/sophon-state` by default, even
 though each run has a unique immutable staging directory. Retention remains
@@ -291,7 +295,15 @@ cross-version database/application migration is not supported. Stop any
 independently deployed writers sharing the group's state and do not run
 Configure or other engine mutations concurrently with recovery.
 
-On the console, as the rootless Podman owner (`core`, never `sudo`):
+On the console, as the rootless Podman owner (`core`, never `sudo`), restore all
+stateful groups interactively with a single command (or pass `--group gitea` /
+`--snapshot SNAPSHOT_ID` / `--yes`):
+
+```sh
+sophon-restore
+```
+
+Low-level phase commands also remain available for step-by-step inspection:
 
 ```sh
 sophon-restore plan --group gitea --snapshot latest

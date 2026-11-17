@@ -75,7 +75,7 @@ FIELDS = {
     'SOPHON_KOPIA_CLIENT_USERNAME': ('Backup source username', 'Backup', 'text', 'backup', True),
     'SOPHON_KOPIA_CLIENT_HOSTNAME': ('Backup source hostname', 'Backup', 'text', 'sophon', True),
     'SOPHON_KOPIA_EXTRA_VOLUMES': ('Additional site workload volumes (JSON array)', 'Backup', 'text', '[]', False),
-    'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups (after first verified backup)', 'Backup', 'choice', 'false', True),
+    'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups', 'Backup', 'choice', 'true', True),
     'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
     'SOPHON_KOPIA_COARSE_ENABLED': ('Enable weekly live Btrfs volume snapshots (true/false)', 'Backup', 'choice', 'false', False),
     'SOPHON_KOPIA_COARSE_VOLUMES_DIR': ('Host Btrfs Podman volumes subvolume (read-only source)', 'Backup', 'text',

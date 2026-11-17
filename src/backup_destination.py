@@ -204,6 +204,7 @@ def prepare(values, *, root, confirm=None):
                       (f'{available // (1024 * 1024)} MiB available (not a backup-size guarantee).'
                        if available is not None else 'the server does not report free space.'))
                 result = repository(values, directory, keyfile, known_hosts, 'connect')
+                created_repository = False
                 if result.returncode and result.stderr.strip() == NOT_INITIALIZED:
                     if not unused_destination(sftp, path):
                         raise ValueError('No Kopia repository found, but the destination is not empty; refusing creation.')
@@ -214,7 +215,12 @@ def prepare(values, *, root, confirm=None):
                         raise ValueError('The destination changed during confirmation; refusing repository creation.')
                     check_repository_result(repository(values, directory, keyfile, known_hosts, 'create'), values)
                     result = repository(values, directory, keyfile, known_hosts, 'connect')
+                    created_repository = True
                 check_repository_result(result, values)
+                if (not created_repository and generated and confirm is not None
+                        and values.get('SOPHON_KOPIA_BACKUPS_ENABLED') == 'true'):
+                    if not confirm('Existing backup repository found on this new VM. Start scheduled backups immediately (answer n if restoring first)?'):
+                        values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
         values[MATERIAL[0]] = base64.b64encode(keyfile.read_bytes()).decode()
         values[MATERIAL[1]] = base64.b64encode(known_hosts.read_bytes()).decode()
     print('Kopia repository preflight passed. Service deployment can proceed.')

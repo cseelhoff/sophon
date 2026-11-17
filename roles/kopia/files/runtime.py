@@ -40,7 +40,7 @@ def startup_diagnostic(error, environment):
     return "KOPIA_STARTUP_ERROR_JSON=" + json.dumps({"message": detail})
 
 
-def health(environment):
+def _ui_session(environment):
     authorization = base64.b64encode((required(environment, "KOPIA_SERVER_USERNAME") + ":" +
                                      required(environment, "KOPIA_SERVER_PASSWORD")).encode()).decode()
     headers = {"Authorization": "Basic " + authorization}
@@ -50,11 +50,30 @@ def health(environment):
     if token is None:
         raise RuntimeError("Kopia UI did not issue a CSRF token")
     headers["X-Kopia-Csrf-Token"] = token[1]
+    return opener, headers
+
+
+def health(environment):
+    opener, headers = _ui_session(environment)
     with opener.open(urllib.request.Request("http://127.0.0.1:51515/api/v1/repo/status", headers=headers),
                      timeout=10) as response:
         if json.load(response).get("connected") is not True:
             raise RuntimeError("Kopia repository is disconnected")
     print("Repository connected")
+
+
+def sync_ui(environment):
+    if not environment.get("KOPIA_SERVER_USERNAME") or not environment.get("KOPIA_SERVER_PASSWORD"):
+        return
+    try:
+        opener, headers = _ui_session(environment)
+        request = urllib.request.Request(
+            "http://127.0.0.1:51515/api/v1/repo/sync", data=b"{}",
+            headers=headers | {"Content-Type": "application/json"}, method="POST")
+        with opener.open(request, timeout=30) as response:
+            response.read()
+    except OSError:
+        pass
 
 
 def connect(environment):

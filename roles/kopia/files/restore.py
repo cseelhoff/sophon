@@ -584,9 +584,52 @@ def plan(api, root, environment, snapshot_id, group):
     return state
 
 
+GROUP_ORDER = ("traefik", "ldap", "keycloak", "gitea")
+
+
+def inspect_snapshot(environment, snapshot_id, selected_group=None):
+    runtime.connect(environment)
+    source = environment["KOPIA_CLIENT_USERNAME"] + "@" + environment["KOPIA_CLIENT_HOSTNAME"] + ":/sophon-state"
+    snapshots = json.loads(runtime.kopia(environment, "snapshot", "list", source, "--json"))
+    if not snapshots:
+        backup.fail("No snapshots exist for the configured source")
+    if snapshot_id == "latest":
+        chosen = max(snapshots, key=lambda value: value["endTime"])
+    else:
+        if not re.fullmatch(r"[a-f0-9]{32}", snapshot_id):
+            backup.fail("Snapshot must be latest or an exact snapshot ID")
+        matches = [value for value in snapshots if value["id"] == snapshot_id]
+        if not matches:
+            backup.fail(f"Snapshot {snapshot_id} not found for {source}")
+        chosen = matches[0]
+    tree = json.loads(runtime.kopia(environment, "show", chosen["rootEntry"]["obj"]))
+    manifest_obj = next((e["obj"] for e in tree.get("entries", []) if e.get("name") == "manifest.json"), None)
+    if not manifest_obj:
+        backup.fail("Snapshot is missing manifest.json")
+    manifest = json.loads(runtime.kopia(environment, "show", manifest_obj))
+    failed = {item["group"] for item in manifest.get("failures", [])}
+    groups = [
+        group for group in manifest.get("groups", [])
+        if (group.get("paths") or group.get("dumps")) and group["name"] not in failed
+    ]
+    if selected_group:
+        groups = [group for group in groups if group["name"] == selected_group]
+        if not groups:
+            backup.fail(f"Snapshot {chosen['id']} has no restorable state for group '{selected_group}'")
+    groups.sort(key=lambda g: (GROUP_ORDER.index(g["name"]) if g["name"] in GROUP_ORDER else len(GROUP_ORDER), g["name"]))
+    return {
+        "snapshot": chosen["id"],
+        "timestamp": chosen["endTime"],
+        "groups": [
+            {"name": g["name"], "paths": len(g.get("paths", [])), "dumps": len(g.get("dumps", []))}
+            for g in groups
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "apply", "status", "cleanup", "files"))
+    parser.add_argument("action", choices=("plan", "apply", "status", "cleanup", "files", "inspect"))
     parser.add_argument("--group")
     parser.add_argument("--snapshot", default="latest")
     parser.add_argument("--approve", action="store_true")
@@ -623,8 +666,11 @@ def main():
         if args.action == "status":
             print(json.dumps(state_file(root)))
             return 0
-        api = {"socket": "/socket/podman.sock", "timeout": 3600}
         environment = connection_environment(args.connection_stdin)
+        if args.action == "inspect":
+            print(json.dumps(inspect_snapshot(environment, args.snapshot, args.group)))
+            return 0
+        api = {"socket": "/socket/podman.sock", "timeout": 3600}
         with backup.locked(root):
             if args.action in ("apply", "cleanup") and not args.approve:
                 backup.fail("Destructive recovery actions require explicit approval (--approve)")

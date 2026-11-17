@@ -169,6 +169,12 @@ class DestinationTests(unittest.TestCase):
         self.assertFalse((self.root / 'credentials/kopia/id_ed25519').exists())
         self.assertNotIn(material.decode(), output)
 
+    def test_existing_repository_on_new_vm_can_pause_scheduled_backups_until_restore(self):
+        self.initialized = True
+        self.answers = [True, True, False]
+        values, _ = self.prepare()
+        self.assertEqual(values['SOPHON_KOPIA_BACKUPS_ENABLED'], 'false')
+
 
 if __name__ == '__main__':
     unittest.main()

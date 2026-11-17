@@ -144,7 +144,7 @@ After applying the static address, `sophon-deploy` finishes host bootstrap (`sop
 
 1. **Internet access (`[Y/n]`):** Keep **Y** for connected sites (Let's Encrypt DNS-01 + optional Cloudflare tunnel), or answer **n** for air-gapped/offline sites using a pre-issued `acme.json` (`SOPHON_CERTS` disk).
 2. **Shared service password (`[y/N]`):** Answer **y** if you want to enter one `12+` character password once for local admin/database accounts, or **n** to enter separate passwords per service. Note that the **Kopia repository encryption password** is always entered separately—store it in your password manager, as backups cannot be decrypted without it.
-3. **Backup target (`SOPHON_KOPIA_SFTP_*`):** Enter your SFTP server IP/hostname, port (`22`), username (`sophon-backup`), and chroot-relative path (`/repository`). Leave `SOPHON_KOPIA_BACKUPS_ENABLED` at `false` until you verify your first snapshot (or enable `SOPHON_KOPIA_COARSE_ENABLED=true` if you also want weekly live Btrfs volume snapshots).
+3. **Backup target (`SOPHON_KOPIA_SFTP_*`):** Enter your SFTP server IP/hostname, port (`22`), username (`sophon-backup`), and chroot-relative path (`/repository`). `SOPHON_KOPIA_BACKUPS_ENABLED` defaults to `true`: `sophon-deploy` automatically runs and verifies the initial snapshot at the end of deployment and starts the 6-hour schedule in a single pass (no second rerun needed). Optionally set `SOPHON_KOPIA_COARSE_ENABLED=true` if you also want weekly zero-downtime Btrfs volume snapshots.
 
 Before deploying any container stack, `sophon-deploy` generates `/var/lib/sophon/project/credentials/kopia/id_ed25519` (`0600`), prints a ready-to-paste `authorized_keys` line, and scans the SFTP server's SSH host keys:
 
@@ -186,30 +186,34 @@ Next, verify Git hosting at `https://git.<domain>` (using **Sign In With Keycloa
 
 ---
 
-## 6. Backups & Zero-Downtime Weekly Btrfs Snapshots
+## 6. Kopia Web UI, On-Demand Backups & Live Btrfs Snapshots
 
-### 6.1 Run and verify the first primary backup
+### 6.1 Browse snapshots & download individual files in the Kopia Web UI
 
-From the InfraVM console (logged in as `core`), trigger an immediate primary v3 snapshot and inspect its report:
+When `sophon-deploy` finishes with `SOPHON_KOPIA_BACKUPS_ENABLED=true` (the default), Sophon has already executed and verified your first primary backup and enabled the automatic `6h` schedule.
+
+To browse snapshot history or download individual files from a browser, open `https://kopia.<domain>` and sign in with your Kopia UI username (`admin`) and password. Switch the filter button at the top left from **Local Snapshots** to **All Snapshots** to view `/sophon-state` (primary 6-hour backups) and, if enabled, `/sophon-coarse` (weekly live Btrfs volume snapshots):
+
+![Kopia Web UI showing /sophon-state and /sophon-coarse snapshot sources](./images/10b-kopia-ui-snapshots.png)
+
+Click `/sophon-state` and select any snapshot timestamp to inspect its directory tree or download individual files directly:
+
+![Browsing inside a /sophon-state snapshot in the Kopia Web UI](./images/10c-kopia-ui-browse.png)
+
+> **What to do in the Kopia Web UI vs. the CLI:**
+> - **Use the Kopia Web UI** for inspecting snapshot history, checking sizes/retention, and downloading individual files (for example grabbing one file out of `gitea/` or inspecting `manifest.json`).
+> - **Do not use the Kopia Web UI's "Snapshot Now" or "Restore" buttons to back up or restore live containers**, and do not edit repository settings in the UI (Sophon reconciles configuration from code). Kopia itself is a file uploader whose container mounts live volumes **read-only (`:ro`)**: it cannot run `pg_dumpall`/`psql` for PostgreSQL or `slapcat`/`slapadd` for OpenLDAP, pause/restart containers, or merge generated secrets into `app.ini`. Sophon's collector (`backup.py`) and recovery command (`sophon-restore`) handle all database exports/imports and container orchestration automatically.
+
+### 6.2 Trigger an on-demand backup or inspect Btrfs snapshot status
+
+From the InfraVM console (logged in as `core`), you can trigger an extra primary backup or inspect the latest run report at any time:
 
 ```bash
 podman exec kopia python3 /app/backup.py run
 podman exec kopia cat /source/last-run.json
-podman exec kopia kopia snapshot list --all
 ```
 
-Confirm `"status": "complete"` and `"failures": []`. Notice that `backup.py run` also prints every undeclared volume (such as `arcane_arcane_data` and database data directories that are backed up via logical dumps rather than raw file copies) so omissions are always visible.
-
-### 6.2 Enable scheduled backups
-
-Once your first snapshot succeeds, rerun `sophon-deploy` to enable the automatic 6-hour schedule (and optionally weekly live Btrfs snapshots):
-
-- Set `SOPHON_KOPIA_BACKUPS_ENABLED` to `true` (default interval `6h`).
-- Optionally set `SOPHON_KOPIA_COARSE_ENABLED` to `true` to enable weekly zero-downtime read-only Btrfs subvolume snapshots (`backup@sophon:/sophon-coarse`, keeping the latest 4).
-
-Because the client SSH key and verified SFTP host pins are already saved under `/var/lib/sophon/project/credentials/kopia`, rerunning `sophon-deploy` reuses them automatically without re-prompting for pairing or repository creation.
-
-To check Btrfs filesystem and coarse-snapshot status at any time:
+If you enabled weekly zero-downtime read-only Btrfs subvolume snapshots (`SOPHON_KOPIA_COARSE_ENABLED=true`), you can inspect `/var` mount options and the latest weekly snapshot status with:
 
 ```bash
 findmnt /var
@@ -220,43 +224,39 @@ cat /var/home/core/sophon-coarse/last-run.json
 
 ## 7. Disaster Recovery (`sophon-restore`)
 
-If InfraVM or its virtual disk is completely lost, rebuild from code first and then restore application state explicitly. `sophon-deploy` **never** restores data automatically.
+If InfraVM or its virtual disk is completely lost, rebuild from code first and then restore application state with a single command. `sophon-deploy` **never** restores data automatically.
 
 ### 7.1 Rebuild InfraVM & reconnect to the existing Kopia repository
 
 1. Provision a new blank VM with `sophon-installer.iso` and `sophon-deployment.iso` (Section 3) and complete first-boot password and network setup (Sections 4.1–4.2).
-2. Run `sophon-deploy` using the same domain, realm, and SFTP repository settings (`SOPHON_KOPIA_PASSWORD`, `SOPHON_KOPIA_SFTP_HOST`, `SOPHON_KOPIA_SFTP_USERNAME`, `SOPHON_KOPIA_SFTP_PATH`), **keeping `SOPHON_KOPIA_BACKUPS_ENABLED=false` and `SOPHON_KOPIA_COARSE_ENABLED=false` during recovery** so scheduled jobs do not write a blank-state snapshot before restoration finishes.
+2. Run `sophon-deploy` using the same domain, realm, and SFTP repository settings (`SOPHON_KOPIA_PASSWORD`, `SOPHON_KOPIA_SFTP_HOST`, `SOPHON_KOPIA_SFTP_USERNAME`, `SOPHON_KOPIA_SFTP_PATH`).
 3. Because this is a new VM, `sophon-deploy` generates a **new** `ed25519` SSH key. On your Sophon Backup Server console, run `sophon-authorize-key`, paste the newly displayed `restrict ssh-ed25519 ...` line, and confirm the server's `SHA256:...` host-key fingerprints on InfraVM.
-4. `sophon-deploy` detects the **existing** Kopia repository at `/repository` automatically (it will **not** prompt to create one) and deploys fresh, healthy stacks.
+4. `sophon-deploy` automatically detects the **existing** Kopia repository at `/repository` (it will **not** prompt to create one) and asks:
+   `Existing backup repository found on this new VM. Start scheduled backups immediately (answer n if restoring first)? [y/N]`
+   Press **Enter** (`n`) so scheduled backups stay paused until you finish restoring your data.
 
-### 7.2 Restore stateful workload groups
+### 7.2 Run `sophon-restore`
 
-Log in to the rebuilt InfraVM console as `core` (never with `sudo`) and inspect available snapshots:
+Of Sophon's services, `coredns`, `cloudflared`, `arcane`, and `kopia` hold no user data of their own (notice `0 Files` next to `arcane/`, `coredns/`, and `kopia/` in the Kopia UI screenshot above)—they are already 100% rebuilt as soon as `sophon-deploy` finishes. Your irreproducible data lives in the four stateful services:
+
+- **`traefik`** — issued TLS certificate (`acme.json`)
+- **`ldap`** — directory users, passwords, and groups
+- **`keycloak`** — SSO realm and OIDC clients
+- **`gitea`** — Git repositories, issues, SSH/JWT keys, and database
+
+Log in to the rebuilt InfraVM console as `core` (never with `sudo`) and run:
 
 ```bash
-podman exec kopia kopia snapshot list --all
+sophon-restore
 ```
 
-Sophon has four stateful backup groups (`traefik`, `ldap`, `keycloak`, `gitea`); `coredns`, `cloudflared`, `arcane`, and `kopia` are fully reconstructed by `sophon-deploy`. Restore each stateful group using `plan`, `apply --approve`, and `cleanup --approve`:
+`sophon-restore` inspects the latest snapshot, lists the stateful services found in it, asks once for confirmation (`[y/N]`), and automatically restores all of them in order—pausing each service briefly, restoring files via Btrfs CoW reflinks with numeric ownership preserved, replaying PostgreSQL/OpenLDAP dumps, restarting the containers, and cleaning up temporary staging:
 
-```bash
-for group in traefik ldap keycloak gitea; do
-    sophon-restore plan --group "$group"
-    sophon-restore apply --group "$group" --approve
-    sophon-restore cleanup --approve
-done
-```
+![Interactive single-command sophon-restore recovering traefik, ldap, keycloak, and gitea](./images/11-sophon-restore.png)
 
-For each group, `sophon-restore`:
+*(Need to roll back only one service or use a specific older snapshot? Run `sophon-restore --group gitea` or `sophon-restore --snapshot <SNAPSHOT_ID>`. Low-level `plan`, `apply`, `status`, and `cleanup` subcommands also remain available—see the [Kopia role reference](../roles/kopia/README.md#explicit-group-restoration).)*
 
-1. Places a durable recovery hold (`/source/restore.json`) blocking primary/coarse backup runs until cleanup finishes.
-2. Verifies running container names, immutable image digests, backup declarations, and volume mounts against the snapshot manifest.
-3. Stops the target group's writers, restores declared irreproducible files using Btrfs CoW reflinks with numeric ownership preserved (merging generated application secrets such as Gitea's `SECRET_KEY` / `INTERNAL_TOKEN` into the freshly rendered `app.ini`), replays native `postgres-cluster.sql` / `config.ldif` + `data.ldif` dumps, and restarts the group.
-4. Removes temporary staging and clears the backup hold on `sophon-restore cleanup --approve`.
-
-![Live console execution of sophon-restore recovering Gitea repository and commit history](./images/11-sophon-restore.png)
-
-### 7.3 Post-recovery verification & schedule re-enablement
+### 7.3 Verify & resume scheduled backups
 
 1. Sign in to `https://arcane.<domain>` and `https://git.<domain>` via Keycloak SSO and verify your LDAP users, Keycloak clients, TLS certificates, and Git repositories/commit history match pre-loss state.
-2. Rerun `sophon-deploy` with `SOPHON_KOPIA_BACKUPS_ENABLED=true` (and `SOPHON_KOPIA_COARSE_ENABLED=true` if used) to resume scheduled backups from the recovered instance.
+2. Rerun `sophon-deploy` accepting the default `SOPHON_KOPIA_BACKUPS_ENABLED=true` (and `SOPHON_KOPIA_COARSE_ENABLED=true` if used) to resume scheduled backups on the recovered VM.
