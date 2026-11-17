@@ -99,6 +99,8 @@ coreos_iso_path: "{{ artifacts_dir }}/coreos/fedora-coreos-live.iso"
 # The stock live ISO above, plus the unattended installer; this is the one every hypervisor boots.
 installer_iso_path: "{{ artifacts_dir }}/coreos/sophon-installer.iso"
 bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
+# Standalone unattended Alpine SFTP backup server installer ISO (optional; for sites without an existing SFTP server).
+backup_installer_iso_path: "{{ artifacts_dir }}/backup/sophon-backup-installer.iso"
 # <vendor>-<image>_<tag>.tar, e.g. getarcaneapp-manager_v3.0.1.tar
 sophon_containers_dir: "{{ artifacts_dir }}/containers"
 arcane_image_tarname: "{{ (arcane_image_repo.split('/')[-2:] | join('-')) }}_{{ arcane_image_tag }}.tar"

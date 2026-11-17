@@ -271,8 +271,10 @@ class PrepareTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('xorriso'), 'xorriso is required')
     def test_cached_prepare_never_invokes_network_tools(self):
         shutil.copytree(ROOT / 'roles/prepare', self.root / 'roles/prepare')
+        shutil.copytree(ROOT / 'guest/backup-appliance', self.root / 'guest/backup-appliance')
         self.write('src/bundle.py', (ROOT / 'src/bundle.py').read_text())
         self.write('src/installer_iso.py', (ROOT / 'src/installer_iso.py').read_text())
+        self.write('src/backup_iso.py', (ROOT / 'src/backup_iso.py').read_text())
         self.write('guest/sophon-autoinstall')
         for name in bundle.PROJECT:
             if Path(name).suffix:
@@ -297,6 +299,15 @@ class PrepareTests(unittest.TestCase):
         self.write('artifacts/containers/library-haproxy_3.2.6-alpine.tar', 'cached-proxy')
         self.write('artifacts/containers/sophon-kopia_0.23.1.tar', 'cached-kopia')
         self.write('artifacts/containers/sophon-kopia_0.23.1.tar.id', 'sha256:cached-kopia')
+        alpine_src = self.root / 'alpine-seed'
+        alpine_src.mkdir()
+        (alpine_src / '.alpine-release').write_text('3.24.4\n')
+        alpine_iso = self.root / 'artifacts/backup/alpine-virt-3.24.4-x86_64.iso'
+        alpine_iso.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['xorriso', '-as', 'mkisofs', '-quiet', '-o', str(alpine_iso), str(alpine_src)], check=True)
+        alpine_sha = hashlib.sha256(alpine_iso.read_bytes()).hexdigest()
+        self.write('artifacts/backup/sophon-backup-os.tar.gz', 'cached-backup-os')
+        self.write('artifacts/backup/sophon-backup-os.tar.gz.id', 'sha256:cached-backup-os')
         # Building and inspecting the local runner image is allowed; pulls, saves and git are not.
         forbidden = self.root / 'fake-bin'
         forbidden.mkdir()
@@ -305,7 +316,7 @@ class PrepareTests(unittest.TestCase):
         (forbidden / 'docker').write_text('\n'.join([
             '#!/bin/sh',
             'case "$1 $2" in',
-            f'  "image inspect") if [ "$5" = "localhost/sophon-kopia:0.23.1" ]; then echo sha256:cached-kopia; else cat "{image_id}"; fi; exit 0 ;;',
+            f'  "image inspect") if [ "$5" = "localhost/sophon-kopia:0.23.1" ]; then echo sha256:cached-kopia; elif [ "$5" = "localhost/sophon-backup-os:3.24.4" ]; then echo sha256:cached-backup-os; else cat "{image_id}"; fi; exit 0 ;;',
             '  "build "*) for last do :; done; if [ "$last" = "-" ]; then cat >/dev/null; fi; exit 0 ;;',
             'esac',
             f'echo "$1" >> "{attempted}"',
@@ -324,6 +335,8 @@ class PrepareTests(unittest.TestCase):
                 'coreos_iso_path': str(live_iso),
                 'installer_iso_path': str(self.root / 'artifacts/coreos/sophon-installer.iso'),
                 'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-deployment.iso'),
+                'backup_installer_iso_path': str(self.root / 'artifacts/backup/sophon-backup-installer.iso'),
+                'prepare_alpine_iso_sha256': alpine_sha,
                 'arcane_image': 'ghcr.io/getarcaneapp/manager:v3.0.1',
                 'arcane_image_tarname': 'getarcaneapp-manager_v3.0.1.tar',
                 'kopia_image': 'localhost/sophon-kopia:0.23.1',
@@ -347,6 +360,7 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(attempted.exists(), attempted.read_text() if attempted.exists() else '')
         self.assertTrue((self.root / 'artifacts/bootstrap/sophon-deployment.iso').is_file())
+        self.assertTrue((self.root / 'artifacts/backup/sophon-backup-installer.iso').is_file())
         self.assertEqual((self.root / 'artifacts/coreos/sophon-installer.iso').read_text().strip(), 'customised')
         self.assertEqual(live_iso.read_text(), 'cached-stock-live-iso', 'the stock ISO must stay unchanged')
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())

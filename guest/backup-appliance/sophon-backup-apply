@@ -1,0 +1,68 @@
+#!/bin/sh
+# Narrow root helper invoked via doas by sophon-backup-setup and sophon-authorize-key.
+set -eu
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+action=${1:-}
+case "$action" in
+    network)
+        [ $# -eq 6 ] || die "Usage: sophon-backup-apply network <iface> <ip> <prefix> <gateway> <dns>"
+        iface=$2 ip=$3 prefix=$4 gateway=$5 dns=$6
+        case "$iface" in *[!A-Za-z0-9._-]*|"") die "Invalid interface name." ;; esac
+        for addr in "$ip" "$gateway" "$dns"; do
+            case "$addr" in *[!0-9.]*|"") die "Invalid IPv4 address." ;; esac
+        done
+        case "$prefix" in *[!0-9]*|"") die "Invalid prefix." ;; esac
+        umask 022
+        cat > /etc/network/interfaces.tmp <<EOF
+auto lo
+iface lo inet loopback
+
+auto $iface
+iface $iface inet static
+    address $ip/$prefix
+    gateway $gateway
+EOF
+        mv /etc/network/interfaces.tmp /etc/network/interfaces
+        printf 'nameserver %s\n' "$dns" > /etc/resolv.conf.tmp
+        mv /etc/resolv.conf.tmp /etc/resolv.conf
+        install -m 0644 /dev/null /etc/sophon-backup-static-net
+        if rc-service dhcpcd status >/dev/null 2>&1; then
+            rc-service dhcpcd stop >/dev/null 2>&1 || true
+        fi
+        rc-update del dhcpcd default >/dev/null 2>&1 || true
+        rc-update add networking boot >/dev/null 2>&1 || true
+        ip -4 addr flush dev "$iface" || true
+        ip addr add "$ip/$prefix" dev "$iface"
+        ip link set "$iface" up
+        ip route replace default via "$gateway" dev "$iface"
+        ;;
+    authorize-key)
+        [ $# -eq 1 ] || die "Usage: sophon-backup-apply authorize-key < stdin"
+        IFS= read -r line || die "Empty key input."
+        set -- $line
+        [ $# -eq 4 ] || die "Expected: restrict <key-type> <base64-key> sophon-backup"
+        [ "$1" = "restrict" ] && [ "$4" = "sophon-backup" ] || die "Unexpected key wrapper."
+        case "$2" in
+            ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa) ;;
+            *) die "Unsupported SSH key type: $2" ;;
+        esac
+        case "$3" in *[!A-Za-z0-9+/=]*|"") die "Invalid base64 key material." ;; esac
+        install -d -o root -g root -m 0755 /etc/ssh/authorized_keys
+        tmp=$(mktemp /etc/ssh/authorized_keys/.sophon-backup.XXXXXX)
+        trap 'rm -f "$tmp"' EXIT INT TERM
+        printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" > "$tmp"
+        if ! ssh-keygen -lf "$tmp" >/dev/null 2>&1; then
+            die "Rejected invalid SSH public key."
+        fi
+        chown root:root "$tmp"
+        chmod 0644 "$tmp"
+        mv "$tmp" /etc/ssh/authorized_keys/sophon-backup
+        trap - EXIT INT TERM
+        /usr/sbin/sshd -t
+        ;;
+    *)
+        die "Unknown action: $action"
+        ;;
+esac

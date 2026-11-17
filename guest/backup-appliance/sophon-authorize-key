@@ -1,0 +1,73 @@
+#!/bin/sh
+# Authorize or rotate the confined Sophon SFTP client public key on the backup server.
+set -eu
+
+optional=0
+if [ "${1:-}" = "--optional" ]; then
+    optional=1
+    shift
+fi
+
+normalize_and_install() {
+    raw=$1
+    # Trim leading/trailing whitespace and accept either "restrict <type> <key> ..." or "<type> <key> ..."
+    set -- $raw
+    [ $# -ge 2 ] || return 1
+    if [ "$1" = "restrict" ]; then
+        shift
+    fi
+    [ $# -ge 2 ] || return 1
+    ktype=$1
+    kdata=$2
+    case "$ktype" in
+        ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa) ;;
+        *) echo "Unsupported key type '$ktype' (expected ssh-ed25519, ecdsa-sha2-nistp*, or ssh-rsa)." >&2; return 1 ;;
+    esac
+    tmp=$(mktemp)
+    printf '%s %s\n' "$ktype" "$kdata" > "$tmp"
+    if ! fp=$(ssh-keygen -lf "$tmp" 2>/dev/null); then
+        rm -f "$tmp"
+        echo "That line is not a valid OpenSSH public key; copy the full 'restrict ssh-ed25519 ...' line from sophon-deploy." >&2
+        return 1
+    fi
+    rm -f "$tmp"
+    if [ "$(id -u)" -eq 0 ]; then
+        printf 'restrict %s %s sophon-backup\n' "$ktype" "$kdata" | /usr/local/sbin/sophon-backup-apply authorize-key
+    else
+        printf 'restrict %s %s sophon-backup\n' "$ktype" "$kdata" | doas /usr/local/sbin/sophon-backup-apply authorize-key
+    fi
+    printf 'Authorized client key (%s).\n' "$fp"
+    printf 'Return to InfraVM and answer y to continue sophon-deploy.\n'
+}
+
+if [ $# -gt 0 ]; then
+    normalize_and_install "$*"
+    exit 0
+fi
+
+if [ ! -t 0 ]; then
+    IFS= read -r piped || exit 1
+    normalize_and_install "$piped"
+    exit 0
+fi
+
+while true; do
+    if [ "$optional" -eq 1 ]; then
+        printf '\nPaste the public key line from sophon-deploy (or press Enter to run sophon-authorize-key later):\n> '
+    else
+        printf 'Paste the public key line from sophon-deploy:\n> '
+    fi
+    IFS= read -r answer || exit 1
+    trimmed=$(printf '%s' "$answer" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ -z "$trimmed" ]; then
+        if [ "$optional" -eq 1 ]; then
+            printf 'Skipped key pairing for now. Once sophon-deploy prints its public key, run: sophon-authorize-key\n'
+            exit 0
+        fi
+        echo 'Please paste the public key line (or press Ctrl+C to cancel).'
+        continue
+    fi
+    if normalize_and_install "$trimmed"; then
+        exit 0
+    fi
+done

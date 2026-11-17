@@ -1,0 +1,121 @@
+#!/bin/sh
+# Configure static IPv4 networking on the Sophon Backup Server, print pairing details, and optionally authorize a client key.
+set -eu
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+ipv4_number() {
+    val=$1
+    case "$val" in *[!0-9.]*|"") return 1 ;; esac
+    old_ifs=$IFS
+    IFS=.
+    set -- $val
+    IFS=$old_ifs
+    [ $# -eq 4 ] || return 1
+    res=0
+    for part in "$1" "$2" "$3" "$4"; do
+        [ -n "$part" ] && [ "${#part}" -le 3 ] || return 1
+        case "$part" in 0?*) return 1 ;; esac
+        [ "$part" -le 255 ] 2>/dev/null || return 1
+        res=$(( (res << 8) | part ))
+    done
+    printf '%s\n' "$res"
+}
+
+validate_network() {
+    ip=$1 prefix=$2 gateway=$3 dns=$4
+    case "$prefix" in *[!0-9]*|"") die "Prefix must be 1 through 30." ;; esac
+    [ "$prefix" -ge 1 ] && [ "$prefix" -le 30 ] || die "Prefix must be 1 through 30."
+    ipn=$(ipv4_number "$ip") || die "Invalid IPv4 address."
+    gwn=$(ipv4_number "$gateway") || die "Invalid gateway IPv4 address."
+    dnsn=$(ipv4_number "$dns") || die "Invalid DNS IPv4 address."
+    for n in "$ipn" "$gwn" "$dnsn"; do
+        first=$(( (n >> 24) & 255 ))
+        [ "$n" -gt 0 ] && [ "$first" -ne 127 ] && [ "$first" -lt 224 ] ||
+            die "Use unicast, non-loopback IPv4 addresses."
+    done
+    mask=$(( (0xffffffff << (32 - prefix)) & 0xffffffff ))
+    hostmask=$(( 0xffffffff ^ mask ))
+    [ $(( ipn & mask )) -eq $(( gwn & mask )) ] && [ "$ipn" -ne "$gwn" ] ||
+        die "Gateway must be distinct and in the same subnet."
+    [ $(( ipn & hostmask )) -ne 0 ] && [ $(( ipn & hostmask )) -ne "$hostmask" ] &&
+    [ $(( gwn & hostmask )) -ne 0 ] && [ $(( gwn & hostmask )) -ne "$hostmask" ] ||
+        die "IP and gateway must not be network or broadcast addresses."
+}
+
+detect_network() {
+    detected_iface="" detected_ip="" detected_prefix="" detected_gateway=""
+    route=$(ip -4 route show default 2>/dev/null | head -n 1 || true)
+    if [ -n "$route" ]; then
+        detected_gateway=$(printf '%s\n' "$route" | awk '{for(i=1;i<NF;i++) if($i=="via"){print $(i+1); exit}}')
+        detected_iface=$(printf '%s\n' "$route" | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    fi
+    if [ -z "$detected_iface" ]; then
+        for path in /sys/class/net/*; do
+            name=${path##*/}
+            [ "$name" != "lo" ] || continue
+            detected_iface=$name
+            break
+        done
+    fi
+    if [ -n "$detected_iface" ]; then
+        cidr=$(ip -4 -o addr show dev "$detected_iface" scope global 2>/dev/null | awk '{print $4; exit}' || true)
+        case "$cidr" in */*)
+            detected_ip=${cidr%/*}
+            detected_prefix=${cidr#*/}
+            ;;
+        esac
+    fi
+}
+
+ask() {
+    prompt=$1 def=${2:-}
+    if [ -n "$def" ]; then
+        printf '%s [%s]: ' "$prompt" "$def" >&2
+    else
+        printf '%s: ' "$prompt" >&2
+    fi
+    IFS= read -r ans || exit 1
+    printf '%s\n' "${ans:-$def}"
+}
+
+print_summary() {
+    ip=$1
+    avail=$(df -Pm /var/lib/sophon-backups/repository 2>/dev/null | awk 'NR==2 {print $4}')
+    printf '\n== Enter these in sophon-deploy on InfraVM ==\n'
+    printf '  SFTP host     : %s\n' "$ip"
+    printf '  SFTP port     : 22\n'
+    printf '  SFTP username : sophon-backup\n'
+    printf '  SFTP path     : /repository\n'
+    [ -z "$avail" ] || printf '  Free space    : %s MiB\n' "$avail"
+    printf '\n== Verify ALL server SSH host-key fingerprints ==\n'
+    for pub in /etc/ssh/ssh_host_*_key.pub; do
+        [ -f "$pub" ] || continue
+        fp=$(ssh-keygen -lf "$pub" | awk '{print $2}')
+        ktype=$(awk '{print $1}' "$pub")
+        printf '  %s %s\n' "$ktype" "$fp"
+    done
+}
+
+detect_network
+[ -n "$detected_iface" ] || die "No Ethernet interface detected on this VM."
+printf '%s\n' 'Network for this Sophon Backup Server. Press Enter to accept the [default].'
+while true; do
+    ip=$(ask 'Backup server IPv4 address' "$detected_ip")
+    prefix=$(ask 'IPv4 prefix length (1-30)' "${detected_prefix:-24}")
+    gateway=$(ask 'IPv4 gateway' "$detected_gateway")
+    dns=$(ask 'DNS server IPv4 address' '1.1.1.1')
+    if ( validate_network "$ip" "$prefix" "$gateway" "$dns" ); then
+        break
+    fi
+    echo 'Please enter the network again.'
+done
+
+if [ "$(id -u)" -eq 0 ]; then
+    /usr/local/sbin/sophon-backup-apply network "$detected_iface" "$ip" "$prefix" "$gateway" "$dns"
+else
+    doas /usr/local/sbin/sophon-backup-apply network "$detected_iface" "$ip" "$prefix" "$gateway" "$dns"
+fi
+
+print_summary "$ip"
+exec /usr/local/bin/sophon-authorize-key --optional
