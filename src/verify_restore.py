@@ -342,8 +342,9 @@ def _drive_boot_and_login(session, core_password: str, *, boot_timeout: float = 
             return
         if idx == 6:
             session.send_line(
-                f"HISTFILE=/dev/null; set +o history; stty -echo cols 240 rows 60 2>/dev/null || true; "
-                f"export PS1={shlex.quote(SHELL_PROMPT_LITERAL)}"
+                f"HISTFILE=/dev/null; set +o history; PROMPT_COMMAND=''; unset PS0; "
+                f"stty -echo cols 240 rows 60 2>/dev/null || true; "
+                f"export PS1={shlex.quote(SHELL_PROMPT_LITERAL)} PS2=''"
             )
             session.expect([SHELL_PROMPT_PATTERN], timeout=30.0)
             return
@@ -391,63 +392,80 @@ def _build_deploy_command(cfg: dict, session) -> str:
 def _guest_smoke_script(infravm_ip: str, domain: str, realm: str) -> str:
     return textwrap.dedent(
         f"""\
-        python3 - <<'__SOPHON_SMOKE__'
+        podman --remote=false run --rm -i --network host --pull never --security-opt label=disable \\
+          -v /run/user/1000/podman/podman.sock:/var/run/docker.sock \\
+          sophon:latest python3 - <<'__SOPHON_SMOKE__'
         # sophon_smoke_check
-        import http.client, json, socket, ssl, subprocess, sys
+        import http.client, json, socket, ssl, subprocess, sys, time
 
         ip = {infravm_ip!r}
         domain = {domain!r}
         realm = {realm!r}
         expected = ["coredns", "traefik", "ldap", "keycloak-db", "keycloak", "gitea-db", "gitea", "arcane", "kopia"]
 
-        cf = subprocess.run(["podman", "--remote=false", "container", "exists", "cloudflared"])
+        cf = subprocess.run(
+            ["docker", "container", "inspect", "cloudflared"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         if cf.returncode == 0:
             raise SystemExit("cloudflared container must NOT exist on a verify-restore instance")
 
         for name in expected:
-            out = subprocess.check_output(
-                ["podman", "--remote=false", "inspect", "-f", "{{{{.State.Status}}}}", name],
-                text=True,
-            ).strip()
+            deadline = time.monotonic() + 60.0
+            out = ""
+            while time.monotonic() < deadline:
+                out = subprocess.check_output(
+                    ["docker", "container", "inspect", "-f", "{{{{.State.Status}}}}", name],
+                    text=True,
+                ).strip()
+                if out == "running":
+                    break
+                time.sleep(2.0)
             if out != "running":
                 raise SystemExit(f"container {{name}} is {{out!r}}, expected 'running'")
 
         kopia_env = json.loads(
             subprocess.check_output(
-                ["podman", "--remote=false", "inspect", "-f", "{{{{json .Config.Env}}}}", "kopia"],
+                ["docker", "container", "inspect", "-f", "{{{{json .Config.Env}}}}", "kopia"],
                 text=True,
             )
         )
         if "KOPIA_READONLY=true" not in kopia_env or "KOPIA_BACKUPS_ENABLED=false" not in kopia_env:
             raise SystemExit(f"kopia container is not in read-only standby: {{kopia_env!r}}")
 
-        def get_sni(host, path):
-            ctx = ssl._create_unverified_context()
-            raw = socket.create_connection((ip, 443), timeout=15)
-            with ctx.wrap_socket(raw, server_hostname=host) as tls:
-                der = tls.getpeercert(binary_form=True)
-                if b"TRAEFIK DEFAULT CERT" in der or b"SOPHON PRE-RESTORE BOOTSTRAP" in der:
-                    raise SystemExit(f"{{host}} served temporary/default certificate instead of restored certificate")
-                conn = http.client.HTTPConnection(host, 443, timeout=15)
-                conn.sock = tls
-                conn.request("GET", path, headers={{"Host": host, "Connection": "close"}})
-                resp = conn.getresponse()
-                body = resp.read().decode("utf-8", errors="replace")
-                return resp.status, body
+        def get_sni(host, path, ok_statuses=(200,), wait_sec=90.0):
+            deadline = time.monotonic() + wait_sec
+            last_err = None
+            while True:
+                try:
+                    ctx = ssl._create_unverified_context()
+                    raw = socket.create_connection((ip, 443), timeout=15)
+                    with ctx.wrap_socket(raw, server_hostname=host) as tls:
+                        der = tls.getpeercert(binary_form=True)
+                        if b"TRAEFIK DEFAULT CERT" in der or b"SOPHON PRE-RESTORE BOOTSTRAP" in der:
+                            raise RuntimeError(f"{{host}} served temporary/default certificate instead of restored certificate")
+                        conn = http.client.HTTPConnection(host, 443, timeout=15)
+                        conn.sock = tls
+                        conn.request("GET", path, headers={{"Host": host, "Connection": "close"}})
+                        resp = conn.getresponse()
+                        body = resp.read().decode("utf-8", errors="replace")
+                        if resp.status in ok_statuses:
+                            return resp.status, body
+                        last_err = f"HTTP {{resp.status}}"
+                except Exception as exc:
+                    last_err = str(exc)
+                if time.monotonic() >= deadline:
+                    raise SystemExit(f"{{host}}{{path}} did not become ready within {{wait_sec:.0f}}s (last: {{last_err}})")
+                time.sleep(3.0)
 
-        kc_status, kc_body = get_sni(f"auth.{{domain}}", f"/realms/{{realm}}/.well-known/openid-configuration")
-        if kc_status != 200:
-            raise SystemExit(f"Keycloak OIDC discovery returned HTTP {{kc_status}}")
+        kc_status, kc_body = get_sni(f"auth.{{domain}}", f"/realms/{{realm}}/.well-known/openid-configuration", (200,))
         oidc = json.loads(kc_body)
 
-        gt_status, gt_body = get_sni(f"git.{{domain}}", "/api/v1/version")
-        if gt_status != 200:
-            raise SystemExit(f"Gitea version API returned HTTP {{gt_status}}")
+        gt_status, gt_body = get_sni(f"git.{{domain}}", "/api/v1/version", (200,))
         gitea = json.loads(gt_body)
 
-        ar_status, _ = get_sni(f"arcane.{{domain}}", "/")
-        if ar_status not in (200, 301, 302, 303, 307, 308):
-            raise SystemExit(f"Arcane root returned unexpected HTTP {{ar_status}}")
+        ar_status, _ = get_sni(f"arcane.{{domain}}", "/", (200, 301, 302, 303, 307, 308))
 
         print(json.dumps({{
             "containers_ok": True,
@@ -507,47 +525,47 @@ def run_host_sni_probes(
     port: int = 443,
     validate_certs: bool = True,
     ca_file: str | None = None,
+    retry_timeout: float = 90.0,
 ) -> dict:
+    def wait_probe(host: str, path: str, ok_statuses: tuple[int, ...], wait_sec: float = retry_timeout):
+        deadline = time.monotonic() + wait_sec
+        last_err = None
+        while True:
+            try:
+                status, body, cn = probe_https_sni(
+                    infravm_ip,
+                    host,
+                    path,
+                    port=port,
+                    validate_certs=validate_certs,
+                    ca_file=ca_file,
+                )
+                if status in ok_statuses:
+                    return status, body, cn
+                last_err = f"HTTP {status}"
+            except Exception as exc:
+                last_err = str(exc)
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Host SNI probe to {host}{path} failed after {wait_sec:.0f}s (last: {last_err})")
+            time.sleep(3.0)
+
     kc_host = f"auth.{domain}"
-    kc_status, kc_body, cert_cn = probe_https_sni(
-        infravm_ip,
+    _, kc_body, cert_cn = wait_probe(
         kc_host,
         f"/realms/{realm}/.well-known/openid-configuration",
-        port=port,
-        validate_certs=validate_certs,
-        ca_file=ca_file,
+        (200,),
     )
-    if kc_status != 200:
-        raise RuntimeError(f"Host SNI probe to {kc_host} returned HTTP {kc_status}")
     kc_issuer = json.loads(kc_body).get("issuer")
     expected_issuer = f"https://{kc_host}/realms/{realm}"
     if kc_issuer != expected_issuer:
         raise RuntimeError(f"Unexpected Keycloak issuer {kc_issuer!r} (expected {expected_issuer!r})")
 
     gt_host = f"git.{domain}"
-    gt_status, gt_body, _ = probe_https_sni(
-        infravm_ip,
-        gt_host,
-        "/api/v1/version",
-        port=port,
-        validate_certs=validate_certs,
-        ca_file=ca_file,
-    )
-    if gt_status != 200:
-        raise RuntimeError(f"Host SNI probe to {gt_host} returned HTTP {gt_status}")
+    _, gt_body, _ = wait_probe(gt_host, "/api/v1/version", (200,))
     gt_version = json.loads(gt_body).get("version")
 
     ar_host = f"arcane.{domain}"
-    ar_status, _, _ = probe_https_sni(
-        infravm_ip,
-        ar_host,
-        "/",
-        port=port,
-        validate_certs=validate_certs,
-        ca_file=ca_file,
-    )
-    if ar_status not in (200, 301, 302, 303, 307, 308):
-        raise RuntimeError(f"Host SNI probe to {ar_host} returned unexpected HTTP {ar_status}")
+    ar_status, _, _ = wait_probe(ar_host, "/", (200, 301, 302, 303, 307, 308))
 
     return {
         "certificate_cn": cert_cn,

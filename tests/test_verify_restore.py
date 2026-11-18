@@ -158,6 +158,7 @@ class FakeSerialDriver:
             return "Snapshot : snap-20260419 (2026-04-19T02:00:00Z)\nServices : traefik, ldap, keycloak, gitea\nRestore complete (traefik, ldap, keycloak, gitea)."
         if "sophon_smoke_check" in command:
             assert '"sudo"' not in command, "smoke check must inspect core's rootless podman store, not sudo podman"
+            assert "sophon:latest python3 -" in command, "Fedora CoreOS has no host python3; smoke check must run via sophon:latest"
             return json.dumps({
                 "containers_ok": True,
                 "cloudflared_absent": True,
@@ -242,7 +243,7 @@ class VerifyRestoreTests(unittest.TestCase):
         bad_port = start_https(default_cert, default_key)
         with self.assertRaisesRegex(RuntimeError, "TRAEFIK DEFAULT CERT"):
             verify_restore.run_host_sni_probes(
-                "127.0.0.1", "sophon.example.com", "sophon", port=bad_port, validate_certs=False
+                "127.0.0.1", "sophon.example.com", "sophon", port=bad_port, validate_certs=False, retry_timeout=0.0
             )
 
         # Also verify bootstrap_store generates a valid Traefik store whose temporary cert is rejected post-restore!
@@ -255,7 +256,7 @@ class VerifyRestoreTests(unittest.TestCase):
         boot_port = start_https(boot_cert, boot_key)
         with self.assertRaisesRegex(RuntimeError, "SOPHON PRE-RESTORE BOOTSTRAP"):
             verify_restore.run_host_sni_probes(
-                "127.0.0.1", "sophon.example.com", "sophon", port=boot_port, validate_certs=False
+                "127.0.0.1", "sophon.example.com", "sophon", port=boot_port, validate_certs=False, retry_timeout=0.0
             )
 
     def test_end_to_end_drill_recreates_vm_drives_serial_verifies_and_stops_vm(self):

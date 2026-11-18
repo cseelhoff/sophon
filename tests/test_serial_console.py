@@ -368,6 +368,21 @@ class SerialConsoleTests(unittest.TestCase):
             self.assertNotIn("SUPER_SECRET_KOPIA_PW", session.recent_output())
             self.assertIn("[REDACTED]", session.recent_output())
 
+            # OSC 3008 sequences split across two WebSocket frames are stripped cleanly
+            session._append_output("\x1b]3008;start=abc;")
+            session._append_output("user=core\x1b\\CLEAN_MARKER\n")
+            self.assertNotIn("3008;start", session.recent_output())
+            self.assertIn("CLEAN_MARKER", session.recent_output())
+
+            # Multi-kilobyte heredocs are chunked into <= SERIAL_TX_CHUNK_CHARS payloads
+            self.server.received_terminal_inputs.clear()
+            big_payload = "A" * 300
+            session.send_line(big_payload)
+            time.sleep(0.05)
+            self.assertGreater(len(self.server.received_terminal_inputs), 4)
+            self.assertTrue(all(len(chunk) <= serial_console.SERIAL_TX_CHUNK_CHARS for chunk in self.server.received_terminal_inputs))
+            self.assertEqual("".join(self.server.received_terminal_inputs), big_payload + "\r")
+
 
 if __name__ == "__main__":
     unittest.main()

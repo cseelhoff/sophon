@@ -19,9 +19,12 @@ import time
 from urllib.parse import quote, urlencode
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))")
+ANSI_ESCAPE_RE = re.compile(r"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\^_])")
 MAX_TRANSCRIPT_CHARS = 65536
 KEEPALIVE_INTERVAL_SEC = 15.0
+INCOMPLETE_ANSI_TAIL_RE = re.compile(r"\x1B(?:\[[0-?]*[ -/]*|\][^\x07\x1B]*(?:\x1B)?)?\Z")
+SERIAL_TX_CHUNK_CHARS = 48
+SERIAL_TX_CHUNK_DELAY_SEC = 0.015
 
 
 def build_ssl_context(*, validate_certs=False, ca_file=None):
@@ -371,6 +374,7 @@ class ProxmoxSerialSession:
         self.cols = int(cols)
         self.rows = int(rows)
         self._ws = None
+        self._raw_tail = ""
         self._unread = ""
         self._transcript = ""
         self._secrets = set()
@@ -448,16 +452,27 @@ class ProxmoxSerialSession:
     def send(self, text: str, *, secret: bool = False):
         if secret:
             self.register_secret(text.rstrip("\r\n"))
-        payload = text.encode("utf-8")
-        frame = f"0:{len(payload)}:".encode("ascii") + payload
-        self._ws.send_frame(frame, opcode=0x2)
+        # Pace serial writes into small frames so QEMU's virtual 16550A UART RX FIFO never drops bytes on heredocs.
+        for offset in range(0, len(text), SERIAL_TX_CHUNK_CHARS):
+            chunk = text[offset:offset + SERIAL_TX_CHUNK_CHARS].encode("utf-8")
+            frame = f"0:{len(chunk)}:".encode("ascii") + chunk
+            self._ws.send_frame(frame, opcode=0x2)
+            if offset + SERIAL_TX_CHUNK_CHARS < len(text):
+                time.sleep(SERIAL_TX_CHUNK_DELAY_SEC)
         self._last_keepalive = time.monotonic()
 
     def send_line(self, line: str = "", *, secret: bool = False):
         self.send(line + "\r", secret=secret)
 
     def _append_output(self, raw_text: str):
-        cleaned = ANSI_ESCAPE_RE.sub("", raw_text).replace("\r\n", "\n").replace("\r", "\n")
+        combined = self._raw_tail + raw_text
+        self._raw_tail = ""
+        stripped = ANSI_ESCAPE_RE.sub("", combined)
+        tail_match = INCOMPLETE_ANSI_TAIL_RE.search(stripped)
+        if tail_match is not None and len(tail_match.group(0)) < 512:
+            self._raw_tail = tail_match.group(0)
+            stripped = stripped[:tail_match.start()]
+        cleaned = stripped.replace("\r\n", "\n").replace("\r", "\n")
         self._unread += cleaned
         if len(self._unread) > MAX_TRANSCRIPT_CHARS:
             self._unread = self._unread[-MAX_TRANSCRIPT_CHARS:]
@@ -538,15 +553,16 @@ class ProxmoxSerialSession:
         begin_marker = f"__SOPHON_BEGIN_{nonce}__"
         rc_regex = rf"__SOPHON_RC_{nonce}__:(\d+)"
         wrapped = (
+            "{\n"
             f"printf '__SOPHON_BEGIN_%s__\\n' '{nonce}'\n"
             f"(\n{command}\n)\n"
-            f"printf '\\n__SOPHON_RC_%s__:%d\\n' '{nonce}' $?"
+            f"printf '\\n__SOPHON_RC_%s__:%d\\n' '{nonce}' $?; }}"
         )
         self.send_line(wrapped)
-        _, match, before = self.expect([rc_regex], timeout=timeout)
+        _, match, before = self.expect([rc_regex], timeout=timeout, reconnect=True)
         exit_code = int(match.group(1))
         if prompt_pattern:
-            self.expect([prompt_pattern], timeout=30.0)
+            self.expect([prompt_pattern], timeout=30.0, reconnect=True)
         body = before
         if begin_marker in body:
             body = body.split(begin_marker, 1)[1]

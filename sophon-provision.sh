@@ -135,7 +135,7 @@ fi
 env_args=()
 while IFS= read -r name; do env_args+=(-e "$name"); done < <(compgen -e | grep -E '^(SOPHON_|CF_DNS_API_TOKEN$)' || true)
 
-exec "$engine" run --rm --init ${tty[@]+"${tty[@]}"} \
+exec "$engine" run --rm --init -e PYTHONUNBUFFERED=1 ${tty[@]+"${tty[@]}"} \
     -v "$PWD:/workspace" -v "$socket:/var/run/docker.sock" -v sophon-state:/state \
     ${extra_mounts[@]+"${extra_mounts[@]}"} \
     ${env_args[@]+"${env_args[@]}"} sophon-tools "$command" "$@"
