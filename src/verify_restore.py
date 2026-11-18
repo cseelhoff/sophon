@@ -602,7 +602,13 @@ def run_drill(cfg: dict) -> dict:
         print(f"[verify-restore] Provisioning fresh drill VM {vm_name} on Proxmox node {node}...")
         run_provision_playbook(cfg["provision_env"])
 
-    created = pve.find_vm(node, vm_name)
+    created = None
+    deadline_find = time.monotonic() + 20.0
+    while time.monotonic() < deadline_find:
+        created = pve.find_vm(node, vm_name)
+        if created:
+            break
+        time.sleep(1.0)
     if not created:
         raise RuntimeError(f"Drill VM {vm_name!r} was not found on Proxmox node {node!r} after provisioning.")
     vmid = int(created["vmid"])
