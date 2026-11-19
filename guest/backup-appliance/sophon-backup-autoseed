@@ -1,6 +1,6 @@
 #!/bin/sh
 # Optional unattended first-boot seed applicator for the Sophon Backup Server.
-# Looks for a CD/DVD ISO with volume label SOPHON_BACKUP_CERTS (artifacts/secrets/sophon-backup-secrets.iso).
+# Looks for a CD/DVD ISO with volume label SOPHON_BACKUP_CERTS (artifacts/secrets/sophon-sftp-secrets.iso).
 # When absent, exits 0 silently so interactive console setup runs unchanged.
 set -eu
 

@@ -39,7 +39,7 @@ class BundleTests(unittest.TestCase):
         )]
         for container in self.containers:
             container.write_bytes(container.name.encode())
-        self.output = self.directory / 'output' / 'sophon-deployment.iso'
+        self.output = self.directory / 'output' / 'sophon-apps.iso'
         self.captured = {}
 
     def write(self, name, content='source'):
@@ -332,9 +332,9 @@ class PrepareTests(unittest.TestCase):
                 'artifacts_dir': str(self.root / 'artifacts'),
                 'sophon_containers_dir': str(self.root / 'artifacts/containers'),
                 'coreos_iso_path': str(live_iso),
-                'installer_iso_path': str(self.root / 'artifacts/coreos/sophon-installer.iso'),
-                'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-deployment.iso'),
-                'backup_installer_iso_path': str(self.root / 'artifacts/backup/alpine-sftp-server.iso'),
+                'installer_iso_path': str(self.root / 'artifacts/coreos/sophon-coreos.iso'),
+                'bundle_iso_path': str(self.root / 'artifacts/bootstrap/sophon-apps.iso'),
+                'backup_installer_iso_path': str(self.root / 'artifacts/backup/sophon-sftp-server.iso'),
                 'prepare_alpine_iso_sha256': alpine_sha,
                 'arcane_image': 'ghcr.io/getarcaneapp/manager:v3.0.1',
                 'arcane_image_tarname': 'getarcaneapp-manager_v3.0.1.tar',
@@ -357,9 +357,9 @@ class PrepareTests(unittest.TestCase):
         result = run()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(attempted.exists(), attempted.read_text() if attempted.exists() else '')
-        self.assertTrue((self.root / 'artifacts/bootstrap/sophon-deployment.iso').is_file())
-        self.assertTrue((self.root / 'artifacts/backup/alpine-sftp-server.iso').is_file())
-        self.assertEqual((self.root / 'artifacts/coreos/sophon-installer.iso').read_text().strip(), 'customised')
+        self.assertTrue((self.root / 'artifacts/bootstrap/sophon-apps.iso').is_file())
+        self.assertTrue((self.root / 'artifacts/backup/sophon-sftp-server.iso').is_file())
+        self.assertEqual((self.root / 'artifacts/coreos/sophon-coreos.iso').read_text().strip(), 'customised')
         self.assertEqual(live_iso.read_text(), 'cached-stock-live-iso', 'the stock ISO must stay unchanged')
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())
         self.assertEqual([Path(path).name for path in manifest], [

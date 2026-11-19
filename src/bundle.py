@@ -244,7 +244,7 @@ def main(argv=None):
             if not isinstance(containers, list) or not all(isinstance(path, str) for path in containers):
                 raise ValueError('Container manifest must be a JSON list of paths')
             containers = [root / path for path in containers]
-        output = Path(os.path.abspath(args.output or root / 'artifacts/bootstrap/sophon-deployment.iso'))
+        output = Path(os.path.abspath(args.output or root / 'artifacts/bootstrap/sophon-apps.iso'))
         runner = args.runner or root / 'artifacts/bootstrap/runner.tar'
         tools = args.bootstrap_tools or root / 'artifacts/bootstrap/busybox-1.38.0-musl'
         stamp = output.with_name(output.name + '.stamp')

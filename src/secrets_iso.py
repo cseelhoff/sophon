@@ -8,7 +8,7 @@ Produces mode-0600 ISOs under `artifacts/secrets/`:
   when `/repository` is empty it initializes Day 1; when snapshots already exist it restores the latest
   snapshot into safe standby mode (Cloudflare tunnel postponed, Kopia read-only, scheduled backups paused)
   until an operator explicitly runs `sophon-activate`.
-- `sophon-backup-secrets.iso` (volume label `SOPHON_BACKUP_CERTS`): optional unattended seed ISO for the
+- `sophon-sftp-secrets.iso` (volume label `SOPHON_BACKUP_CERTS`): optional unattended seed ISO for the
   Alpine SFTP Backup Server carrying hashed `admin` password, static/DHCP network config, deterministic
   `ssh_host_ed25519_key`, and pre-authorized `sophon-backup` / `sophon-restore` public keys.
 """
@@ -36,7 +36,7 @@ import deployment
 
 ROOT = Path(__file__).resolve().parent.parent
 SECRETS_ISO = ROOT / 'artifacts/secrets/sophon-secrets.iso'
-BACKUP_SECRETS_ISO = ROOT / 'artifacts/secrets/sophon-backup-secrets.iso'
+BACKUP_SECRETS_ISO = ROOT / 'artifacts/secrets/sophon-sftp-secrets.iso'
 BACKUP_SECRETS_LABEL = 'SOPHON_BACKUP_CERTS'
 
 _CRYPT64 = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
@@ -326,7 +326,7 @@ def build_backup_secrets_iso(
     sftp_material: dict,
     output: Path = BACKUP_SECRETS_ISO,
 ) -> Path:
-    """Write `artifacts/secrets/sophon-backup-secrets.iso` (label `SOPHON_BACKUP_CERTS`, mode `0600`)."""
+    """Write `artifacts/secrets/sophon-sftp-secrets.iso` (label `SOPHON_BACKUP_CERTS`, mode `0600`)."""
     if not admin_password_hash.startswith('$6$'):
         raise ValueError('admin_password_hash must be a SHA-512 ($6$) password hash.')
     if network.get('mode') == 'dhcp':
@@ -542,11 +542,11 @@ def _apply_shared_service_password(env: dict[str, str], shared_password: str) ->
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description='Generate mode-0600 unattended secrets ISOs (`sophon-secrets.iso` and optional `sophon-backup-secrets.iso`).'
+        description='Generate mode-0600 unattended secrets ISOs (`sophon-secrets.iso` and optional `sophon-sftp-secrets.iso`).'
     )
     parser.add_argument('--run', action='store_true', help='Build non-interactively from exported SOPHON_* variables')
     parser.add_argument('--with-backup', action='store_true',
-                        help='Also build artifacts/secrets/sophon-backup-secrets.iso and pre-pair SSH host/client keys')
+                        help='Also build artifacts/secrets/sophon-sftp-secrets.iso and pre-pair SSH host/client keys')
     parser.add_argument('--readonly-sftp', action='store_true',
                         help='Use the confined read-only `sophon-restore` SFTP key in `sophon-secrets.iso`')
     parser.add_argument('--acme-file', default=os.environ.get('SOPHON_ACME_FILE', ''),

@@ -18,7 +18,9 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(cli.COMMANDS['provision-dev'](['--wait-https']),
                          ['python3', 'src/verify_restore.py', '--wait-https'])
         self.assertEqual(cli.COMMANDS['provision-backup']([])[-2:], ['--', '2-provision-backup.yml'])
-        self.assertEqual(cli.COMMANDS['destroy-vm']([])[-2:], ['--', '3-destroy-vm.yml'])
+        self.assertEqual(cli.COMMANDS['destroy-vm']([]), ['python3', 'src/verify_restore.py', '--destroy-only'])
+        self.assertEqual(cli.COMMANDS['destroy-vm'](['--vm-name', 'sophon-backup']),
+                         ['python3', 'src/verify_restore.py', '--destroy-only', '--vm-name', 'sophon-backup'])
         self.assertIn('--step', cli.COMMANDS['provision']([]))
         self.assertNotIn('dashboard', cli.COMMANDS)
         self.assertEqual(cli.COMMANDS['verify-restore'](['--teardown', 'destroy']),

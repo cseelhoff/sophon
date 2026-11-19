@@ -144,8 +144,10 @@ def main(argv=None) -> int:
     )
     parser.add_argument('--prod-recreate', action='store_true',
                         help='Destroy and recreate the production InfraVM (SOPHON_INFRAVM_NAME) in one step')
+    parser.add_argument('--destroy-only', action='store_true',
+                        help='Stop and delete a Sophon-managed VM (default: SOPHON_INFRAVM_NAME) and exit')
     parser.add_argument('--yes', '-y', action='store_true',
-                        help='Skip interactive confirmation when --prod-recreate is used')
+                        help='Skip interactive confirmation when destroying/recreating a production VM')
     parser.add_argument('--vm-name', default='',
                         help='Override target VM name (default: SOPHON_DEV_INFRAVM_NAME for dev, SOPHON_INFRAVM_NAME for --prod-recreate)')
     parser.add_argument('--secrets-iso', type=Path, default=None,
@@ -167,6 +169,26 @@ def main(argv=None) -> int:
         return 2
 
     prod_vm_name = (os.environ.get('SOPHON_INFRAVM_NAME') or 'sophon-infravm').strip()
+    backup_vm_name = (os.environ.get('SOPHON_BACKUP_VM_NAME') or 'sophon-backup').strip()
+    if options.destroy_only:
+        vm_name = (options.vm_name or os.environ.get('SOPHON_DESTROY_VM_NAME') or prod_vm_name).strip()
+        protected_names = {'sophon-infravm', 'sophon-backup', prod_vm_name, backup_vm_name}
+        env_allow = (os.environ.get('SOPHON_ALLOW_PRODUCTION_DESTROY') or '').strip().lower() in ('1', 'true', 'yes')
+        if vm_name in protected_names and not (options.yes or options.allow_production_name or env_allow):
+            if not sys.stdin.isatty():
+                print(f"Pass --yes to destroy VM '{vm_name}' non-interactively.", file=sys.stderr)
+                return 2
+            reply = input(f"Destroy Sophon VM '{vm_name}' on {hypervisor}? [y/N]: ").strip().lower()
+            if reply not in ('y', 'yes'):
+                print('Cancelled; VM was not modified.')
+                return 130
+        return run_playbook(
+            '3-destroy-vm.yml',
+            {
+                'SOPHON_DESTROY_VM_NAME': vm_name,
+                'SOPHON_ALLOW_PRODUCTION_DESTROY': 'true',
+            },
+        )
     if options.prod_recreate:
         vm_name = (options.vm_name or prod_vm_name).strip()
         if vm_name == 'sophon-backup':
@@ -229,7 +251,10 @@ def main(argv=None) -> int:
     with contextlib.ExitStack() as stack:
         effective_iso = Path(os.path.abspath(iso_path))
         if needs_derive:
-            tmp_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='sophon-dev-iso-')))
+            effective_iso.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            tmp_dir = Path(stack.enter_context(
+                tempfile.TemporaryDirectory(prefix='.sophon-dev-iso-', dir=effective_iso.parent)
+            ))
             derived_path = tmp_dir / 'sophon-dev-secrets.iso'
             secrets_iso.derive_dev_secrets_iso(effective_iso, os.environ, derived_path)
             effective_iso = derived_path

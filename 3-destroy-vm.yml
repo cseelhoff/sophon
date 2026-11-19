@@ -5,7 +5,9 @@
   gather_facts: false
   vars:
     destroy_vm_name: "{{ lookup('env', 'SOPHON_DESTROY_VM_NAME') | default('', true) }}"
-    destroy_vm_marker: "{{ lookup('env', 'SOPHON_DESTROY_VM_MARKER') | default(infravm_marker, true) }}"
+    destroy_vm_marker: >-
+      {{ lookup('env', 'SOPHON_DESTROY_VM_MARKER')
+         | default((backup_vm_marker if destroy_vm_name == backup_vm_name else infravm_marker), true) }}
     allow_production_destroy: "{{ (lookup('env', 'SOPHON_ALLOW_PRODUCTION_DESTROY') | default('false', true) | lower) == 'true' }}"
   tasks:
     - name: Validate target VM name and production guard
@@ -13,7 +15,7 @@
         that:
           - hypervisor_provider in ['proxmox', 'vcenter', 'hyperv']
           - destroy_vm_name | length > 0
-          - allow_production_destroy or (destroy_vm_name != 'sophon-infravm' and destroy_vm_name != 'sophon-backup' and destroy_vm_name != infravm_name)
+          - allow_production_destroy or (destroy_vm_name != 'sophon-infravm' and destroy_vm_name != 'sophon-backup' and destroy_vm_name != infravm_vm_name and destroy_vm_name != backup_vm_name)
         fail_msg: "Refusing to destroy production VM name '{{ destroy_vm_name }}' without SOPHON_ALLOW_PRODUCTION_DESTROY=true."
     - name: Authenticate with Proxmox
       ansible.builtin.include_role:

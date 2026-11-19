@@ -1,4 +1,4 @@
-# Builds the persistent Alpine 3.24.4 rootfs archive installed by alpine-sftp-server.iso.
+# Builds the persistent Alpine 3.24.4 rootfs archive installed by sophon-sftp-server.iso.
 # Uses only Alpine's signed package repositories (no --allow-untrusted, no proot, no guestfish).
 FROM docker.io/library/alpine:3.24.4 AS builder
 

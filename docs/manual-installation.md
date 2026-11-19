@@ -14,9 +14,9 @@ bash sophon-provision.sh prepare          # Windows: .\sophon-provision.ps1 prep
 
 *(For air-gapped sites without internet access on the VM network, also run `bash sophon-provision.sh certificates issue --domain <your-domain>` to write your wildcard TLS certificate to `artifacts/secrets/sophon-secrets.iso`.)*
 
-1. Copy `artifacts/coreos/sophon-installer.iso` and `artifacts/bootstrap/sophon-deployment.iso` (plus `artifacts/secrets/sophon-secrets.iso` if using pre-issued certificates or unattended seeding) to the hypervisor.
+1. Copy `artifacts/coreos/sophon-coreos.iso` and `artifacts/bootstrap/sophon-apps.iso` (plus `artifacts/secrets/sophon-secrets.iso` if using pre-issued certificates or unattended seeding) to the hypervisor.
 2. Create a 64-bit Linux VM (`8` vCPU, `8 GiB` RAM, one blank `40+ GiB` disk, and one NIC on your target network). On Hyper-V, use Generation 2 with Secure Boot disabled.
-3. Attach the ISOs as CD/DVD drives and set **boot order to the blank disk first, then `sophon-installer.iso`**.
+3. Attach the ISOs as CD/DVD drives and set **boot order to the blank disk first, then `sophon-coreos.iso`**.
 
 ![Proxmox VM hardware layout with blank disk and dual Sophon ISOs](./images/01-vm-hardware.png)
 

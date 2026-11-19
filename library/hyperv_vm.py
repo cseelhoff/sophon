@@ -192,11 +192,14 @@ def provision(params, host, info):
             host.run(script(START, name=name))
         return {'changed': found['state'] == 'Off', 'vm_path': f"{info['host']}/{name}", 'created': False}
 
-    iso_specs = [('coreos', params['coreos_iso'])]
     if params.get('bundle_iso'):
-        iso_specs.append(('deployment', params['bundle_iso']))
-    if params.get('secrets_iso'):
-        iso_specs.append((f'secrets-{name}', params['secrets_iso']))
+        iso_specs = [('coreos', params['coreos_iso']), ('apps', params['bundle_iso'])]
+        if params.get('secrets_iso'):
+            iso_specs.append(('secrets', params['secrets_iso']))
+    else:
+        iso_specs = [('sftp-server', params['coreos_iso'])]
+        if params.get('secrets_iso'):
+            iso_specs.append(('sftp-secrets', params['secrets_iso']))
     media = []
     for label, source in iso_specs:
         source = Path(source)
@@ -204,7 +207,7 @@ def provision(params, host, info):
             raise ValueError(f'Missing installation ISO: {source}')
         with source.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        media.append((source, f'sophon-{label}-{digest}.iso', digest, source.stat().st_size))
+        media.append((source, f'sophon-{label}-{digest[:8]}.iso', digest, source.stat().st_size))
 
     iso_dir = ntpath.join(path, 'sophon-isos')
     existing = {item['name']: item['size']

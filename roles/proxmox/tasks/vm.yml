@@ -77,13 +77,13 @@
         infravm_isos: >-
           {{
             [
-              {'source': installer_iso_path, 'filename': 'sophon-coreos-' ~ infravm_media.results[0].stat.checksum ~ '.iso',
+              {'source': installer_iso_path, 'filename': 'sophon-coreos-' ~ infravm_media.results[0].stat.checksum[:8] ~ '.iso',
                'size': infravm_media.results[0].stat.size},
-              {'source': bundle_iso_path, 'filename': 'sophon-deployment-' ~ infravm_media.results[1].stat.checksum ~ '.iso',
+              {'source': bundle_iso_path, 'filename': 'sophon-apps-' ~ infravm_media.results[1].stat.checksum[:8] ~ '.iso',
                'size': infravm_media.results[1].stat.size}
             ] + (
               [{'source': resolved_secrets_iso_path,
-                'filename': 'sophon-secrets-' ~ infravm_vm_name ~ '-' ~ infravm_media.results[2].stat.checksum ~ '.iso',
+                'filename': 'sophon-secrets-' ~ infravm_media.results[2].stat.checksum[:8] ~ '.iso',
                 'size': infravm_media.results[2].stat.size}]
               if resolved_secrets_iso_path | length > 0 else []
             )

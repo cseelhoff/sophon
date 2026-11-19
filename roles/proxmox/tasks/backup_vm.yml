@@ -75,19 +75,19 @@
         backup_isos: >-
           {{
             [{'source': backup_installer_iso_path,
-              'filename': 'alpine-sftp-server-' ~ backup_media.results[0].stat.checksum ~ '.iso',
+              'filename': 'sophon-sftp-server-' ~ backup_media.results[0].stat.checksum[:8] ~ '.iso',
               'size': backup_media.results[0].stat.size}] + (
               [{'source': resolved_backup_secrets_iso_path,
-                'filename': 'sophon-backup-secrets-' ~ backup_vm_name ~ '-' ~ backup_media.results[1].stat.checksum ~ '.iso',
+                'filename': 'sophon-sftp-secrets-' ~ backup_media.results[1].stat.checksum[:8] ~ '.iso',
                 'size': backup_media.results[1].stat.size}]
               if resolved_backup_secrets_iso_path | length > 0 else []
             )
           }}
         backup_ide_drives: >-
           {{
-            {'ide2': proxmox_iso_storage_id ~ ':iso/' ~ ('alpine-sftp-server-' ~ backup_media.results[0].stat.checksum ~ '.iso') ~ ',media=cdrom'}
+            {'ide2': proxmox_iso_storage_id ~ ':iso/' ~ ('sophon-sftp-server-' ~ backup_media.results[0].stat.checksum[:8] ~ '.iso') ~ ',media=cdrom'}
             | combine(
-              {'ide3': proxmox_iso_storage_id ~ ':iso/' ~ ('sophon-backup-secrets-' ~ backup_vm_name ~ '-' ~ backup_media.results[1].stat.checksum ~ '.iso') ~ ',media=cdrom'}
+              {'ide3': proxmox_iso_storage_id ~ ':iso/' ~ ('sophon-sftp-secrets-' ~ backup_media.results[1].stat.checksum[:8] ~ '.iso') ~ ',media=cdrom'}
               if resolved_backup_secrets_iso_path | length > 0 else {}
             )
           }}

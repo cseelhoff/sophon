@@ -12,8 +12,8 @@ InfraVM: rootless Podman socket + runner container ──▶ Compose stacks + Ar
 
 Every play targets `localhost`. The laptop only creates a blank VM; it never reaches into the guest
 (no SSH, guest agent, NFS or disk conversion). The two media are reusable and hold no site data or secrets:
-`sophon-installer.iso` (the stock CoreOS live ISO with a small live Ignition config baked in by
-`coreos-installer iso customize`) and `sophon-deployment.iso` (the service project, runner image, container archives and
+`sophon-coreos.iso` (the stock CoreOS live ISO with a small live Ignition config baked in by
+`coreos-installer iso customize`) and `sophon-apps.iso` (the service project, runner image, container archives and
 installer). The `core` password is chosen at the first boot, the network, domain and all service credentials in step 4.
 See [decisions.md](decisions.md).
 

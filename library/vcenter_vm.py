@@ -125,11 +125,14 @@ def provision(params, run):
             run('vm.power', '-on', paths[0])
         return {'changed': power == 'poweredOff', 'vm_path': paths[0], 'created': False}
 
-    iso_specs = [('coreos', params['coreos_iso'])]
     if params.get('bundle_iso'):
-        iso_specs.append(('deployment', params['bundle_iso']))
-    if params.get('secrets_iso'):
-        iso_specs.append((f'secrets-{name}', params['secrets_iso']))
+        iso_specs = [('coreos', params['coreos_iso']), ('apps', params['bundle_iso'])]
+        if params.get('secrets_iso'):
+            iso_specs.append(('secrets', params['secrets_iso']))
+    else:
+        iso_specs = [('sftp-server', params['coreos_iso'])]
+        if params.get('secrets_iso'):
+            iso_specs.append(('sftp-secrets', params['secrets_iso']))
     media = []
     for label, source in iso_specs:
         path = Path(source)
@@ -137,7 +140,7 @@ def provision(params, run):
             raise ValueError(f'Missing installation ISO: {path}')
         with path.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        media.append((path, f'sophon-{label}-{digest}.iso', path.stat().st_size))
+        media.append((path, f'sophon-{label}-{digest[:8]}.iso', path.stat().st_size))
 
     run('datastore.mkdir', '-p', 'sophon-isos')
     listing = json.loads(run('datastore.ls', '-json', '-l', 'sophon-isos/'))

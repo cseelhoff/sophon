@@ -112,7 +112,7 @@ class SecretsIsoTests(unittest.TestCase):
             acme_file.write_bytes(acme_bytes)
 
             infra_iso = tmp_dir / 'sophon-secrets.iso'
-            backup_iso = tmp_dir / 'sophon-backup-secrets.iso'
+            backup_iso = tmp_dir / 'sophon-sftp-secrets.iso'
             state_dir = tmp_dir / 'state'
 
             env = {

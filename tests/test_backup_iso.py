@@ -49,7 +49,7 @@ class BackupIsoTests(unittest.TestCase):
         subprocess.run(['xorriso', '-as', 'mkisofs', '-quiet', '-o', str(stock), str(seed)], check=True)
         os_archive = self.directory / 'sophon-backup-os.tar.gz'
         os_archive.write_bytes(b'prebuilt-os-archive')
-        output = self.directory / 'out/alpine-sftp-server.iso'
+        output = self.directory / 'out/sophon-sftp-server.iso'
 
         self.assertTrue(backup_iso.build(stock, os_archive, output))
         self.assertFalse(backup_iso.build(stock, os_archive, output))

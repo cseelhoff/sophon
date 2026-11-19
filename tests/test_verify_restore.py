@@ -63,6 +63,22 @@ class VerifyRestoreTests(unittest.TestCase):
             rc = verify_restore.main(['--vm-name', prod_name])
             self.assertEqual(rc, 2)
 
+    def test_destroy_only_defaults_to_prod_vm_with_confirmation_and_deletes_dev_immediately(self):
+        calls = []
+        with mock.patch.object(
+            verify_restore, 'run_playbook',
+            side_effect=lambda pb, env: (calls.append((pb, dict(env))), 0)[1],
+        ):
+            with mock.patch.object(verify_restore.sys.stdin, 'isatty', return_value=False):
+                self.assertEqual(verify_restore.main(['--destroy-only']), 2)
+            with mock.patch.object(verify_restore.sys.stdin, 'isatty', return_value=True), \
+                 mock.patch('builtins.input', return_value='y'):
+                self.assertEqual(verify_restore.main(['--destroy-only']), 0)
+            self.assertEqual(verify_restore.main(['--destroy-only', '--vm-name', 'sophon-dev-infravm']), 0)
+        self.assertEqual(calls[0][0], '3-destroy-vm.yml')
+        self.assertEqual(calls[0][1]['SOPHON_DESTROY_VM_NAME'], 'sophon-infravm')
+        self.assertEqual(calls[1][1]['SOPHON_DESTROY_VM_NAME'], 'sophon-dev-infravm')
+
     def test_rejects_certificate_only_iso_without_seed_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)

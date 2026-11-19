@@ -23,7 +23,7 @@ from cryptography.x509.oid import NameOID
 from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
 
 
-SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git')
+SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git', 'kopia')
 MAX_FILE = 2 * 1024 * 1024
 KEY_TYPE = 'EC256'
 BOOTSTRAP_CN = 'SOPHON PRE-RESTORE BOOTSTRAP'

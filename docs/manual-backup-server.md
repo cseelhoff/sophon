@@ -2,22 +2,22 @@
 
 Use this guide only if you are **not** using the default unattended `provision-backup` workflow from the [Operator Guide](./operator-guide.md).
 
-- **Option A:** Boot a blank VM manually with `artifacts/backup/alpine-sftp-server.iso` and configure it interactively on the console.
+- **Option A:** Boot a blank VM manually with `artifacts/backup/sophon-sftp-server.iso` and configure it interactively on the console.
 - **Option B:** Point Sophon at an existing Linux server or NAS with a jailed OpenSSH `internal-sftp` configuration.
 
 ---
 
-## Option A: Interactive VM Setup with `alpine-sftp-server.iso`
+## Option A: Interactive VM Setup with `sophon-sftp-server.iso`
 
-`bash sophon-provision.sh prepare` builds a secret-free hybrid BIOS + UEFI **Alpine 3.24 SFTP Backup Server ISO** at `artifacts/backup/alpine-sftp-server.iso`.
+`bash sophon-provision.sh prepare` builds a secret-free hybrid BIOS + UEFI **Alpine 3.24 SFTP Backup Server ISO** at `artifacts/backup/sophon-sftp-server.iso`.
 
 ### 1. Create and boot the VM
 
-1. Upload `artifacts/backup/alpine-sftp-server.iso` (`~133 MiB`) to your hypervisor.
+1. Upload `artifacts/backup/sophon-sftp-server.iso` (`~133 MiB`) to your hypervisor.
 2. Create a blank 64-bit Linux VM (`1–2` vCPU, `1–2 GiB` RAM, one blank disk of `16+ GiB`—for example `200+ GiB` for production, and one NIC on your backup VLAN/network).
-3. Attach `alpine-sftp-server.iso` as a CD/DVD drive and set **boot order to the blank disk first, then the CD/DVD drive**.
+3. Attach `sophon-sftp-server.iso` as a CD/DVD drive and set **boot order to the blank disk first, then the CD/DVD drive**.
 
-![Proxmox Hardware tab for the Sophon Backup Server VM with a blank disk and alpine-sftp-server.iso](./images/00a-backup-vm-hardware.png)
+![Proxmox Hardware tab for the Sophon Backup Server VM with a blank disk and sophon-sftp-server.iso](./images/00a-backup-vm-hardware.png)
 
 4. Power on the VM and open its console. Because the disk starts blank, the installer partitions the disk, configures the jailed `sophon-backup` (`internal-sftp`) and read-only `sophon-restore` (`internal-sftp -R`) chroots under `/var/lib/sophon-backups/repository`, and reboots in ~20 seconds:
 
@@ -36,7 +36,7 @@ Use this guide only if you are **not** using the default unattended `provision-b
 
 ## Option B: Existing Linux Server or NAS (`internal-sftp`)
 
-To host the encrypted Kopia repository on an existing Debian, Ubuntu, or RHEL host instead of deploying `alpine-sftp-server.iso`, create confined read-write (`sophon-backup`) and read-only (`sophon-restore`) SFTP accounts:
+To host the encrypted Kopia repository on an existing Debian, Ubuntu, or RHEL host instead of deploying `sophon-sftp-server.iso`, create confined read-write (`sophon-backup`) and read-only (`sophon-restore`) SFTP accounts:
 
 ```bash
 sudo useradd --system --user-group --no-create-home \

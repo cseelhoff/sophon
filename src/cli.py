@@ -19,7 +19,7 @@ COMMANDS = {
     'provision-backup': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision-backup.yml'],
     'provision': _provision_command,
     'provision-dev': lambda args: ['python3', 'src/verify_restore.py', *args],
-    'destroy-vm': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '3-destroy-vm.yml'],
+    'destroy-vm': lambda args: ['python3', 'src/verify_restore.py', '--destroy-only', *args],
     'verify-restore': lambda args: ['python3', 'src/verify_restore.py', *args],
     'certificates': lambda args: ['python3', 'src/certificates.py', *args],
     # </dev/null: the wizard tests assume no terminal, and `docker run -it` would make them wait for keystrokes.
@@ -31,12 +31,12 @@ COMMANDS = {
 HELP = """usage: docker run --rm -it -v <project>:/workspace -v <engine socket>:/var/run/docker.sock \\
            -v sophon-state:/state sophon-tools <command> [args]
 
-  prepare                 build installer, deployment, and alpine-sftp-server.iso media
-  secrets                 build mode-0600 unattended seed ISOs (sophon-secrets.iso & sophon-backup-secrets.iso)
+  prepare                 build sophon-coreos.iso, sophon-apps.iso, and sophon-sftp-server.iso media
+  secrets                 build mode-0600 unattended seed ISOs (sophon-secrets.iso & sophon-sftp-secrets.iso)
   provision-backup        create the standalone Alpine SFTP Backup Server VM (Proxmox, vCenter, or Hyper-V)
   provision [--recreate]  deploy the production InfraVM (auto-attaches sophon-secrets.iso; --recreate replaces it)
   provision-dev           recreate and restore the dev/drill InfraVM on SOPHON_DEV_NETWORK_CIDR in safe standby mode
-  destroy-vm              stop and delete a Sophon-managed VM across Proxmox, vCenter, or Hyper-V
+  destroy-vm [--vm-name]  stop and delete a Sophon-managed VM (default: SOPHON_INFRAVM_NAME)
   certificates issue ...  air-gapped sites: issue/renew the wildcard certificate into artifacts/secrets/sophon-secrets.iso
   test | shell            development helpers
 Anything else runs as a command in the container."""

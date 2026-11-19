@@ -20,7 +20,7 @@ class InstallerIsoTests(unittest.TestCase):
         self.directory = Path(self.temporary.name)
         self.stock = self.directory / 'fedora-coreos-live.iso'
         self.stock.write_bytes(b'stock live iso')
-        self.output = self.directory / 'out/sophon-installer.iso'
+        self.output = self.directory / 'out/sophon-coreos.iso'
         self.record = self.directory / 'record.json'
         bin_dir = self.directory / 'bin'
         bin_dir.mkdir()

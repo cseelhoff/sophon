@@ -2,8 +2,8 @@
 
 The choices the design rests on, newest understanding first. Each is cheap to state and costly to reverse.
 
-1. **Two reusable ISOs, installed unattended.** `sophon-installer.iso` (the stock CoreOS live ISO with a small
-   live Ignition config baked in by `coreos-installer iso customize`) plus `sophon-deployment.iso`. The laptop
+1. **Two reusable ISOs, installed unattended.** `sophon-coreos.iso` (the stock CoreOS live ISO with a small
+   live Ignition config baked in by `coreos-installer iso customize`) plus `sophon-apps.iso`. The laptop
    creates a blank VM and attaches both; the installer runs by itself, offline, and only ever to a blank disk, so
    booting it again cannot reinstall. No guest agent, SSH, disk conversion, controller VM or NFS. The `core`
    password is chosen at the first boot (the account is locked until then, so no default password exists) and the

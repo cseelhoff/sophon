@@ -10,7 +10,7 @@ a container on InfraVM itself.
 For a complete visual walkthrough with screenshots covering clean SFTP backup server setup, first-boot console configuration, Day-1 verification in Arcane, live Btrfs snapshots, and full disaster recovery, see the **[Installation, Operations & Disaster Recovery Guide](docs/operator-guide.md)**.
 
 You can deploy Sophon **either interactively on the VM console** or **completely unattended** using optional mode-`0600`
-secrets ISOs (`sophon-secrets.iso` and `sophon-backup-secrets.iso`) across **Proxmox, VMware vCenter, and Microsoft Hyper-V**.
+secrets ISOs (`sophon-secrets.iso` and `sophon-sftp-secrets.iso`) across **Proxmox, VMware vCenter, and Microsoft Hyper-V**.
 The laptop needs only **Docker or Podman** (Linux, WSL, macOS or Windows). Under WSL, keep this folder on the Linux
 filesystem (`~/sophon`, not `/mnt/c/...`): building the ISOs is several times faster.
 
@@ -97,7 +97,7 @@ Needed at `sophon-deploy` (connected sites) for Let's Encrypt DNS-01 and tunnel 
 
 Run `prepare`, then do the VM part by hand:
 
-1. Copy `artifacts/coreos/sophon-installer.iso` and `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
+1. Copy `artifacts/coreos/sophon-coreos.iso` and `artifacts/bootstrap/sophon-apps.iso` to the hypervisor.
    At an [air-gapped site](#air-gapped-sites) (or when using unattended seeding) also copy `artifacts/secrets/sophon-secrets.iso`.
 2. Create a blank VM: 64-bit Linux, UEFI or BIOS (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
    one 40+ GiB disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
@@ -144,7 +144,7 @@ manifest—never images, caches, container environments or a system copy.
 
 Supply the external SFTP host/user/path, repository password and Kopia UI
 credentials at the console. If you do not already have an SFTP server or NAS,
-Prepare also builds `artifacts/backup/alpine-sftp-server.iso`, an
+Prepare also builds `artifacts/backup/sophon-sftp-server.iso`, an
 unattended Alpine Linux SFTP backup appliance (`sophon-backup-setup` and
 `sophon-authorize-key`); see [Operator Guide](docs/operator-guide.md) and
 [Manual Backup Server Setup](docs/manual-backup-server.md).
@@ -184,7 +184,7 @@ interactively via `sophon-deploy --prepare-restore` followed by `sophon-restore`
 deletes any existing `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`) first and
 boots a clean standby VM on `SOPHON_DEV_NETWORK_CIDR` with the confined
 read-only `sophon-restore` SFTP key—no `serial0` socket and no workstation-to-VM
-network path required. Treat `sophon-secrets.iso` and `sophon-backup-secrets.iso`
+network path required. Treat `sophon-secrets.iso` and `sophon-sftp-secrets.iso`
 like passwords: delete or detach them once ingested. See the
 [Operations Guide](docs/operator-guide.md) and the
 [Kopia role reference](roles/kopia/README.md).

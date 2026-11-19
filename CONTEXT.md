@@ -16,11 +16,11 @@
 **Runner**: the Ansible container on InfraVM. It reconciles Compose stacks in `/var/lib/sophon/stacks` over the rootless Podman socket and
 preflights the declared SFTP destination; it has no hypervisor/guest SSH or host root privileges.
 
-**Installer ISO**: `sophon-installer.iso`; the stock Fedora CoreOS live ISO with a small Ignition config baked in (`coreos-installer iso customize`) that runs the unattended install. Reusable, secret-free.
+**CoreOS Installer ISO**: `sophon-coreos.iso`; the stock Fedora CoreOS live ISO with a small Ignition config baked in (`coreos-installer iso customize`) that runs the unattended install. Reusable, secret-free.
 
-**Deployment ISO**: `sophon-deployment.iso`; project, runner image, container archives and installer. Reusable, secret-free.
+**Apps Bundle ISO**: `sophon-apps.iso`; project, runner image, container archives and installer. Reusable, secret-free.
 
-**Alpine SFTP Server ISO**: `alpine-sftp-server.iso`; standalone hybrid BIOS/UEFI Alpine 3.24 installer ISO built by Prepare that installs a turnkey, confined OpenSSH `internal-sftp` backup server onto a single blank disk (`sophon-backup-setup` / `sophon-authorize-key`). Reusable, secret-free.
+**SFTP Server ISO**: `sophon-sftp-server.iso`; standalone hybrid BIOS/UEFI Alpine 3.24 installer ISO built by Prepare that installs a turnkey, confined OpenSSH `internal-sftp` backup server onto a single blank disk (`sophon-backup-setup` / `sophon-authorize-key`). Reusable, secret-free.
 
 **Artifact**: a file Prepare produces and a later step consumes (image archive, ISO, runner image).
 

@@ -38,7 +38,7 @@ docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/dock
 docker run --rm -it -v "${PWD}:/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
 ```
 
-Repeat runs rebuild the deployment ISO and the installer ISO (`artifacts/coreos/sophon-installer.iso`) only when an
+Repeat runs rebuild the apps ISO (`artifacts/bootstrap/sophon-apps.iso`) and the CoreOS installer ISO (`artifacts/coreos/sophon-coreos.iso`) only when an
 input changed (`-e prepare_force=true` as extra arguments forces it).
 
 ## Step 2: provision
