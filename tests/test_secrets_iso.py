@@ -122,6 +122,7 @@ class SecretsIsoTests(unittest.TestCase):
                 'SOPHON_NETWORK_CIDR': '10.0.60.101/24',
                 'SOPHON_NETWORK_GATEWAY': '10.0.60.1',
                 'SOPHON_VNET_DNS': '10.0.60.1',
+                'SOPHON_DEV_NETWORK_CIDR': '10.0.60.107/24',
                 'SOPHON_BACKUP_NETWORK_CIDR': '10.0.60.100/24',
                 'SOPHON_BACKUP_NETWORK_GATEWAY': '10.0.60.1',
                 'SOPHON_KOPIA_PASSWORD': 'KopiaRepoPassword123!',
@@ -152,11 +153,34 @@ class SecretsIsoTests(unittest.TestCase):
                 check=True, capture_output=True,
             )
             seed = json.loads((extracted / 'sophon-seed.json').read_text())
+            self.assertEqual(seed['target'], 'prod')
             self.assertTrue(seed['core_password_hash'].startswith('$6$'))
             self.assertEqual(seed['network'], {'mode': 'static', 'cidr': '10.0.60.101/24', 'gateway': '10.0.60.1', 'dns': '10.0.60.1'})
+            self.assertEqual(seed['dev_network'], {'mode': 'static', 'cidr': '10.0.60.107/24', 'gateway': '10.0.60.1', 'dns': '10.0.60.1'})
             self.assertEqual(seed['env']['SOPHON_KOPIA_SFTP_HOST'], '10.0.60.100')
             self.assertEqual(seed['env']['SOPHON_KOPIA_SFTP_USERNAME'], 'sophon-backup')
+            self.assertIn('backup_private_key_b64', seed['sftp'])
+            self.assertIn('restore_private_key_b64', seed['sftp'])
+            self.assertNotEqual(seed['sftp']['backup_private_key_b64'], seed['sftp']['restore_private_key_b64'])
             self.assertTrue((extracted / 'acme.json').is_file())
+
+            derived_iso = tmp_dir / 'derived-dev.iso'
+            secrets_iso.derive_dev_secrets_iso(infra_iso, {}, derived_iso)
+            extracted_dev = tmp_dir / 'extracted-dev'
+            extracted_dev.mkdir()
+            subprocess.run(
+                ['xorriso', '-osirrox', 'on', '-indev', str(derived_iso), '-extract', '/', str(extracted_dev)],
+                check=True, capture_output=True,
+            )
+            dev_seed = json.loads((extracted_dev / 'sophon-seed.json').read_text())
+            self.assertEqual(dev_seed['target'], 'dev')
+            self.assertEqual(dev_seed['network']['cidr'], '10.0.60.107/24')
+            self.assertEqual(dev_seed['prod_network']['cidr'], '10.0.60.101/24')
+            self.assertEqual(dev_seed['env']['SOPHON_INFRAVM_IP'], '10.0.60.107')
+            self.assertEqual(dev_seed['env']['SOPHON_KOPIA_SFTP_USERNAME'], 'sophon-restore')
+            self.assertEqual(dev_seed['env']['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'], seed['sftp']['restore_private_key_b64'])
+            self.assertEqual(dev_seed['sftp']['backup_private_key_b64'], seed['sftp']['backup_private_key_b64'])
+            self.assertTrue((extracted_dev / 'acme.json').is_file())
 
             extracted_bk = tmp_dir / 'extracted-bk'
             extracted_bk.mkdir()

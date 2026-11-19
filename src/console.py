@@ -135,6 +135,9 @@ def main(argv=None):
     parser.add_argument('--prepare-restore', action='store_true',
                         help='Deploy services as a read-only standby ready for sophon-restore without touching Cloudflare or writing backups')
     options = parser.parse_args(argv)
+    seed_target = 'prod'
+    seed_prod_network = None
+    seed_sftp: dict[str, str] = {}
     if options.auto:
         options.run = True
         if options.seed_file and options.seed_file.is_file() and not options.seed_file.is_symlink():
@@ -142,6 +145,16 @@ def main(argv=None):
                 seed_doc = json.loads(options.seed_file.read_text(encoding='utf-8'))
             finally:
                 options.seed_file.unlink(missing_ok=True)
+            seed_target = str(seed_doc.get('target') or 'prod')
+            if isinstance(seed_doc.get('prod_network'), dict):
+                seed_prod_network = seed_doc['prod_network']
+            elif isinstance(seed_doc.get('network'), dict):
+                seed_prod_network = seed_doc['network']
+            if isinstance(seed_doc.get('sftp'), dict):
+                seed_sftp = {
+                    k: v for k, v in seed_doc['sftp'].items()
+                    if isinstance(k, str) and isinstance(v, str) and v
+                }
             for k, v in (seed_doc.get('env') or {}).items():
                 if isinstance(k, str) and isinstance(v, str) and k.startswith('SOPHON_'):
                     os.environ.setdefault(k, v)
@@ -150,15 +163,27 @@ def main(argv=None):
     try:
         site = deployment.load_site_settings()
         for name, value in site.items():
-            os.environ.setdefault(name, value)
+            if name in ('SOPHON_INFRAVM_IP', 'SOPHON_VNET_DNS') and value:
+                os.environ[name] = value
+            else:
+                os.environ.setdefault(name, value)
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    prepare_restore = options.prepare_restore or os.environ.get('SOPHON_PREPARE_RESTORE', '').strip().lower() == 'true'
+    prepare_restore = (
+        options.prepare_restore
+        or seed_target == 'dev'
+        or os.environ.get('SOPHON_PREPARE_RESTORE', '').strip().lower() == 'true'
+    )
     arguments = ['--step', 'configure']
     values = deployment.new_control(os.environ, 'configure')['values']
+    backup_key_b64 = seed_sftp.get('backup_private_key_b64') or (
+        values.get('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', '')
+        if values.get('SOPHON_KOPIA_SFTP_USERNAME') == 'sophon-backup' else ''
+    )
     desired_standby = {
         'domain': values.get('SOPHON_DOMAIN', ''),
         'desired_cf_tunnel_enabled': values.get('SOPHON_CF_TUNNEL_ENABLED', 'true') == 'true' and bool(values.get('SOPHON_CF_TOKEN', '').strip()),
+        'desired_cf_token': values.get('SOPHON_CF_TOKEN', '').strip(),
         'desired_cf_tunnel_name': values.get('SOPHON_CF_TUNNEL_NAME', 'sophon'),
         'desired_acme_email': values.get('SOPHON_ACME_EMAIL', 'admin@example.com'),
         'desired_backups_enabled': values.get('SOPHON_KOPIA_BACKUPS_ENABLED', 'true') == 'true',
@@ -167,7 +192,15 @@ def main(argv=None):
         'desired_coarse_volumes_dir': values.get('SOPHON_KOPIA_COARSE_VOLUMES_DIR', '/var/home/core/.local/share/containers/storage/volumes'),
         'desired_coarse_work_dir': values.get('SOPHON_KOPIA_COARSE_WORK_DIR', '/var/home/core/sophon-coarse'),
     }
+    if seed_prod_network is not None:
+        desired_standby['prod_network'] = seed_prod_network
+    if backup_key_b64:
+        desired_standby['desired_sftp_username'] = 'sophon-backup'
+        desired_standby['desired_sftp_private_key_b64'] = backup_key_b64
     if prepare_restore:
+        if seed_sftp.get('restore_private_key_b64'):
+            values['SOPHON_KOPIA_SFTP_USERNAME'] = 'sophon-restore'
+            values['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'] = seed_sftp['restore_private_key_b64']
         values['SOPHON_CF_TOKEN'] = ''
         values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
         values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
@@ -241,12 +274,14 @@ def main(argv=None):
         auto_mode = values.pop('_SOPHON_AUTO_MODE', None)
         if auto_mode == 'standby_restore':
             prepare_restore = True
+            if seed_sftp.get('restore_private_key_b64'):
+                values['SOPHON_KOPIA_SFTP_USERNAME'] = 'sophon-restore'
+                values['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'] = seed_sftp['restore_private_key_b64']
             values['SOPHON_CF_TOKEN'] = ''
             values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
             values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
             values['SOPHON_KOPIA_COARSE_ENABLED'] = 'false'
             values['SOPHON_KOPIA_CREATE_REPOSITORY'] = 'false'
-            # Discard any imported acme.json only if none was provided; if acme.json WAS on the ISO, keep it so Traefik starts with valid TLS immediately.
         values = deployment.stage_certificates(values)
         values['SOPHON_ARCANE_ENCRYPTION_KEY'] = deployment.ensure_arcane_encryption_key(deployment.ROOT)
     except KeyboardInterrupt:

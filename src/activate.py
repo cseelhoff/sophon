@@ -85,6 +85,10 @@ def main(argv=None) -> int:
     values['SOPHON_INFRAVM_IP'] = infravm_ip
 
     sftp_user = values.get('SOPHON_KOPIA_SFTP_USERNAME', '')
+    if sftp_user == 'sophon-restore' and standby.get('desired_sftp_private_key_b64'):
+        sftp_user = standby.get('desired_sftp_username') or 'sophon-backup'
+        values['SOPHON_KOPIA_SFTP_USERNAME'] = sftp_user
+        values['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'] = standby['desired_sftp_private_key_b64']
     if sftp_user == 'sophon-restore':
         print(
             "Cannot promote to active production while paired with the confined read-only 'sophon-restore' SFTP account.\n"
@@ -99,7 +103,7 @@ def main(argv=None) -> int:
     elif options.disable_tunnel:
         want_tunnel = False
 
-    cf_token = values.get('SOPHON_CF_TOKEN', '').strip()
+    cf_token = (values.get('SOPHON_CF_TOKEN') or standby.get('desired_cf_token') or '').strip()
     if want_tunnel and not cf_token:
         if not sys.stdin.isatty():
             print('Cloudflare tunnel activation requires SOPHON_CF_TOKEN (or pass --disable-tunnel).', file=sys.stderr)
@@ -145,10 +149,15 @@ def main(argv=None) -> int:
         print(f'Production activation preflight failed: {error}', file=sys.stderr)
         return 2
 
-    os.environ.pop('SOPHON_PREPARE_RESTORE', None)
-    os.environ.update(values)
-    os.environ['SOPHON_KOPIA_PREFLIGHT_COMPLETE'] = 'true'
-    rc = deployment.main(['--step', 'configure', '--', '5-activate.yml'])
+    saved_env = os.environ.copy()
+    try:
+        os.environ.pop('SOPHON_PREPARE_RESTORE', None)
+        os.environ.update(values)
+        os.environ['SOPHON_KOPIA_PREFLIGHT_COMPLETE'] = 'true'
+        rc = deployment.main(['--step', 'configure', '--', '5-activate.yml'])
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
     if rc == 0:
         standby_path.unlink(missing_ok=True)
         console._write_json_private(

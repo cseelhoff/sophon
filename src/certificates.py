@@ -27,9 +27,9 @@ SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git')
 MAX_FILE = 2 * 1024 * 1024
 KEY_TYPE = 'EC256'
 BOOTSTRAP_CN = 'SOPHON PRE-RESTORE BOOTSTRAP'
-# The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (it contains a private key).
+# The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (and optional sophon-seed.json).
 CERTIFICATE_LABEL = 'SOPHON_CERTS'
-CERTIFICATE_ISO = Path(__file__).resolve().parents[1] / 'artifacts/secrets/sophon-certificates.iso'
+CERTIFICATE_ISO = Path(__file__).resolve().parents[1] / 'artifacts/secrets/sophon-secrets.iso'
 
 
 def validate(source, domain):
@@ -139,7 +139,7 @@ def import_file(source, domain, destination):
 
 
 def write_certificate_iso(data, output):
-    """Write the secret disk: a small ISO (label SOPHON_CERTS) holding acme.json, mode 0600 on this machine."""
+    """Write the secret disk: a small ISO (label SOPHON_CERTS) holding acme.json (preserving any sophon-seed.json), mode 0600."""
     if not shutil.which('xorriso'):
         raise ValueError('xorriso is missing; run this through the sophon-tools container.')
     output = Path(os.path.abspath(output))
@@ -148,12 +148,25 @@ def write_certificate_iso(data, output):
     output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix='sophon-certs-') as work:
         contents = Path(work) / 'contents'
-        contents.mkdir()
-        (contents / 'acme.json').write_bytes(data)
-        image = Path(work) / 'certificates.iso'
+        contents.mkdir(mode=0o700)
+        if output.is_file():
+            existing_seed = contents / 'sophon-seed.json'
+            res = subprocess.run(
+                ['xorriso', '-osirrox', 'on', '-indev', str(output), '-extract', '/sophon-seed.json', str(existing_seed)],
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode == 0 and existing_seed.is_file() and existing_seed.stat().st_size > 0:
+                existing_seed.chmod(0o400)
+            else:
+                existing_seed.unlink(missing_ok=True)
+        acme_path = contents / 'acme.json'
+        acme_path.write_bytes(data)
+        acme_path.chmod(0o400)
+        image = Path(work) / 'secrets.iso'
         subprocess.run(['xorriso', '-as', 'mkisofs', '-R', '-J', '-iso-level', '3', '-V', CERTIFICATE_LABEL,
                         '-o', str(image), str(contents)], check=True, capture_output=True)
-        descriptor, partial = tempfile.mkstemp(prefix='.sophon-certs-', suffix='.iso', dir=output.parent)
+        descriptor, partial = tempfile.mkstemp(prefix='.sophon-secrets-', suffix='.iso', dir=output.parent)
         try:
             with os.fdopen(descriptor, 'wb') as target, image.open('rb') as source:
                 os.fchmod(target.fileno(), 0o600)

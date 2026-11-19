@@ -3,7 +3,7 @@
 # the stock CoreOS live ISO, the installer ISO built from it (artifacts/coreos/sophon-installer.iso, with the
 # unattended installer baked in), container archives, the offline runner,
 # artifacts/bootstrap/sophon-deployment.iso, and the standalone unattended Alpine SFTP backup server ISO
-# (artifacts/backup/sophon-backup-installer.iso). Cached inputs are reused;
+# (artifacts/backup/alpine-sftp-server.iso). Cached inputs are reused;
 # `-e prepare_force=true` refreshes them.
 - name: Prepare installation media
   hosts: localhost

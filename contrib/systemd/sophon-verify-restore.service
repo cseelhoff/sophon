@@ -10,6 +10,6 @@ Type=oneshot
 WorkingDirectory=%h/sophon
 # Optional dedicated secrets/settings file (chmod 600) outside .env so production .env stays minimal:
 EnvironmentFile=-%h/.config/sophon/verify-restore.env
-ExecStart=/usr/bin/env bash ./sophon-provision.sh verify-restore
+ExecStart=/usr/bin/env bash ./sophon-provision.sh provision-dev
 TimeoutStartSec=2h
 Nice=10

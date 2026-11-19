@@ -13,6 +13,10 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(cli.COMMANDS['prepare'](['-e', 'prepare_force=true']),
                          ['ansible-playbook', '1-prepare.yml', '-e', 'prepare_force=true'])
         self.assertEqual(cli.COMMANDS['provision']([])[-2:], ['--', '2-provision.yml'])
+        self.assertEqual(cli.COMMANDS['provision'](['--recreate', '--yes']),
+                         ['python3', 'src/verify_restore.py', '--prod-recreate', '--yes'])
+        self.assertEqual(cli.COMMANDS['provision-dev'](['--wait-https']),
+                         ['python3', 'src/verify_restore.py', '--wait-https'])
         self.assertEqual(cli.COMMANDS['provision-backup']([])[-2:], ['--', '2-provision-backup.yml'])
         self.assertEqual(cli.COMMANDS['destroy-vm']([])[-2:], ['--', '3-destroy-vm.yml'])
         self.assertIn('--step', cli.COMMANDS['provision']([]))

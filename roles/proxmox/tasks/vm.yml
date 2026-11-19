@@ -44,13 +44,12 @@
           - infravm_disk_gb | int >= 40
         fail_msg: "Provide valid CPU/memory and at least 40 GiB disk space; installation checks actual artifact capacity."
     # Content-addressed names: a mounted ISO belonging to another guest is never overwritten.
-    - name: Resolve optional InfraVM secrets or certificate ISO
+    - name: Resolve optional InfraVM secrets ISO
       ansible.builtin.stat:
         path: "{{ item }}"
       loop:
         - "{{ explicit_secrets_iso_path }}"
         - "{{ secrets_iso_default_path }}"
-        - "{{ certificate_iso_default_path }}"
       when: item | length > 0 and (item == explicit_secrets_iso_path or (attach_secrets_iso | bool))
       register: infravm_secret_candidates
     - name: Require explicit secrets ISO when SOPHON_SECRETS_ISO was supplied

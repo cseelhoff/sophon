@@ -48,8 +48,12 @@ the web UI (noVNC) shows step 3 and the `core` password prompt.
 | `SOPHON_HYPERV_PATH` | optional folder on the host for the VM, disk and ISOs (default: the host's VM path) |
 | `2-provision-hyperv-local.ps1` | same VM on the local machine as the signed-in user (no host or credentials); takes `-Switch` / `SOPHON_HYPERV_SWITCH`, `-Path` / `SOPHON_HYPERV_PATH` and the `SOPHON_INFRAVM_*` sizes |
 
-All providers: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
-A VM that already exists is only started if this workflow created it; anything else is left alone.
+All providers: `SOPHON_INFRAVM_NAME` (`sophon-infravm`), `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`, targeted by
+`provision-dev` which always deletes any existing dev VM first), `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
+For `provision`, a VM that already exists is only started if this workflow created it (`provision --recreate` replaces it);
+anything else is left alone. When building unattended seeds (`secrets`), `SOPHON_NETWORK_CIDR` sets the production
+static IPv4 CIDR and `SOPHON_DEV_NETWORK_CIDR` sets the dev/restore-drill static IPv4 CIDR (`sophon-activate` switches
+the VM's IP and self-pointing DNS from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`).
 
 ## Automatic install (nothing to type)
 

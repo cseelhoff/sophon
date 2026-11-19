@@ -46,9 +46,10 @@ main() {
     fi
     if podman --remote=false network exists proxy; then
         if [[ -n $dns_server ]]; then
-            if [[ ${#dns_frontends[@]} == 1 && -n $infravm_ip ]]; then
-                podman --remote=false network update --dns-drop "$infravm_ip" proxy
-            fi
+            while IFS= read -r old_dns; do
+                [[ -n $old_dns && $old_dns != "$dns_server" ]] || continue
+                podman --remote=false network update --dns-drop "$old_dns" proxy || true
+            done < <(podman --remote=false network inspect proxy --format '{{range .NetworkDNSServers}}{{println .}}{{end}}' 2>/dev/null || true)
             podman --remote=false network update --dns-add "$dns_server" proxy
         fi
     else

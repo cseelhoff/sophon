@@ -6,11 +6,19 @@ docker run command works from bash, PowerShell or cmd.
 import os
 import sys
 
+def _provision_command(args: list[str]) -> list[str]:
+    if '--recreate' in args:
+        cleaned = [a for a in args if a != '--recreate']
+        return ['python3', 'src/verify_restore.py', '--prod-recreate', *cleaned]
+    return ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision.yml']
+
+
 COMMANDS = {
     'prepare': lambda args: ['ansible-playbook', '1-prepare.yml', *args],
     'secrets': lambda args: ['python3', 'src/secrets_iso.py', *args],
     'provision-backup': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision-backup.yml'],
-    'provision': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision.yml'],
+    'provision': _provision_command,
+    'provision-dev': lambda args: ['python3', 'src/verify_restore.py', *args],
     'destroy-vm': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '3-destroy-vm.yml'],
     'verify-restore': lambda args: ['python3', 'src/verify_restore.py', *args],
     'certificates': lambda args: ['python3', 'src/certificates.py', *args],
@@ -23,13 +31,13 @@ COMMANDS = {
 HELP = """usage: docker run --rm -it -v <project>:/workspace -v <engine socket>:/var/run/docker.sock \\
            -v sophon-state:/state sophon-tools <command> [args]
 
-  prepare                 step 1: cache downloads and build installer, deployment, and backup appliance ISOs
-  secrets                 optional: build mode-0600 unattended seed ISOs (sophon-secrets.iso & sophon-backup-secrets.iso)
-  provision-backup        optional: create the standalone Alpine SFTP Backup Server VM (Proxmox, vCenter, or Hyper-V)
-  provision               steps 1-2: create InfraVM and auto-attach sophon-secrets.iso when present
+  prepare                 build installer, deployment, and alpine-sftp-server.iso media
+  secrets                 build mode-0600 unattended seed ISOs (sophon-secrets.iso & sophon-backup-secrets.iso)
+  provision-backup        create the standalone Alpine SFTP Backup Server VM (Proxmox, vCenter, or Hyper-V)
+  provision [--recreate]  deploy the production InfraVM (auto-attaches sophon-secrets.iso; --recreate replaces it)
+  provision-dev           recreate and restore the dev/drill InfraVM on SOPHON_DEV_NETWORK_CIDR in safe standby mode
   destroy-vm              stop and delete a Sophon-managed VM across Proxmox, vCenter, or Hyper-V
-  verify-restore          step 7: hypervisor-agnostic restore drill using sophon-secrets.iso (safe standby mode)
-  certificates issue ...  air-gapped sites: issue the wildcard certificate and write artifacts/secrets/sophon-certificates.iso
+  certificates issue ...  air-gapped sites: issue/renew the wildcard certificate into artifacts/secrets/sophon-secrets.iso
   test | shell            development helpers
 Anything else runs as a command in the container."""
 

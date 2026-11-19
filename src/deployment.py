@@ -41,6 +41,7 @@ FIELDS = {
     'SOPHON_VNET_VLAN': ('VLAN', 'Network', 'number', '', False),
     'SOPHON_INFRAVM_CORES': ('CPU cores', 'VM', 'number', '8', True),
     'SOPHON_INFRAVM_NAME': ('VM name', 'VM', 'text', 'sophon-infravm', True),
+    'SOPHON_DEV_INFRAVM_NAME': ('Dev/drill VM name', 'VM', 'text', 'sophon-dev-infravm', False),
     'SOPHON_INFRAVM_MEMORY': ('Memory (MiB)', 'VM', 'number', '8192', True),
     'SOPHON_INFRAVM_DISK_GB': ('Disk size (GiB)', 'VM', 'number', '100', True),
     'SOPHON_VNET_DNS': ('Upstream DNS', 'Site', 'ipv4', '', False),

@@ -23,7 +23,7 @@ load_env_file() {
     done < "$file"
 }
 
-if [ "$command" = verify-restore ]; then
+if [ "$command" = provision-dev ] || [ "$command" = verify-restore ]; then
     load_env_file "${XDG_CONFIG_HOME:-$HOME/.config}/sophon/verify-restore.env"
 fi
 load_env_file .env
@@ -66,7 +66,7 @@ need_secret() {
 }
 
 extra_mounts=()
-if [ "$command" = verify-restore ] && [ -n "${SOPHON_VERIFY_RESTORE_CA_FILE:-}" ]; then
+if { [ "$command" = provision-dev ] || [ "$command" = verify-restore ]; } && [ -n "${SOPHON_VERIFY_RESTORE_CA_FILE:-}" ]; then
     ca_file=${SOPHON_VERIFY_RESTORE_CA_FILE/#\~/$HOME}
     [ -f "$ca_file" ] || die "CA file not found: $ca_file"
     ca_abs=$(cd "$(dirname "$ca_file")" && pwd)/$(basename "$ca_file")
@@ -74,7 +74,7 @@ if [ "$command" = verify-restore ] && [ -n "${SOPHON_VERIFY_RESTORE_CA_FILE:-}" 
     export SOPHON_VERIFY_RESTORE_CA_FILE=/tmp/sophon-verify-ca.pem
 fi
 
-if { [ "$command" = provision ] || [ "$command" = provision-backup ] || [ "$command" = destroy-vm ] || [ "$command" = verify-restore ]; } && [ -t 0 ]; then
+if { [ "$command" = provision ] || [ "$command" = provision-dev ] || [ "$command" = provision-backup ] || [ "$command" = destroy-vm ] || [ "$command" = verify-restore ]; } && [ -t 0 ]; then
     if [ -z "${SOPHON_HYPERVISOR:-}" ]; then
         printf '%s\n' 'Where should the VM run?' '  1) Proxmox' '  2) VMware vCenter' \
             '  3) Microsoft Hyper-V on another host (WinRM)' \

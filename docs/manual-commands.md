@@ -104,15 +104,15 @@ Python or container:
 ```
 
 `-Switch` (or `SOPHON_HYPERV_SWITCH`) names an existing virtual switch (if omitted, the script lists them and asks);
-`-Path`, `-Name`, `-Cores`, `-MemoryMB` and `-DiskGB` are optional (`SOPHON_HYPERV_PATH` and `SOPHON_INFRAVM_*` are
-honoured). It creates the same VM as the remote provider, plus a third DVD drive for the secret certificate ISO
-(inserted if `artifacts\secrets\sophon-certificates.iso` exists, otherwise empty). Verified end to end on a real host.
+`-Path`, `-Name`, `-Cores`, `-MemoryMB`, `-DiskGB` and `-Recreate` are optional (`SOPHON_HYPERV_PATH` and `SOPHON_INFRAVM_*` are
+honoured). It creates the same VM as the remote provider, plus a third DVD drive for `artifacts\secrets\sophon-secrets.iso`
+(inserted if it exists, otherwise empty). Verified end to end on a real host.
 For an air-gapped site, `.\2-provision-hyperv-local.ps1 -AttachCertificates` inserts that ISO into the existing VM and
 `-DetachCertificates` ejects it (the same as `.\sophon-provision.ps1 attach-certificates` / `detach-certificates`).
 
 ## Certificates (air-gapped sites only)
 
-On a connected machine, to make the secret certificate ISO (`artifacts/secrets/sophon-certificates.iso`, label
+On a connected machine, to make or update `artifacts/secrets/sophon-secrets.iso` (label
 `SOPHON_CERTS`; see [certificates.md](certificates.md)). No engine socket is needed, but the `sophon-state` volume keeps
 the ACME account and issued certificate between runs:
 

@@ -214,8 +214,38 @@ def validate_ipv4_network(cidr: str, gateway: str, dns: str) -> dict:
     }
 
 
+def resolve_dev_ipv4_network(
+    dev_cidr_or_ip: str,
+    prod_network: dict,
+    dev_gateway: str = '',
+    dev_dns: str = '',
+) -> dict:
+    """Resolve and validate the dev/drill IPv4 network against `prod_network`."""
+    raw = dev_cidr_or_ip.strip()
+    if not raw:
+        raise ValueError('Dev IPv4 CIDR is empty.')
+    if '/' not in raw:
+        prod_cidr = prod_network.get('cidr', '')
+        if '/' not in prod_cidr:
+            raise ValueError('SOPHON_DEV_NETWORK_CIDR must include a prefix length (for example 10.0.60.107/24).')
+        raw = f"{raw}/{prod_cidr.split('/', 1)[1]}"
+    gw = dev_gateway.strip() or prod_network.get('gateway', '').strip()
+    dns = dev_dns.strip() or prod_network.get('dns', '1.1.1.1').strip()
+    if not gw:
+        raise ValueError('Dev static network requires SOPHON_DEV_NETWORK_GATEWAY (or SOPHON_NETWORK_GATEWAY).')
+    validated = validate_ipv4_network(raw, gw, dns)
+    prod_ip = prod_network.get('ip') or (prod_network.get('cidr', '').split('/')[0] if '/' in prod_network.get('cidr', '') else '')
+    if prod_ip and validated['ip'] == prod_ip:
+        raise ValueError(f"Dev IPv4 address ({validated['ip']}) must differ from production IPv4 address ({prod_ip}).")
+    return {
+        'mode': 'static',
+        'cidr': validated['cidr'],
+        'gateway': validated['gateway'],
+        'dns': validated['dns'],
+    }
+
+
 def write_private_iso(files: dict[str, tuple[bytes, int]], label: str, output: Path) -> Path:
-    """Build a mode-0600 RockRidge + Joliet ISO containing `files` (`relpath -> (bytes, mode)`)."""
     if not shutil.which('xorriso'):
         raise ValueError('xorriso is missing; run this through the sophon-tools container.')
     output = Path(os.path.abspath(output))
@@ -282,11 +312,10 @@ def find_existing_acme_bytes(domain: str, state_dir: Path, explicit_acme: str = 
         certificates.validate_data(data, domain)
         return certificates.minimal_store(data, domain)
 
-    for iso_candidate in (SECRETS_ISO, certificates.CERTIFICATE_ISO):
-        extracted = extract_acme_from_iso(iso_candidate)
-        if extracted:
-            certificates.validate_data(extracted, domain)
-            return certificates.minimal_store(extracted, domain)
+    extracted = extract_acme_from_iso(SECRETS_ISO)
+    if extracted:
+        certificates.validate_data(extracted, domain)
+        return certificates.minimal_store(extracted, domain)
     return None
 
 
@@ -330,6 +359,8 @@ def build_infravm_secrets_iso(
     core_password_hash: str,
     network: dict,
     configure_values: dict[str, str],
+    dev_network: dict | None = None,
+    sftp_keys: dict[str, str] | None = None,
     acme_bytes: bytes | None = None,
     output: Path = SECRETS_ISO,
 ) -> Path:
@@ -358,6 +389,20 @@ def build_infravm_secrets_iso(
         values['SOPHON_VNET_DNS'] = validated_net['dns']
         values_for_validation = dict(values)
 
+    dev_net_payload = None
+    if dev_network:
+        if dev_network.get('mode') == 'dhcp':
+            dev_dns = (dev_network.get('dns') or net_payload['dns']).strip()
+            ipaddress.IPv4Address(dev_dns)
+            dev_net_payload = {'mode': 'dhcp', 'dns': dev_dns}
+        else:
+            dev_net_payload = resolve_dev_ipv4_network(
+                dev_network['cidr'],
+                net_payload,
+                dev_network.get('gateway', ''),
+                dev_network.get('dns', ''),
+            )
+
     values_for_validation['SOPHON_ACME_FILE'] = ''
     checked, error = deployment.validate_settings(values_for_validation, {}, 'configure')
     if error:
@@ -380,18 +425,112 @@ def build_infravm_secrets_iso(
     if network.get('mode') == 'dhcp':
         clean_env.pop('SOPHON_INFRAVM_IP', None)
 
-    seed_doc = {
+    seed_doc: dict = {
         'version': 1,
+        'target': 'dev' if clean_env.get('SOPHON_KOPIA_SFTP_USERNAME') == 'sophon-restore' else 'prod',
         'core_password_hash': core_password_hash.strip(),
         'network': net_payload,
         'env': clean_env,
     }
+    if dev_net_payload is not None:
+        seed_doc['dev_network'] = dev_net_payload
+    if sftp_keys:
+        seed_doc['sftp'] = dict(sftp_keys)
     files: dict[str, tuple[bytes, int]] = {
         'sophon-seed.json': ((json.dumps(seed_doc, indent=2, sort_keys=True) + '\n').encode('utf-8'), 0o400),
     }
     if acme_bytes is not None:
         files['acme.json'] = (acme_bytes, 0o400)
     return write_private_iso(files, certificates.CERTIFICATE_LABEL, output)
+
+
+def derive_dev_secrets_iso(source_iso: Path, env: dict[str, str], output_iso: Path) -> dict:
+    """Build a temporary dev/drill seed ISO from `source_iso`, targeting the dev IP in safe standby mode."""
+    source_iso = Path(os.path.abspath(source_iso))
+    if not source_iso.is_file() or source_iso.is_symlink():
+        raise ValueError(
+            f'Missing unattended secrets ISO: {source_iso}\n'
+            'Generate one first with: bash sophon-provision.sh secrets'
+        )
+    if not shutil.which('xorriso'):
+        raise ValueError('xorriso is missing; run this through the sophon-tools container.')
+    with tempfile.TemporaryDirectory(prefix='sophon-derive-dev-') as work:
+        seed_path = Path(work) / 'sophon-seed.json'
+        res = subprocess.run(
+            ['xorriso', '-osirrox', 'on', '-indev', str(source_iso), '-extract', '/sophon-seed.json', str(seed_path)],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0 or not seed_path.is_file():
+            raise ValueError(
+                f'{source_iso} does not contain /sophon-seed.json (it appears to be a certificate-only ISO).\n'
+                'Build an unattended seed ISO with: bash sophon-provision.sh secrets'
+            )
+        seed_doc = json.loads(seed_path.read_text(encoding='utf-8'))
+        acme_bytes = extract_acme_from_iso(source_iso)
+
+    prod_net = dict(seed_doc.get('prod_network') or seed_doc.get('network') or {'mode': 'dhcp', 'dns': '1.1.1.1'})
+    env_dev_cidr = (env.get('SOPHON_DEV_NETWORK_CIDR') or '').strip()
+    env_dev_gw = (env.get('SOPHON_DEV_NETWORK_GATEWAY') or '').strip()
+    env_dev_dns = (env.get('SOPHON_DEV_VNET_DNS') or '').strip()
+
+    if prod_net.get('mode') == 'static':
+        if env_dev_cidr:
+            dev_net = resolve_dev_ipv4_network(env_dev_cidr, prod_net, env_dev_gw, env_dev_dns)
+        elif seed_doc.get('dev_network', {}).get('mode') == 'static':
+            saved_dev = seed_doc['dev_network']
+            dev_net = resolve_dev_ipv4_network(
+                saved_dev['cidr'],
+                prod_net,
+                env_dev_gw or saved_dev.get('gateway', ''),
+                env_dev_dns or saved_dev.get('dns', ''),
+            )
+        elif seed_doc.get('target') == 'dev':
+            dev_net = dict(prod_net)
+        else:
+            prod_ip = prod_net.get('cidr', '').split('/')[0]
+            raise ValueError(
+                f'SOPHON_DEV_NETWORK_CIDR is required for provision-dev so the dev VM does not collide '
+                f'with production IP {prod_ip}. Set SOPHON_DEV_NETWORK_CIDR in .env (or regenerate `secrets`).'
+            )
+    else:
+        dev_dns = env_dev_dns or (seed_doc.get('dev_network') or {}).get('dns') or prod_net.get('dns', '1.1.1.1')
+        ipaddress.IPv4Address(dev_dns)
+        dev_net = {'mode': 'dhcp', 'dns': dev_dns}
+
+    seed_env = dict(seed_doc.get('env') or {})
+    if dev_net['mode'] == 'static':
+        dev_ip = dev_net['cidr'].split('/')[0]
+        seed_env['SOPHON_INFRAVM_IP'] = dev_ip
+    else:
+        dev_ip = ''
+        seed_env.pop('SOPHON_INFRAVM_IP', None)
+    seed_env['SOPHON_VNET_DNS'] = dev_net['dns']
+
+    sftp_keys = dict(seed_doc.get('sftp') or {})
+    if sftp_keys.get('restore_private_key_b64'):
+        seed_env['SOPHON_KOPIA_SFTP_USERNAME'] = 'sophon-restore'
+        seed_env['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'] = sftp_keys['restore_private_key_b64']
+
+    derived_doc = dict(seed_doc)
+    derived_doc['target'] = 'dev'
+    derived_doc['prod_network'] = prod_net
+    derived_doc['network'] = dev_net
+    derived_doc['env'] = seed_env
+
+    files: dict[str, tuple[bytes, int]] = {
+        'sophon-seed.json': ((json.dumps(derived_doc, indent=2, sort_keys=True) + '\n').encode('utf-8'), 0o400),
+    }
+    if acme_bytes is not None:
+        files['acme.json'] = (acme_bytes, 0o400)
+    write_private_iso(files, certificates.CERTIFICATE_LABEL, output_iso)
+    prod_ip = prod_net.get('cidr', '').split('/')[0] if prod_net.get('mode') == 'static' else ''
+    return {
+        'domain': seed_env.get('SOPHON_DOMAIN', ''),
+        'network_mode': dev_net['mode'],
+        'ip': dev_ip,
+        'prod_ip': prod_ip,
+    }
 
 
 def _apply_shared_service_password(env: dict[str, str], shared_password: str) -> None:
@@ -416,11 +555,20 @@ def main(argv=None) -> int:
                         help='Output path for InfraVM secrets ISO (default: %(default)s)')
     parser.add_argument('--backup-output-iso', type=Path, default=BACKUP_SECRETS_ISO,
                         help='Output path for Backup Server secrets ISO (default: %(default)s)')
+    parser.add_argument('--derive-dev-iso', type=Path, default=None,
+                        help='Derive a dev/drill secrets ISO at this path from --output-iso and exit')
     default_state = Path(os.environ.get('SOPHON_STATE_DIR') or Path.home() / '.local/state/sophon')
     parser.add_argument('--state-dir', type=Path, default=default_state)
     options = parser.parse_args(argv)
 
     env = dict(os.environ)
+    if options.derive_dev_iso is not None:
+        try:
+            derive_dev_secrets_iso(options.output_iso, env, options.derive_dev_iso)
+            return 0
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            print(f'Dev secrets ISO generation failed: {error}', file=sys.stderr)
+            return 1
     with_backup = options.with_backup or env.get('SOPHON_WITH_BACKUP_SECRETS', '').strip().lower() in ('1', 'true', 'yes')
     readonly_sftp = options.readonly_sftp or env.get('SOPHON_SECRETS_READONLY_SFTP', '').strip().lower() in ('1', 'true', 'yes')
 
@@ -438,6 +586,9 @@ def main(argv=None) -> int:
         net_cidr = env.get('SOPHON_NETWORK_CIDR', '').strip()
         net_gw = env.get('SOPHON_NETWORK_GATEWAY', '').strip()
         net_dns = (env.get('SOPHON_VNET_DNS') or '1.1.1.1').strip()
+        dev_cidr = env.get('SOPHON_DEV_NETWORK_CIDR', '').strip()
+        dev_gw = env.get('SOPHON_DEV_NETWORK_GATEWAY', '').strip()
+        dev_dns = env.get('SOPHON_DEV_VNET_DNS', '').strip()
 
         if not options.run:
             if not sys.stdin.isatty():
@@ -461,6 +612,13 @@ def main(argv=None) -> int:
             if net_mode == 'static':
                 net_cidr = console.prompt_field('SOPHON_NETWORK_CIDR', 'InfraVM IPv4 CIDR (e.g. 10.0.60.101/24)', 'text', net_cidr, True)
                 net_gw = console.prompt_field('SOPHON_NETWORK_GATEWAY', 'InfraVM IPv4 gateway', 'ipv4', net_gw, True)
+                dev_cidr = console.prompt_field(
+                    'SOPHON_DEV_NETWORK_CIDR',
+                    'Optional Dev / Restore-Drill IPv4 CIDR (e.g. 10.0.60.107/24, Enter to skip)',
+                    'text',
+                    dev_cidr,
+                    False,
+                )
             net_dns = console.prompt_field('SOPHON_VNET_DNS', 'Upstream DNS server IPv4', 'ipv4', net_dns, True)
             env['SOPHON_DOMAIN'] = console.prompt_field('SOPHON_DOMAIN', 'Sophon domain', 'host', env.get('SOPHON_DOMAIN', ''), True)
 
@@ -529,8 +687,10 @@ def main(argv=None) -> int:
             if not net_cidr or not net_gw:
                 raise ValueError('Static InfraVM network requires SOPHON_NETWORK_CIDR and SOPHON_NETWORK_GATEWAY.')
             infra_network = {'mode': 'static', 'cidr': net_cidr, 'gateway': net_gw, 'dns': net_dns}
+            dev_network = {'mode': 'static', 'cidr': dev_cidr, 'gateway': dev_gw, 'dns': dev_dns} if dev_cidr else None
         elif net_mode == 'dhcp':
             infra_network = {'mode': 'dhcp', 'dns': net_dns}
+            dev_network = {'mode': 'dhcp', 'dns': dev_dns or net_dns} if dev_dns else None
         else:
             raise ValueError('SOPHON_NETWORK_MODE must be static or dhcp.')
 
@@ -562,10 +722,16 @@ def main(argv=None) -> int:
         sftp_port = int(env.get('SOPHON_KOPIA_SFTP_PORT', '22'))
 
         paired = None
+        sftp_keys = None
         if with_backup or not (env.get('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64') and env.get('SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64')):
             paired = ensure_paired_sftp_keys(options.state_dir, sftp_host, sftp_port)
-            chosen_key = paired['client_restore_private_key'] if readonly_sftp else paired['client_backup_private_key']
-            env.setdefault('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', base64.b64encode(chosen_key).decode('ascii'))
+            backup_key_b64 = base64.b64encode(paired['client_backup_private_key']).decode('ascii')
+            restore_key_b64 = base64.b64encode(paired['client_restore_private_key']).decode('ascii')
+            sftp_keys = {
+                'backup_private_key_b64': backup_key_b64,
+                'restore_private_key_b64': restore_key_b64,
+            }
+            env.setdefault('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', restore_key_b64 if readonly_sftp else backup_key_b64)
             env.setdefault('SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64', base64.b64encode(paired['known_hosts']).decode('ascii'))
 
         domain = env.get('SOPHON_DOMAIN', '').strip()
@@ -594,6 +760,8 @@ def main(argv=None) -> int:
             core_password_hash=core_hash,
             network=infra_network,
             configure_values=env,
+            dev_network=dev_network,
+            sftp_keys=sftp_keys,
             acme_bytes=acme_bytes,
             output=options.output_iso,
         )

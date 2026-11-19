@@ -1,22 +1,14 @@
-"""Hypervisor-agnostic automated Sophon restore drill (`verify-restore`).
+"""Deploy/recreate a dev restore-drill InfraVM (`provision-dev` / `verify-restore`) or replace prod (`provision --recreate`).
 
-Destroys any prior managed drill VM (`SOPHON_INFRAVM_NAME`, default `sophon-dev-infravm`) across
-Proxmox, VMware vCenter, or Microsoft Hyper-V, then provisions a fresh VM with the unattended
-`sophon-secrets.iso` (or `sophon-dev-secrets.iso`) attached.
-
-Inside the guest, `sophon-autodeploy` automatically:
-1. Installs CoreOS to the blank virtual disk and reboots.
-2. Reads `sophon-seed.json` in RAM (`tmpfs`), sets the `core` password hash and network, and ejects the ISO.
-3. Detects snapshots on the SFTP backup repository and deploys stacks in Safe Standby Mode
-   (Cloudflare tunnel postponed, Kopia connected `--readonly`, scheduled backups paused).
-4. Runs `sophon-restore --snapshot latest --yes` and verifies all 7 containers + local HTTPS endpoints.
-
-No `serial0` socket or workstation-to-VM `:443` network route is required. When the workstation IS
-on the same network and `--wait-https` (or `SOPHON_VERIFY_HTTPS=true`) is passed, `verify-restore`
-also polls the restored HTTPS endpoints over SNI until the drill VM reports ready.
+`provision-dev` always stops and deletes any existing `SOPHON_DEV_INFRAVM_NAME` (default
+`sophon-dev-infravm`) across Proxmox, VMware vCenter, or Microsoft Hyper-V, derives a temporary
+dev seed ISO configured with `SOPHON_DEV_NETWORK_CIDR` (which also serves as its self-pointing DNS)
+and the confined read-only `sophon-restore` SFTP key while preserving the production network/key
+metadata for `sophon-activate`, and boots a clean dev InfraVM in Safe Standby Mode.
 """
 
 import argparse
+import contextlib
 import http.client
 import json
 import os
@@ -60,13 +52,20 @@ def inspect_seed_iso(iso_path: Path) -> dict:
             )
         doc = json.loads(seed_out.read_text(encoding='utf-8'))
     net = doc.get('network') or {}
+    dev_net = doc.get('dev_network') or {}
     env = doc.get('env') or {}
     cidr = net.get('cidr', '')
     ip = cidr.split('/')[0] if '/' in cidr else env.get('SOPHON_INFRAVM_IP', '')
+    dev_cidr = dev_net.get('cidr', '')
+    dev_ip = dev_cidr.split('/')[0] if '/' in dev_cidr else ''
     return {
+        'target': doc.get('target', 'prod'),
         'domain': env.get('SOPHON_DOMAIN', ''),
         'network_mode': net.get('mode', 'dhcp'),
         'ip': ip,
+        'dev_ip': dev_ip,
+        'has_dev_network': bool(dev_net),
+        'sftp_username': env.get('SOPHON_KOPIA_SFTP_USERNAME', ''),
     }
 
 
@@ -127,17 +126,34 @@ def run_playbook(playbook: str, extra_env: dict[str, str]) -> int:
                 os.environ[k] = old
 
 
+def _resolve_dev_vm_name(explicit_name: str, env: dict[str, str]) -> str:
+    if explicit_name.strip():
+        return explicit_name.strip()
+    dev_name = (env.get('SOPHON_DEV_INFRAVM_NAME') or '').strip()
+    if dev_name:
+        return dev_name
+    legacy_name = (env.get('SOPHON_INFRAVM_NAME') or '').strip()
+    if legacy_name and legacy_name not in ('sophon-infravm', 'sophon-backup'):
+        return legacy_name
+    return 'sophon-dev-infravm'
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description='Destroy and re-provision a clean Sophon restore-drill VM across Proxmox, vCenter, or Hyper-V.'
+        description='Destroy and re-provision a clean Sophon dev/drill VM (or replace prod with --prod-recreate).'
     )
-    parser.add_argument('--vm-name', default='', help='Target drill VM name (default: SOPHON_INFRAVM_NAME or sophon-dev-infravm)')
+    parser.add_argument('--prod-recreate', action='store_true',
+                        help='Destroy and recreate the production InfraVM (SOPHON_INFRAVM_NAME) in one step')
+    parser.add_argument('--yes', '-y', action='store_true',
+                        help='Skip interactive confirmation when --prod-recreate is used')
+    parser.add_argument('--vm-name', default='',
+                        help='Override target VM name (default: SOPHON_DEV_INFRAVM_NAME for dev, SOPHON_INFRAVM_NAME for --prod-recreate)')
     parser.add_argument('--secrets-iso', type=Path, default=None,
-                        help='Unattended secrets ISO for the drill VM (default: SOPHON_SECRETS_ISO, sophon-dev-secrets.iso, or sophon-secrets.iso)')
+                        help='Unattended secrets ISO (default: SOPHON_SECRETS_ISO or artifacts/secrets/sophon-secrets.iso)')
     parser.add_argument('--allow-production-name', action='store_true',
-                        help='Allow destroying and recreating production VM name `sophon-infravm` (for deliberate DR cutover)')
+                        help='Allow targeting production VM name without --prod-recreate')
     parser.add_argument('--wait-https', action='store_true',
-                        help='When workstation has L3 reachability to the drill VM, wait until restored HTTPS services pass SNI checks')
+                        help='When workstation has L3 reachability to the VM, wait until restored HTTPS services pass SNI checks')
     parser.add_argument('--target-ip', default='', help='Override target IPv4 address when using --wait-https')
     parser.add_argument('--ca-file', default=os.environ.get('SOPHON_VERIFY_RESTORE_CA_FILE', ''),
                         help='Optional custom CA bundle file when using --wait-https')
@@ -150,11 +166,41 @@ def main(argv=None) -> int:
         print('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.', file=sys.stderr)
         return 2
 
-    vm_name = (options.vm_name or os.environ.get('SOPHON_INFRAVM_NAME') or 'sophon-dev-infravm').strip()
-    if vm_name in ('sophon-infravm', 'sophon-backup') and not options.allow_production_name:
+    prod_vm_name = (os.environ.get('SOPHON_INFRAVM_NAME') or 'sophon-infravm').strip()
+    if options.prod_recreate:
+        vm_name = (options.vm_name or prod_vm_name).strip()
+        if vm_name == 'sophon-backup':
+            print("Refusing to destroy backup appliance VM 'sophon-backup' via provision --recreate.", file=sys.stderr)
+            return 2
+        if not options.yes:
+            if not sys.stdin.isatty():
+                print(f"Pass --yes to destroy and recreate production VM '{vm_name}' non-interactively.", file=sys.stderr)
+                return 2
+            reply = input(f"Destroy and recreate production VM '{vm_name}' on {hypervisor}? [y/N]: ").strip().lower()
+            if reply not in ('y', 'yes'):
+                print('Cancelled; production VM was not modified.')
+                return 130
+        rc = run_playbook(
+            '3-destroy-vm.yml',
+            {
+                'SOPHON_DESTROY_VM_NAME': vm_name,
+                'SOPHON_ALLOW_PRODUCTION_DESTROY': 'true',
+            },
+        )
+        if rc != 0:
+            return rc
+        prov_env: dict[str, str] = {'SOPHON_INFRAVM_NAME': vm_name}
+        if options.secrets_iso is not None:
+            prov_env['SOPHON_SECRETS_ISO'] = str(Path(os.path.abspath(options.secrets_iso)))
+            prov_env['SOPHON_ATTACH_SECRETS_ISO'] = 'true'
+        return run_playbook('2-provision.yml', prov_env)
+
+    vm_name = _resolve_dev_vm_name(options.vm_name, os.environ)
+    forbidden_names = {'sophon-infravm', 'sophon-backup', prod_vm_name}
+    if vm_name in forbidden_names and not options.allow_production_name:
         print(
-            f"Refusing to run destructive restore drill against '{vm_name}'. "
-            'Set SOPHON_INFRAVM_NAME=sophon-dev-infravm (or pass --allow-production-name for intentional DR replacement).',
+            f"Refusing to run dev/drill deployment against production VM '{vm_name}'. "
+            'Set SOPHON_DEV_INFRAVM_NAME=sophon-dev-infravm (or run `provision --recreate` to replace prod).',
             file=sys.stderr,
         )
         return 2
@@ -172,36 +218,50 @@ def main(argv=None) -> int:
     try:
         meta = inspect_seed_iso(iso_path)
     except ValueError as error:
-        print(f'verify-restore preflight failed: {error}', file=sys.stderr)
+        print(f'provision-dev preflight failed: {error}', file=sys.stderr)
         return 2
 
-    wait_https = options.wait_https or os.environ.get('SOPHON_VERIFY_HTTPS', '').strip().lower() in ('1', 'true', 'yes')
-    target_ip = (options.target_ip or os.environ.get('SOPHON_VERIFY_HTTPS_IP') or meta['ip']).strip()
-    if wait_https and not target_ip:
-        print('--wait-https requires a static IP in sophon-seed.json or --target-ip / SOPHON_VERIFY_HTTPS_IP.', file=sys.stderr)
-        return 2
-
-    print(f'== Sophon Restore Drill ({hypervisor}): rebuilding {vm_name} with {iso_path.name} ==')
-    rc = run_playbook(
-        '3-destroy-vm.yml',
-        {
-            'SOPHON_DESTROY_VM_NAME': vm_name,
-            'SOPHON_ALLOW_PRODUCTION_DESTROY': 'true' if options.allow_production_name else 'false',
-        },
+    needs_derive = (
+        bool(os.environ.get('SOPHON_DEV_NETWORK_CIDR', '').strip())
+        or (meta['target'] != 'dev' and (meta['has_dev_network'] or meta['sftp_username'] != 'sophon-restore'))
     )
-    if rc != 0:
-        return rc
 
-    rc = run_playbook(
-        '2-provision.yml',
-        {
-            'SOPHON_INFRAVM_NAME': vm_name,
-            'SOPHON_SECRETS_ISO': str(Path(os.path.abspath(iso_path))),
-            'SOPHON_ATTACH_SECRETS_ISO': 'true',
-        },
-    )
-    if rc != 0:
-        return rc
+    with contextlib.ExitStack() as stack:
+        effective_iso = Path(os.path.abspath(iso_path))
+        if needs_derive:
+            tmp_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='sophon-dev-iso-')))
+            derived_path = tmp_dir / 'sophon-dev-secrets.iso'
+            secrets_iso.derive_dev_secrets_iso(effective_iso, os.environ, derived_path)
+            effective_iso = derived_path
+            meta = inspect_seed_iso(effective_iso)
+
+        wait_https = options.wait_https or os.environ.get('SOPHON_VERIFY_HTTPS', '').strip().lower() in ('1', 'true', 'yes')
+        target_ip = (options.target_ip or os.environ.get('SOPHON_VERIFY_HTTPS_IP') or meta['ip']).strip()
+        if wait_https and not target_ip:
+            print('--wait-https requires a static IP (SOPHON_DEV_NETWORK_CIDR) or --target-ip / SOPHON_VERIFY_HTTPS_IP.', file=sys.stderr)
+            return 2
+
+        print(f'== Sophon Dev/Drill InfraVM ({hypervisor}): recreating {vm_name} ({meta["ip"] or "dhcp"}) ==')
+        rc = run_playbook(
+            '3-destroy-vm.yml',
+            {
+                'SOPHON_DESTROY_VM_NAME': vm_name,
+                'SOPHON_ALLOW_PRODUCTION_DESTROY': 'true' if options.allow_production_name else 'false',
+            },
+        )
+        if rc != 0:
+            return rc
+
+        rc = run_playbook(
+            '2-provision.yml',
+            {
+                'SOPHON_INFRAVM_NAME': vm_name,
+                'SOPHON_SECRETS_ISO': str(effective_iso),
+                'SOPHON_ATTACH_SECRETS_ISO': 'true',
+            },
+        )
+        if rc != 0:
+            return rc
 
     if wait_https:
         print(f'== Waiting for unattended CoreOS install, standby restore, and HTTPS readiness at {target_ip} ({meta["domain"]}) ==')
@@ -213,10 +273,10 @@ def main(argv=None) -> int:
         print(f'== Restore drill PASSED: {vm_name} ({target_ip}) restored latest snapshot in safe standby mode ==')
     else:
         print(
-            f"== Drill VM '{vm_name}' provisioned on {hypervisor} with {iso_path.name} ==\n"
+            f"== Dev/drill VM '{vm_name}' ({meta['ip'] or 'dhcp'}) provisioned on {hypervisor} ==\n"
             'Inside the guest, sophon-autodeploy will install CoreOS, restore the latest snapshot in safe standby mode\n'
             '(Cloudflare tunnel postponed, Kopia read-only, scheduled backups paused), and verify all services locally.\n'
-            'Check the hypervisor console login banner (/etc/issue) or /var/lib/sophon/autodeploy-status.json for completion.'
+            'To promote this VM to production (switching from dev IP to prod IP), SSH in as core and run: sophon-activate'
         )
     return 0
 

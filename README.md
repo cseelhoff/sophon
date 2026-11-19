@@ -23,15 +23,16 @@ bash sophon-provision.sh prepare                     # Windows: .\sophon-provisi
 # 2. Generate private mode-0600 secrets ISOs (pre-pairs SFTP host + client SSH keys)
 bash sophon-provision.sh secrets --with-backup       # Windows: .\sophon-provision.ps1 secrets --with-backup
 
-# 3. Provision the SFTP Backup Server VM, then InfraVM (both boot & configure with zero console prompts)
+# 3. Provision the SFTP Backup Server VM, then production InfraVM (or `provision-dev` for a dev/drill restore VM)
 bash sophon-provision.sh provision-backup            # Windows: .\sophon-provision.ps1 provision-backup
 bash sophon-provision.sh provision                   # Windows: .\sophon-provision.ps1 provision
+bash sophon-provision.sh provision-dev               # Windows: .\sophon-provision.ps1 provision-dev (always recreates dev VM)
 ```
 
 One `sophon-secrets.iso` handles **both Day-1 builds and automated restores** safely:
 - **Empty SFTP repository → Day-1 build:** InfraVM ingests `sophon-seed.json` into RAM (`tmpfs`), ejects the CD-ROM, sets the `core` password and static IPv4, initializes the encrypted Kopia repository, deploys all stacks, runs the first verified backup, and enables the `6h` schedule.
 - **Existing snapshots found → Safe Standby Auto-Restore:** InfraVM automatically postpones Cloudflare tunnel creation/DNS repointing, connects Kopia in `--readonly` mode with scheduled backups disabled, deploys the stacks, runs `sophon-restore --snapshot latest --yes`, verifies all containers and SNI TLS endpoints locally inside the guest, and reports `STANDBY RESTORE COMPLETE` on the VM login banner (`/etc/issue`).
-- **Optional production promotion (`sophon-activate`):** Standby/dev restores never touch live DNS or write to the backup repository. Only when replacing a lost production server, log in as `core` and run `sophon-activate` to enable Cloudflare tunnel publishing and scheduled Kopia backups.
+- **Optional production promotion (`sophon-activate`):** Standby/dev restores run on `SOPHON_DEV_NETWORK_CIDR` (default VM `sophon-dev-infravm`) and never touch live DNS or write to the backup repository. Only when replacing a lost production server, log in as `core` and run `sophon-activate` to switch its static IP and self-pointing DNS from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`, promote SFTP to `sophon-backup`, and enable Cloudflare tunnel publishing + scheduled Kopia backups.
 
 ### Option B: Interactive console install (no secrets ISO needed)
 
@@ -97,7 +98,7 @@ Needed at `sophon-deploy` (connected sites) for Let's Encrypt DNS-01 and tunnel 
 Run `prepare`, then do the VM part by hand:
 
 1. Copy `artifacts/coreos/sophon-installer.iso` and `artifacts/bootstrap/sophon-deployment.iso` to the hypervisor.
-   At an [air-gapped site](#air-gapped-sites) also copy the certificate disk, `artifacts/secrets/sophon-certificates.iso`.
+   At an [air-gapped site](#air-gapped-sites) (or when using unattended seeding) also copy `artifacts/secrets/sophon-secrets.iso`.
 2. Create a blank VM: 64-bit Linux, UEFI or BIOS (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
    one 40+ GiB disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
 3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, disk first in the boot order.
@@ -143,9 +144,10 @@ manifest—never images, caches, container environments or a system copy.
 
 Supply the external SFTP host/user/path, repository password and Kopia UI
 credentials at the console. If you do not already have an SFTP server or NAS,
-Prepare also builds `artifacts/backup/sophon-backup-installer.iso`, an
+Prepare also builds `artifacts/backup/alpine-sftp-server.iso`, an
 unattended Alpine Linux SFTP backup appliance (`sophon-backup-setup` and
-`sophon-authorize-key`); see [Section 2 of the operator guide](docs/operator-guide.md#2-deploy-the-sophon-sftp-backup-appliance-or-use-an-existing-sftp-host).
+`sophon-authorize-key`); see [Operator Guide](docs/operator-guide.md) and
+[Manual Backup Server Setup](docs/manual-backup-server.md).
 Configure generates a client key, shows the public
 line to authorize, confirms host fingerprints and runs preflight before stacks;
 see [backup inputs](docs/inputs.md#kopia-backup-inputs). Only a confirmed missing
@@ -165,37 +167,38 @@ snapshot from the Kopia Web UI (**Snapshot Now** on `/sophon-state`) or from the
 console:
 
 ```bash
-podman exec kopia python3 /app/backup.py run
+podman exec kopia kopia snapshot create /sophon-state
 podman exec kopia cat /source/last-run.json
 ```
 
 Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
 redeploy from code and restore state via `sophon-restore`—either automatically
-in **Safe Standby Mode** when booting with `sophon-secrets.iso` against an
-existing SFTP repository (promoting to live production only if you explicitly
-run `sophon-activate`), or interactively via `sophon-deploy --prepare-restore`
-followed by `sophon-restore`. Across **Proxmox, VMware vCenter, and Microsoft
-Hyper-V**, `bash sophon-provision.sh verify-restore` (PowerShell:
-`.\sophon-provision.ps1 verify-restore`, plus optional weekly `systemd --user`
-timer units in [contrib/systemd/](contrib/systemd)) destroys and reprovisions a
-clean drill VM (`sophon-dev-infravm`) with a read-only SFTP seed ISO so the VM
-restores the latest backup in Safe Standby Mode and verifies all services
-locally inside the guest—no `serial0` socket and no workstation-to-VM network
-path required. Treat `sophon-secrets.iso` and `sophon-backup-secrets.iso` like
-`sophon-certificates.iso`: delete or detach them once ingested. See the
-[full visual operator guide](docs/operator-guide.md) and the
+in **Safe Standby Mode** via `bash sophon-provision.sh provision-dev` (promoting
+to live production and switching from `SOPHON_DEV_NETWORK_CIDR` to
+`SOPHON_NETWORK_CIDR` only if you explicitly run `sophon-activate`), or
+interactively via `sophon-deploy --prepare-restore` followed by `sophon-restore`
+(see [Manual Installation & Recovery](docs/manual-installation.md)). Across
+**Proxmox, VMware vCenter, and Microsoft Hyper-V**, `bash sophon-provision.sh provision-dev`
+(PowerShell: `.\sophon-provision.ps1 provision-dev`, plus optional weekly
+`systemd --user` timer units in [contrib/systemd/](contrib/systemd)) always
+deletes any existing `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`) first and
+boots a clean standby VM on `SOPHON_DEV_NETWORK_CIDR` with the confined
+read-only `sophon-restore` SFTP key—no `serial0` socket and no workstation-to-VM
+network path required. Treat `sophon-secrets.iso` and `sophon-backup-secrets.iso`
+like passwords: delete or detach them once ingested. See the
+[Operations Guide](docs/operator-guide.md) and the
 [Kopia role reference](roles/kopia/README.md).
 
 ### Air-gapped sites
 
-Run the laptop step while connected (it caches every image). The VM installs offline; a secret certificate disk
-replaces Let's Encrypt.
+Run the laptop step while connected (it caches every image). The VM installs offline; `sophon-secrets.iso` carries your
+pre-issued wildcard certificate in place of live Let's Encrypt issuance.
 
 1. **Connected machine:** `bash sophon-provision.sh certificates issue --domain example.com`
    (PowerShell: `.\sophon-provision.ps1 certificates issue ...`). It asks for an ACME email and a Cloudflare token
-   (the two Zone permissions above) and writes `artifacts/secrets/sophon-certificates.iso` (label `SOPHON_CERTS`):
-   your wildcard certificate, chain and private key, no token or ACME account. It is a secret: delete it after use.
-   Run it on the same machine each time.
+   (the two Zone permissions above) and writes `artifacts/secrets/sophon-secrets.iso` (label `SOPHON_CERTS`),
+   preserving any existing `/sophon-seed.json` while storing your wildcard certificate, chain and private key (no token
+   or ACME account). It is a secret: delete it after use. Run it on the same machine each time.
 2. **Attach it to the VM** as a CD/DVD (local Hyper-V: `.\sophon-provision.ps1 attach-certificates`; a new VM gets it
    automatically if the ISO exists).
 3. **On the console:** run `sophon-deploy`, answer **n** to "Does this site have internet access?", and press Enter at the certificate prompt.

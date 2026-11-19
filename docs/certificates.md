@@ -27,10 +27,10 @@ Prompts (on stderr) for the domain, an ACME email and a Cloudflare token (hidden
 account and certificate in the `sophon-state` Docker volume (`/state/certificates/<domain>/`), so running it again
 **reuses** a certificate with more than 30 days left and only asks for the token when it must issue.
 
-The result is `artifacts/secrets/sophon-certificates.iso` (mode 0600, volume label `SOPHON_CERTS`), a small disk
-holding one file: `acme.json` with the wildcard certificate, its **full chain** and its private key, and no ACME
-account or token. Because the whole file travels, nothing has to be pasted and nothing has to be rebuilt from the
-deployment ISO, whatever chain Let's Encrypt currently uses.
+The result is `artifacts/secrets/sophon-secrets.iso` (mode 0600, volume label `SOPHON_CERTS`), a small disk
+holding `acme.json` with the wildcard certificate, its **full chain** and its private key (preserving any existing
+`/sophon-seed.json` if you also use unattended seeding), and no ACME account or token. Because the whole file travels,
+nothing has to be pasted and nothing has to be rebuilt from the deployment ISO, whatever chain Let's Encrypt currently uses.
 
 Options: `--email`, `--timeout`, `--output-iso PATH` (another location) and `--output-file PATH` (also write the bare
 `acme.json`). The token can come from `CF_DNS_API_TOKEN` in your environment. An older store in the volume that holds

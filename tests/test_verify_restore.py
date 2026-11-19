@@ -96,6 +96,70 @@ class VerifyRestoreTests(unittest.TestCase):
                 self.assertEqual(calls[1][1]['SOPHON_INFRAVM_NAME'], 'sophon-dev-infravm')
                 self.assertEqual(Path(calls[1][1]['SOPHON_SECRETS_ISO']), iso_path.resolve())
 
+    def test_provision_dev_derives_dev_ip_and_prod_recreate_replaces_prod_in_one_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            acme_bytes, ca_pem = make_test_acme('drill.test')
+            ca_file = tmp_dir / 'ca.pem'
+            ca_file.write_bytes(ca_pem)
+            acme_file = tmp_dir / 'acme.json'
+            acme_file.write_bytes(acme_bytes)
+            prod_iso = tmp_dir / 'sophon-secrets.iso'
+
+            old_env = os.environ.copy()
+            try:
+                os.environ.update({
+                    'SSL_CERT_FILE': str(ca_file),
+                    'SOPHON_SHARED_PASSWORD': 'SophonSharedPassword123!',
+                    'SOPHON_DOMAIN': 'drill.test',
+                    'SOPHON_NETWORK_CIDR': '10.0.60.101/24',
+                    'SOPHON_NETWORK_GATEWAY': '10.0.60.1',
+                    'SOPHON_VNET_DNS': '10.0.60.1',
+                    'SOPHON_DEV_NETWORK_CIDR': '10.0.60.107/24',
+                    'SOPHON_KOPIA_SFTP_HOST': '10.0.60.100',
+                    'SOPHON_KOPIA_PASSWORD': 'KopiaRepoPassword123!',
+                })
+                self.assertEqual(secrets_iso.main([
+                    '--run', '--acme-file', str(acme_file),
+                    '--output-iso', str(prod_iso), '--state-dir', str(tmp_dir / 'state'),
+                ]), 0)
+
+                os.environ['SOPHON_HYPERVISOR'] = 'proxmox'
+                os.environ['SOPHON_INFRAVM_NAME'] = 'sophon-infravm'
+                os.environ['SOPHON_DEV_INFRAVM_NAME'] = 'sophon-dev-infravm'
+
+                seen_dev_meta = {}
+                dev_calls = []
+
+                def capture_dev(pb, env):
+                    dev_calls.append((pb, dict(env)))
+                    if pb == '2-provision.yml':
+                        seen_dev_meta.update(verify_restore.inspect_seed_iso(Path(env['SOPHON_SECRETS_ISO'])))
+                    return 0
+
+                with mock.patch.object(verify_restore, 'run_playbook', side_effect=capture_dev):
+                    self.assertEqual(verify_restore.main(['--secrets-iso', str(prod_iso)]), 0)
+                self.assertEqual([c[0] for c in dev_calls], ['3-destroy-vm.yml', '2-provision.yml'])
+                self.assertEqual(dev_calls[0][1]['SOPHON_DESTROY_VM_NAME'], 'sophon-dev-infravm')
+                self.assertEqual(dev_calls[1][1]['SOPHON_INFRAVM_NAME'], 'sophon-dev-infravm')
+                self.assertEqual(seen_dev_meta['target'], 'dev')
+                self.assertEqual(seen_dev_meta['ip'], '10.0.60.107')
+                self.assertEqual(seen_dev_meta['sftp_username'], 'sophon-restore')
+
+                prod_calls = []
+                with mock.patch.object(
+                    verify_restore, 'run_playbook',
+                    side_effect=lambda pb, env: (prod_calls.append((pb, dict(env))), 0)[1],
+                ):
+                    self.assertEqual(verify_restore.main(['--prod-recreate', '--yes']), 0)
+                self.assertEqual([c[0] for c in prod_calls], ['3-destroy-vm.yml', '2-provision.yml'])
+                self.assertEqual(prod_calls[0][1]['SOPHON_DESTROY_VM_NAME'], 'sophon-infravm')
+                self.assertEqual(prod_calls[0][1]['SOPHON_ALLOW_PRODUCTION_DESTROY'], 'true')
+                self.assertEqual(prod_calls[1][1]['SOPHON_INFRAVM_NAME'], 'sophon-infravm')
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
+
     def test_sni_https_helper_validates_san_and_rejects_untrusted_cert(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)

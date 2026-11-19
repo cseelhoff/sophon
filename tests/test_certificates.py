@@ -181,8 +181,9 @@ class CertificateTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('xorriso'), 'xorriso is only in the tools container')
     def test_the_secret_iso_has_its_label_and_carries_acme_json(self):
+        self.assertEqual(certificates.CERTIFICATE_ISO.name, 'sophon-secrets.iso')
         data = certificates.minimal_store(self.source.read_bytes(), 'fixture.example')
-        iso = certificates.write_certificate_iso(data, self.directory / 'secrets/sophon-certificates.iso')
+        iso = certificates.write_certificate_iso(data, self.directory / 'secrets/sophon-secrets.iso')
         self.assertEqual(stat.S_IMODE(iso.stat().st_mode), 0o600)
         with iso.open('rb') as stream:
             stream.seek(32808)
@@ -193,6 +194,25 @@ class CertificateTests(unittest.TestCase):
         self.assertEqual((extracted / 'acme.json').read_bytes(), data)
         self.assertEqual(sorted(path.name for path in extracted.iterdir()), ['acme.json'])
         self.assertFalse(list(iso.parent.glob('.sophon-certs-*')))
+
+        # Renewing acme.json into an existing sophon-secrets.iso preserves /sophon-seed.json!
+        stage_seed = self.directory / 'stage-seed'
+        stage_seed.mkdir()
+        (stage_seed / 'sophon-seed.json').write_text('{"version":1}\n')
+        (stage_seed / 'acme.json').write_bytes(b'old-acme')
+        subprocess.run(
+            ['xorriso', '-as', 'mkisofs', '-R', '-J', '-iso-level', '3', '-V', 'SOPHON_CERTS',
+             '-o', str(iso), str(stage_seed)],
+            check=True, capture_output=True,
+        )
+        iso.chmod(0o600)
+        certificates.write_certificate_iso(data, iso)
+        extracted2 = self.directory / 'extracted2'
+        subprocess.run(['xorriso', '-osirrox', 'on', '-indev', str(iso), '-extract', '/', str(extracted2)],
+                       check=True, capture_output=True)
+        self.assertEqual((extracted2 / 'acme.json').read_bytes(), data)
+        self.assertEqual((extracted2 / 'sophon-seed.json').read_text(), '{"version":1}\n')
+
         link = self.directory / 'link.iso'
         link.symlink_to(iso)
         with self.assertRaises(ValueError):
@@ -213,7 +233,7 @@ class CertificateTests(unittest.TestCase):
         state.mkdir(parents=True, mode=0o700)
         (state / 'acme.json').write_bytes(self.source.read_bytes())
         (state / 'acme.json').chmod(0o600)
-        iso = self.directory / 'out/sophon-certificates.iso'
+        iso = self.directory / 'out/sophon-secrets.iso'
         extra = self.directory / 'out/acme.json'
         with contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as progress, \
@@ -246,7 +266,7 @@ class CertificateTests(unittest.TestCase):
         executable.chmod(0o700)
         environment = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'])
         environment.pop('CF_DNS_API_TOKEN', None)
-        iso = self.directory / 'secrets/sophon-certificates.iso'
+        iso = self.directory / 'secrets/sophon-secrets.iso'
         with patch.dict(os.environ, environment, clear=True), \
                 patch('getpass.getpass', return_value='FAKE_CLOUDFLARE_TOKEN') as secret, \
                 patch('builtins.input', side_effect=['fixture.example', 'admin@fixture.example']), \

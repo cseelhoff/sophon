@@ -13,7 +13,7 @@
         that:
           - hypervisor_provider in ['proxmox', 'vcenter', 'hyperv']
           - destroy_vm_name | length > 0
-          - allow_production_destroy or (destroy_vm_name != 'sophon-infravm' and destroy_vm_name != 'sophon-backup')
+          - allow_production_destroy or (destroy_vm_name != 'sophon-infravm' and destroy_vm_name != 'sophon-backup' and destroy_vm_name != infravm_name)
         fail_msg: "Refusing to destroy production VM name '{{ destroy_vm_name }}' without SOPHON_ALLOW_PRODUCTION_DESTROY=true."
     - name: Authenticate with Proxmox
       ansible.builtin.include_role:

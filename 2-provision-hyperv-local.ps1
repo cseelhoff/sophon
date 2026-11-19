@@ -22,7 +22,8 @@ param(
     [int]$DiskGB = $(if ($env:SOPHON_INFRAVM_DISK_GB) { $env:SOPHON_INFRAVM_DISK_GB } else { 100 }),
     [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\sophon-installer.iso'),
     [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-deployment.iso'),
-    [string]$CertificatesIso = $(if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } elseif (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso')) { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso' } else { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-certificates.iso' }),
+    [string]$CertificatesIso = $(if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } else { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso' }),
+    [switch]$Recreate,
     [switch]$AttachCertificates,
     [switch]$DetachCertificates
 )
@@ -64,7 +65,7 @@ if ($manageCertificates) {
         Write-Host 'Certificate disk ejected. Delete the ISO from this PC when you no longer need it.'
         return
     }
-    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing certificate ISO: $CertificatesIso (run: .\sophon-provision.ps1 certificates issue)." }
+    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing secrets ISO: $CertificatesIso (run: .\sophon-provision.ps1 secrets or certificates issue)." }
     $empty = $drives | Where-Object { -not $_.Path } | Select-Object -First 1
     if ($empty) { Set-VMDvdDrive -VMDvdDrive $empty -Path $full } else { $null = Add-VMDvdDrive -VM $vm -Path $full }
     Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-deploy and answer n to the internet access question."
@@ -87,10 +88,17 @@ if ($existing.Count -gt 1) { throw 'Multiple VMs use this name. No VMs have been
 if ($existing.Count -eq 1) {
     $vm = $existing[0]
     if ($vm.Notes -ne $marker) { throw 'Existing VM is unmanaged or an incomplete bootstrap. It has not been changed.' }
-    if ($vm.State -notin 'Running', 'Off') { throw "Existing VM state is $($vm.State); inspect it before continuing." }
-    if ($vm.State -eq 'Off') { Start-VM -VM $vm }
-    Write-Host "InfraVM '$Name' already exists ($($vm.State)); nothing else changed."
-    return
+    if ($Recreate) {
+        if ($vm.State -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
+        $disks = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object Path | Where-Object { $_ })
+        Remove-VM -VM $vm -Force
+        foreach ($vhd in $disks) { Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue }
+    } else {
+        if ($vm.State -notin 'Running', 'Off') { throw "Existing VM state is $($vm.State); inspect it before continuing." }
+        if ($vm.State -eq 'Off') { Start-VM -VM $vm }
+        Write-Host "InfraVM '$Name' already exists ($($vm.State)); nothing else changed."
+        return
+    }
 }
 
 # ISOs are copied once, hash-named, so Hyper-V gets stable files it can read regardless of where the project lives.

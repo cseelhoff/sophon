@@ -252,6 +252,30 @@ class AutoDeployAndActivateTests(unittest.TestCase):
                 self.assertEqual(rc_rw, 0)
                 self.assertEqual(called_playbooks, [['--step', 'configure', '--', '5-activate.yml']])
                 self.assertFalse((work_root / 'standby.json').exists())
+
+                # When standby.json includes the paired sophon-backup key (from a dev seed ISO),
+                # activate promotes sophon-restore -> sophon-backup automatically!
+                (work_root / 'standby.json').write_text(json.dumps({
+                    'domain': 'example.com',
+                    'desired_cf_tunnel_enabled': False,
+                    'desired_backups_enabled': True,
+                    'desired_snapshot_interval': '6h',
+                    'desired_sftp_username': 'sophon-backup',
+                    'desired_sftp_private_key_b64': 'cndsZXk=',
+                }))
+                os.environ['SOPHON_ACTIVATE_KOPIA_ENV_JSON'] = ro_kopia_env
+                captured_prepare = {}
+
+                def capture_prepare(vals, **kw):
+                    captured_prepare.update(vals)
+                    return vals
+
+                with mock.patch.object(deployment, 'ROOT', work_root), \
+                     mock.patch.object(backup_destination, 'prepare', side_effect=capture_prepare), \
+                     mock.patch.object(deployment, 'main', return_value=0):
+                    self.assertEqual(activate.main(['--yes']), 0)
+                self.assertEqual(captured_prepare['SOPHON_KOPIA_SFTP_USERNAME'], 'sophon-backup')
+                self.assertEqual(captured_prepare['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'], 'cndsZXk=')
             finally:
                 os.environ.clear()
                 os.environ.update(old_env)

@@ -83,7 +83,7 @@ if [[ $mode == "standby_restore" ]]; then
 fi
 
 echo "== Verifying Sophon containers and HTTPS endpoints inside guest =="
-for svc in coredns traefik openldap keycloak gitea arcane kopia; do
+for svc in coredns traefik ldap keycloak gitea arcane kopia; do
     ok=0
     for _ in $(seq 1 60); do
         state=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \

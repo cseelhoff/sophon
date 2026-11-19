@@ -32,7 +32,7 @@ function Load-EnvFile([string]$FilePath) {
     }
 }
 
-if ($command -eq 'verify-restore') {
+if ($command -in 'provision-dev', 'verify-restore') {
     $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
     Load-EnvFile (Join-Path $cfgRoot 'sophon/verify-restore.env')
 }
@@ -56,7 +56,7 @@ function NeedSecret([string]$Name) {
 }
 
 # Ask where InfraVM should run unless SOPHON_HYPERVISOR already says (automation sets it).
-if ($command -in 'provision', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
+if ($command -in 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
     Write-Host 'Where should InfraVM run?'
     Write-Host '  1) Proxmox'
     Write-Host '  2) VMware vCenter'
@@ -78,13 +78,13 @@ $localHyperV = $hypervisor -eq 'hyperv' -and (-not $env:SOPHON_HYPERV_HOST -or
     $env:SOPHON_HYPERV_HOST -in 'localhost', '127.0.0.1', $env:COMPUTERNAME)
 
 $extraMounts = @()
-if ($command -eq 'verify-restore' -and $env:SOPHON_VERIFY_RESTORE_CA_FILE) {
+if ($command -in 'provision-dev', 'verify-restore' -and $env:SOPHON_VERIFY_RESTORE_CA_FILE) {
     $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
     $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
     $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
 }
 
-if ($command -in 'provision', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $localHyperV) {
+if ($command -in 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $localHyperV) {
     switch ($hypervisor) {
         'vcenter' {
             Need 'SOPHON_VCENTER_URL' 'vCenter URL (https://...)'
@@ -118,10 +118,25 @@ if ($command -in 'attach-certificates', 'detach-certificates') {
     else { & "$PSScriptRoot\2-provision-hyperv-local.ps1" -DetachCertificates }
     return
 }
-if ($localHyperV -and $command -eq 'provision') {
+if ($localHyperV -and $command -in 'provision', 'provision-dev') {
     & $PSCommandPath prepare
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    & "$PSScriptRoot\2-provision-hyperv-local.ps1"
+    $hvArgs = @()
+    if ($command -eq 'provision-dev') {
+        $devName = if ($env:SOPHON_DEV_INFRAVM_NAME) { $env:SOPHON_DEV_INFRAVM_NAME } else { 'sophon-dev-infravm' }
+        $srcIso = if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } else { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso' }
+        $devIso = Join-Path $PSScriptRoot 'artifacts\secrets\.tmp-sophon-dev-secrets.iso'
+        & $PSCommandPath secrets --output-iso $srcIso --derive-dev-iso $devIso
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        try {
+            & "$PSScriptRoot\2-provision-hyperv-local.ps1" -Name $devName -Recreate -CertificatesIso $devIso
+        } finally {
+            Remove-Item -LiteralPath $devIso -Force -ErrorAction SilentlyContinue
+        }
+        return
+    }
+    if ($more -contains '--recreate') { $hvArgs += '-Recreate' }
+    & "$PSScriptRoot\2-provision-hyperv-local.ps1" @hvArgs
     return
 }
 

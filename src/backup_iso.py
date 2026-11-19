@@ -1,6 +1,6 @@
 """Bake Sophon's unattended confined-SFTP backup server installer into the stock Alpine virt ISO.
 
-Produces a single hybrid BIOS + UEFI ISO (`artifacts/backup/sophon-backup-installer.iso`) carrying:
+Produces a single hybrid BIOS + UEFI ISO (`artifacts/backup/alpine-sftp-server.iso`) carrying:
 - `localhost.apkovl.tar.gz`: boots into OpenRC and runs `guest/backup-appliance/install.sh --auto` on a single blank disk
 - `sophon-backup-os.tar.gz`: the prebuilt Alpine 3.24.4 OS rootfs archive with confined `internal-sftp` preconfigured
 """
@@ -147,7 +147,7 @@ def build(stock: Path, os_archive: Path, output: Path, force: bool = False, scri
         if not image.is_file() or not image.stat().st_size:
             raise ValueError('xorriso did not produce a nonempty backup installer ISO')
         partial = tempfile.NamedTemporaryFile(
-            prefix='.sophon-backup-installer-', suffix='.iso', dir=output.parent, delete=False)
+            prefix='.alpine-sftp-server-', suffix='.iso', dir=output.parent, delete=False)
         partial.close()
         try:
             shutil.copyfile(image, partial.name)
@@ -163,7 +163,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stock', type=Path, default=ROOT / 'artifacts/backup/alpine-virt-3.24.4-x86_64.iso')
     parser.add_argument('--os-archive', type=Path, default=ROOT / 'artifacts/backup/sophon-backup-os.tar.gz')
-    parser.add_argument('--output', type=Path, default=ROOT / 'artifacts/backup/sophon-backup-installer.iso')
+    parser.add_argument('--output', type=Path, default=ROOT / 'artifacts/backup/alpine-sftp-server.iso')
     parser.add_argument('--force', action='store_true', help='Rebuild even when inputs are unchanged')
     options = parser.parse_args(argv)
     try:

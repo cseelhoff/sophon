@@ -1,11 +1,10 @@
 ---
-- name: Resolve optional InfraVM secrets or certificate ISO
+- name: Resolve optional InfraVM secrets ISO
   ansible.builtin.stat:
     path: "{{ item }}"
   loop:
     - "{{ explicit_secrets_iso_path }}"
     - "{{ secrets_iso_default_path }}"
-    - "{{ certificate_iso_default_path }}"
   when: item | length > 0 and (item == explicit_secrets_iso_path or (attach_secrets_iso | bool))
   register: infravm_secret_candidates
 
