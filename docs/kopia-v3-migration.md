@@ -3,15 +3,14 @@
 This is a clean break. Keep `kopia-legacy` for existing snapshots; v3 does not
 decode old labels/manifests, unpack their tar artifacts or invoke their restore
 recipes. Before replacing a running legacy collector, quiesce its schedule,
-finish pending stop recovery, retain its repository credentials and snapshot
-history, and revoke its old Portainer collector key when no longer needed.
+finish pending stop recovery, and retain its repository credentials and snapshot
+history.
 
 Workloads outside Sophon are not edited by this migration. Update their
 authoritative Compose/IaC sources yourself and recreate their containers:
 changing a template does not change immutable labels on an existing container.
-The existing host-bootstrap entry point refreshes the managed Portainer
-container's labels while retaining its exact image and `portainer_data` volume;
-it refuses an unexpected data mount rather than adopting it.
+Reconstructible management and routing stacks (`arcane`, `coredns`, `cloudflared`,
+`kopia`, `dump-proxy`) carry `sophon.backup.enable: "false"` explicitly.
 
 1. Inventory irreproducible data and application-generated keys. Exclude images,
    caches and configuration your deployment recreates.
@@ -41,29 +40,37 @@ it refuses an unexpected data mount rather than adopting it.
 
 Examples requiring workload-specific decisions:
 
-* n8n/Arcane/SQLite: use SQLite's native export/backup tool for the database.
-  Stop writers and declare only the separate persistent user/key files, not
-  SQLite database files, transient locks or caches. A cold whole-directory copy
-  is not a substitute for the native primary database export.
-* Nextcloud/Gitea: combine stopped user-file writers with native database
-  exports. Preserve application-generated encryption/signing identity.
+* n8n/SQLite apps: never copy a live SQLite file with uncoordinated concurrent
+  writers. Prefer PostgreSQL with `sophon.backup.dump` (`pg_dump -Fc -Z0` +
+  `sophon.backup.dump.restore: "postgres-custom"`), or stream an online SQLite
+  `.backup` dump over stdout alongside `sophon.backup.volumes` / `sophon.backup.exclude`
+  for separate persistent user/key files.
+* Nextcloud/Gitea-style apps: combine hot whole-volume file backups
+  (`sophon.backup.volumes` + `sophon.backup.exclude` for transient upload/indexer/session
+  paths such as Gitea's `git/lfs/tmp/`) with `sophon.backup.ini` for generated
+  encryption/signing identity and online native database dumps (`pg_dump -Fc -Z0`
+  or `pg_dumpall`). Zero container stops are required.
 * MongoDB: use its coherent native export, including user/oplog requirements
   appropriate to that deployment; do not copy the live database volume.
 * Appsmith/Nexus: design and test a native database export instead of carrying
   the old cold/live whole-application archive recipe forward.
-* AdGuard: declare irreplaceable user settings/state only and explicitly
-  decide which writers must stop. The old bespoke tar helper is not a v3 shim.
+* AdGuard: declare irreplaceable user settings/state only (`sophon.backup.paths`
+  or `sophon.backup.volumes` + `sophon.backup.exclude` for query logs/caches).
+  The old bespoke tar helper is not a v3 shim.
 * Runners: preserve identity only if needed for real recovery; never start
   recovered production runner identities in dev.
 
 There is deliberately no automatic interpretation of old exclusions, empty
 restore-command lists or deployment-environment metadata. The explicit
 `sophon-restore` command accepts native profiles declared by **current IaC**:
-`dumps.N.restore=postgres-cluster`, or `ldap-subtree` with
-`dumps.N.base=dc=site,dc=example`. Its PostgreSQL profile requires the current
-`/var/lib/postgresql` named-volume layout and matching image; LDAP requires the
-matching image, named MDB/config/certificate mounts and freshly configured schema.
-File-only groups need no import profile.
+`sophon.backup.dump.restore` (or `sophon.backup.dumps.<key>.restore`) set to
+`postgres-custom` (`pg_restore --clean --if-exists --no-owner`),
+`postgres-cluster` (`psql`), or `ldap-subtree` (`slapadd`, paired with
+`sophon.backup.dump.base=dc=site,dc=example`). Its PostgreSQL profiles require
+the current `/var/lib/postgresql` named-volume layout and matching database
+`image_id`; LDAP requires the matching `image_id`, named MDB/config/certificate
+mounts and freshly configured schema. File-only application containers need no
+import profile and may restore volume data across rebuilt app images.
 
 Other native export formats remain valid backups, but automatic group restoration
 fails closed until an appropriate native import profile is implemented and tested.

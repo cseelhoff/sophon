@@ -184,8 +184,9 @@ custom recovery image. `--state-volume NAME` selects a private labelled staging
 volume; default `sophon-restore-v3`.
 
 Apply requires the planned group, exact printed snapshot ID and `--approve`.
-The fresh deployment must use matching image IDs and current native import
-declarations. Failed groups are not restored from an older snapshot implicitly.
+Native database/LDAP producers must use matching image IDs and current native
+import declarations (file-only application containers may restore across rebuilt
+app images). Failed groups are not restored from an older snapshot implicitly.
 Keep decrypted staging private and run `cleanup --approve` after success or
 deliberate abandonment. See the [recovery procedure](../roles/kopia/README.md#explicit-group-restoration).
 

@@ -131,18 +131,22 @@ recursive/writable-source aliases, and the selected volume subvolume must
 actually contain the shared coordination volume.
 
 The separate `kopia-coarse` service uses the primary image with **only
-`DAC_OVERRIDE`** and **no Podman socket or proxy container**. Zero containers
-are stopped or restarted: each attempt invokes `BTRFS_IOC_SNAP_CREATE_V2`
+`DAC_OVERRIDE`** and **no Podman socket or proxy container**. It runs
+`kopia server start --without-ui --enable-actions` with Kopia's native
+`--snapshot-interval=168h` (seven days) and `--before-snapshot-root-action=/app/coarse.py`
+/ `--after-snapshot-root-action=/app/coarse.py`. Zero containers are stopped or
+restarted: before each snapshot `coarse.py` invokes `BTRFS_IOC_SNAP_CREATE_V2`
 (`RDONLY`) on `/volumes` to create an atomic crash-consistent read-only Btrfs
-subvolume snapshot at `/coarse/staging/volumes`, syncs it, uploads to Kopia, and
-destroys the snapshot via `BTRFS_IOC_SNAP_DESTROY_V2`. Non-Btrfs or
-non-subvolume sources fail explicitly with no plain-copy fallback.
+subvolume snapshot at `/coarse/staging/volumes`, syncs it, emits
+`KOPIA_SNAPSHOT_PATH=/coarse/staging/volumes` for Kopia to snapshot under
+`backup@sophon:/sophon-coarse` (`--keep-latest=4` with hourly/daily/weekly/monthly/annual
+extras disabled), and destroys the local Btrfs snapshot via `BTRFS_IOC_SNAP_DESTROY_V2`
+in the after-snapshot action (and on startup cleanup if an earlier run was interrupted).
+Non-Btrfs or non-subvolume sources fail explicitly with no plain-copy fallback.
 
-The first scheduled attempt is immediate, then every 604800 seconds (seven days).
-The durable due time survives restarts; it is not a particular weekday/time.
-Source `backup@sophon:/sophon-coarse` (with your configured client identity)
-retains latest four with hourly/daily/weekly/monthly/annual extras disabled.
-Primary source/retention are unchanged.
+Configure triggers an initial coarse snapshot immediately when enabled, after
+which Kopia's native 168-hour policy maintains the weekly cadence. Primary
+source/retention are unchanged.
 
 ```sh
 podman logs kopia-coarse
@@ -150,11 +154,8 @@ podman exec kopia-coarse cat /coarse/last-run.json
 podman exec kopia-coarse python3 /app/coarse.py run
 ```
 
-Active operator restores (`restore.json`) defer coarse snapshots until recovery
-completes. Failed uploads retain one immutable read-only Btrfs snapshot in
-`/coarse/staging/volumes`; retry uploads it without creating another snapshot,
-then destroys it once uploaded. Retained read-only snapshots pin old Btrfs
-extents: monitor `/var` free space during prolonged upload outages.
+Active operator restores (`restore.json`) fail the coarse before-snapshot action
+until recovery completes so partial recovery state is never snapshotted.
 
 Inspect coarse snapshots only into isolated working storage:
 
@@ -276,7 +277,7 @@ capabilities dropped except:
 
 Only the separate, zero-capability (`cap_drop: [ALL]`, `read_only: true`,
 `no-new-privileges:true`) `dump-proxy` container mounts `/run/user/<uid>/podman/podman.sock`.
-It sits on an internal-only network (`kopia_engine`) and exposes only three routes:
+It sits on an internal-only network (`backup-engine`) and exposes only three routes:
 
 * `GET /healthz`: engine reachability check
 * `GET /v1/inventory`: container metadata with `Config.Env` and non-backup labels stripped
@@ -292,7 +293,7 @@ and secret environment inspection are unconditionally rejected (`403`).
 A snapshot contains real files, native stdout dumps and a v3 manifest with
 image references/IDs, source-content Sophon version, declared paths, dump
 checksums, optional absences, group failures and undeclared volumes. It contains
-no inspect records, container environments, Portainer stacks or system copy.
+no inspect records, container environments, Arcane stacks or system copy.
 
 The source-content version is generated into `bootstrap/sophon-version` when
 building the deployment ISO. Direct development deployments must supply an
@@ -301,10 +302,13 @@ explicit `sophon_version`.
 ## Explicit group restoration
 
 Configure **never** invokes restoration. First rerun Configure with the original
-external inputs and the **same workload image IDs** as the snapshot. Automatic
-cross-version database/application migration is not supported. Stop any
-independently deployed writers sharing the group's state and do not run
-Configure or other engine mutations concurrently with recovery.
+external inputs and matching database/LDAP engine images. Native database and
+LDAP producers (`sophon.backup.dump` / `sophon.backup.dumps.*`) must match the
+exact `image_id` recorded in the snapshot (automatic cross-major database
+migration is not supported), while file-only application containers allow
+restoring volume data across rebuilt app images. Stop any independently deployed
+writers sharing the group's state and do not run Configure or other engine
+mutations concurrently with recovery.
 
 On the console, as the rootless Podman owner (`core`, never `sudo`), restore all
 stateful groups interactively with a single command (or pass `--group gitea` /
@@ -324,12 +328,13 @@ sophon-restore cleanup --approve
 ```
 
 Replace `SNAPSHOT_ID` with the exact ID printed by `plan`. A plan downloads real
-files and verifies the group's membership, image IDs, declarations and export
-checksums without modifying workloads. `latest` means the latest snapshot of the
-configured stable source, not a silent fallback to an older successful group.
-A failed/missing group is refused; inspect reports and choose another explicit ID.
-Plans bind to the fresh container IDs/mounts and hash staged contents/metadata.
-Changing targets or staging requires a new plan, not an override.
+files and verifies the group's membership, database/LDAP producer image IDs,
+declarations, `manifest.json` SHA-256 and dump checksums without modifying
+workloads. `latest` means the latest snapshot of the configured stable source,
+not a silent fallback to an older successful group. A failed/missing group is
+refused; inspect reports and choose another explicit ID. Plans bind to the fresh
+container IDs and volume mounts; changing targets or staging requires a new plan,
+not an override.
 
 Approval authorizes destructive replacement of **only the declared paths** and
 native database import. Generated INI identity fields merge into fresh settings;
@@ -364,9 +369,9 @@ helpers mount only planned named volumes; PostgreSQL additionally needs
 No helper is privileged or host root.
 
 Planning also holds the backup coordination lock, so a scheduled backup cannot
-temporarily stop a workload while its planned running state is being recorded.
-Approval persists a backup hold before any stop; it survives coordinator death
-and clears only on successful restoration or explicit abandonment.
+race with recovery planning. Approval persists a `/source/restore.json` hold
+before stopping any target container; it survives coordinator death and clears
+only on successful restoration or explicit abandonment.
 
 The default private state volume is `sophon-restore-v3`; use
 `--state-volume NAME` for separate group plans. It contains decrypted staging and

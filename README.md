@@ -134,7 +134,8 @@ Kopia is built during Prepare, carried offline and deployed after the core
 stacks are running. Its [native action collector](roles/kopia) operates without
 Arcane, Gitea or a management API key: Kopia's built-in scheduler (`--snapshot-interval`)
 and native before/after snapshot actions (`/app/backup.py`) clone declared named
-volumes or paths via Btrfs CoW reflinks from `/volumes:ro`, apply `.kopiaignore`
+volumes or paths (including Gitea repositories and file-backed **Git LFS** objects
+under `/data/git/lfs`) via Btrfs CoW reflinks from `/volumes:ro`, apply `.kopiaignore`
 exclusions, and stream hot logical database dumps (`pg_dumpall`, `pg_dump -Fc -Z0`,
 `slapcat`) through a locked-down `dump-proxy` with **zero container stops**.
 Snapshots contain real files, uncompressed deduplicatable dumps and a versioned

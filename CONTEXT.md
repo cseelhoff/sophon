@@ -24,7 +24,7 @@ preflights the declared SFTP destination; it has no hypervisor/guest SSH or host
 
 **Artifact**: a file Prepare produces and a later step consumes (image archive, ISO, runner image).
 
-**Service FQDN**: `<service>.<domain>`; how everything addresses a service. Raw IPs are used only for the hypervisor and Portainer's first contact.
+**Service FQDN**: `<service>.<domain>`; how everything addresses a service. Raw IPs are used only for hypervisor management APIs and SFTP backup endpoints.
 
 **Zone**: `<domain>` itself, public on Cloudflare for DNS-01 and served authoritatively on site by CoreDNS.
 

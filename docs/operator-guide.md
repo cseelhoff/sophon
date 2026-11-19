@@ -13,8 +13,8 @@ Sophon runs on a single **Fedora CoreOS** virtual machine (**InfraVM**) with a d
 - **Declarative Compose stacks (`/var/lib/sophon/stacks/<stack>/compose.yaml`):** Deployed directly over the rootless Podman socket without routing deployment through any web UI.
 - **Arcane (`https://arcane.<domain>`):** Open-source container management UI authenticated via Keycloak OIDC (`arcane-admins` LDAP group maps to `role_admin`).
 - **Two-tier encrypted Kopia backups over confined SFTP:**
-  1. **Primary backups (`backup@sophon:/sophon-state`, default every `6h`):** Captures only irreproducible application state (user repositories, generated application identity keys, ACME certificates) and native database logical exports (`pg_dumpall`, `slapcat`).
-  2. **Optional weekly live volume snapshots (`backup@sophon:/sophon-coarse`, latest 4 kept):** Creates an atomic, read-only Btrfs subvolume snapshot (`BTRFS_IOC_SNAP_CREATE_V2`) of the Podman `volumes` subvolume with **zero container stops**, uploads to SFTP, and destroys the local snapshot. Last-resort use only.
+  1. **Primary backups (`backup@sophon:/sophon-state`, default every `6h`):** 100% hot, zero-downtime backups driven by Kopia's native `--snapshot-interval` scheduler and before/after snapshot actions (`/app/backup.py`). Captures irreproducible application state—including Gitea Git repositories and local **Git LFS** objects (`/data/git/lfs`), selective INI identity secrets, and ACME certificates—alongside online transactional database exports (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`) streamed via `dump-proxy`. Workloads deployed via Gitea Actions opt into hot backups and `sophon-restore` automatically with `sophon.backup.*` Compose labels (see [`roles/kopia/README.md`](../roles/kopia/README.md)).
+  2. **Optional weekly live volume snapshots (`backup@sophon:/sophon-coarse`, latest 4 kept):** Creates an atomic, read-only Btrfs subvolume snapshot (`BTRFS_IOC_SNAP_CREATE_V2`) of the Podman `volumes` subvolume with **zero container stops**, uploads to SFTP via Kopia's native 168-hour schedule and before/after actions (`/app/coarse.py`), and destroys the local snapshot. Last-resort use only.
 
 > **Golden rule:** Sophon is infrastructure as code. Nothing may exist only in the Arcane UI. Rebuilding a lost server is always **"rerun `sophon-deploy` on a clean VM, then restore application state with `sophon-restore`"**, never restoring a full-disk VM image.
 
@@ -226,7 +226,7 @@ Signing in as an LDAP member of `arcane-admins` (for example the seeded `john.do
 
 > **Note on `Partially running` status:** Stacks such as `gitea` and `traefik` include one-shot initialization containers (`gitea-init`, `traefik-init`) that seed configuration and exit `0`. Arcane accurately reports those stacks as `Partially running` while all long-running service containers remain healthy.
 
-Next, verify Git hosting at `https://git.<domain>` (using **Sign In With Keycloak** or the `siteadmin` account):
+Next, verify Git and Git LFS hosting at `https://git.<domain>` (using **Sign In With Keycloak** or the `siteadmin` account; Git LFS is enabled out of the box with local content-addressed storage under `/data/git/lfs`, deduplicated by Kopia with in-flight `git/lfs/tmp/` uploads excluded):
 
 ![Gitea repository view on Sophon](./images/10-gitea-repository.png)
 

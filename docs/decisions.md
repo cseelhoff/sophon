@@ -32,11 +32,12 @@ The choices the design rests on, newest understanding first. Each is cheap to st
    excluded from Git, media and primary backups. Rebuilds can authorize a new SFTP key and recreate Arcane;
    the repository password still must be retained externally.
 8. **State is either reconstructible or irreplaceable.** A rerun rebuilds the Keycloak realm, seeded users and
-   routing. Gitea repositories, user-created LDAP entries and `acme.json` need
+   routing. Gitea repositories and Git LFS objects (`git/lfs`), user-created LDAP entries and `acme.json` need
    encrypted native backups and tested restoration. Primary backups contain only
    irreproducible user data and application-generated identity. Databases use native
-   exports, never live data-directory copies. The v3 collector reads named read-only
-   volume mounts and streams exec stdout through a restricted rootless engine proxy.
+   online exports (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`), never live data-directory copies.
+   Kopia dynamically discovers named volumes from `/volumes:ro` via `sophon.backup.*`
+   labels and streams label-bound database dumps through a restricted `dump-proxy`.
    Kopia deploys after core source volumes exist, with every image carried offline.
    Rebuild means rerun Configure, then explicitly restore state, not restore a system
    copy. Configure never restores production state.
@@ -51,33 +52,38 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     and the commands are plain `docker run` lines that behave the same in bash and PowerShell. The tools image
     drives the host engine through its socket for image pulls, saves and builds, and reaches the hypervisor
     through the engine's NAT. Base images are pinned by tag, not digest. Linux/WSL and Windows are verified.
-12. **Backup consistency does not depend on upload speed.** Journal exact stop/export
-    identities, stop all filesystem writers, reflink-clone declared paths (plain-copy
-    fallback only while writers are stopped), perform native exports, then resume
-    writers before uploading immutable staging. Interrupted exports are cancelled
-    before writer recovery. No backup host units are installed.
-13. **The v3 contract is a clean break.** Only v3 labels/manifests are read. The local
-    `kopia-legacy` tag preserves the old tool for old snapshots; there are no compatibility
-    shims. Unmounted declared volumes fail their group with an actionable message.
-    Undeclared volumes are reported but not copied or a whole-run failure. Successful
-    groups in a partial run upload with explicit failures and a nonzero operator result.
-14. **The primary collector has narrow filesystem/engine access.** Only declared
-    named volumes are mounted read-only. UID 0 is inside rootless Podman, with only
-    `DAC_OVERRIDE`, `CHOWN`, `FOWNER`, read-only rootfs and no-new-privileges. The separate
-    cap-free socket proxy permits list, inspect, exec, stop and start only; no archive,
-    image, create/delete or volume APIs. The README justifies each capability.
+12. **Backups are 100% hot and run natively inside Kopia.** `kopia server start --enable-actions`
+    owns the snapshot schedule (`--snapshot-interval`) and invokes `backup.py` as
+    essential `before-snapshot-root` and `after-snapshot-root` actions. Zero containers
+    are stopped: declared volumes and paths are staged online via Btrfs CoW reflinks
+    (`cp --archive --reflink=always` with `.kopiaignore` exclusions), generated INI
+    identity keys are extracted selectively, and databases export transactional MVCC
+    snapshots (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`) over stdout before Kopia
+    snapshots the staged tree and cleans up. No host backup units or external cron
+    containers are installed.
+13. **The v3 contract is a clean break.** Only v3 manifests and `sophon.backup.*`
+    labels are read. The local `kopia-legacy` tag preserves the old tool for old
+    snapshots; there are no compatibility shims. Undeclared named volumes are reported
+    in `/source/last-run.json` without being copied or failing the run, and essential
+    action mode ensures any group or dump failure fails the Kopia snapshot visibly.
+14. **The primary collector has narrow filesystem/engine access.** Podman's `volumes`
+    subvolume is mounted read-only (`/volumes:ro`) so developer workloads deployed via
+    Gitea Actions are protected automatically without redeploying Kopia. UID 0 is inside
+    rootless Podman, with only `DAC_OVERRIDE`, `CHOWN`, `FOWNER`, read-only rootfs and
+    no-new-privileges. Only the separate zero-capability `dump-proxy` mounts `podman.sock`:
+    it strips `Config.Env` from inventory and executes strictly the dump command declared
+    on the target container's own `sophon.backup.*` labels—never arbitrary `/exec`,
+    `/stop`, `/start`, `/archive`, image, or volume APIs.
 15. **Restore is an explicit Podman-only operator action.** Fresh Configure comes
-    first; `sophon-restore plan` binds a v3 group to matching images/current labels,
-    mounts and staged contents. Only `apply --approve` stops the group and replaces
-    declared files/imports native exports. Native import types are declared by
-    current IaC, never snapshot-provided shell commands or environments. The
-    one-shot coordinator may create no-network helpers through the full rootless
-    socket; that privilege is never given to the scheduled collector. Failed
-    imports/restarts leave the group stopped and retain owned-helper recovery
-    state. A durable coordination-volume hold blocks backups of partial recovery
-    state even after coordinator death. Explicit cleanup removes that hold and
-    decrypted staging without guessing whether
-    partial state is safe to start. There is no automatic cross-image migration.
+    first; `sophon-restore` (or `plan` + `apply --approve`) validates a snapshot/group
+    against current `sophon.backup.*` labels, stops only that group's containers,
+    replaces declared volume files directly via `/volumes` with numeric ownership
+    preserved, merges preserved INI secrets into freshly rendered configs, and replays
+    native PostgreSQL/OpenLDAP dumps through isolated no-network helpers matching the
+    producer's exact `image_id` (while allowing rebuilt app images to restore files).
+    Failed imports/restarts leave the group stopped and retain owned-helper recovery
+    state. A durable `/source/restore.json` hold blocks scheduled backups of partial
+    recovery state until completion or explicit `cleanup --approve`.
 16. **SFTP onboarding fails closed before stack deployment.** Configure scans all
     offered host keys, requires independently verified fingerprints (or explicit
     verified pin overrides), persists trust and rejects changes on reruns, even
@@ -92,9 +98,10 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     and host bootstrap creates `/var/home/core/.local/share/containers/storage/volumes` as
     a Btrfs subvolume before Podman starts. The opt-in weekly `coarse` service mounts that
     subvolume read-only alongside `/var/home/core/sophon-coarse`, mounts no Podman socket
-    and holds only `DAC_OVERRIDE`. It invokes `BTRFS_IOC_SNAP_CREATE_V2` (`RDONLY`) to capture
-    an atomic crash-consistent snapshot without pausing any workload, uploads to a separate
-    `/sophon-coarse` source (retaining the latest four), and deletes the snapshot via
+    and holds only `DAC_OVERRIDE`. Driven by Kopia's native `--snapshot-interval=168h` and
+    before/after snapshot actions (`/app/coarse.py`), it invokes `BTRFS_IOC_SNAP_CREATE_V2`
+    (`RDONLY`) to capture an atomic crash-consistent snapshot without pausing any workload,
+    uploads to `/sophon-coarse` (`--keep-latest=4`), and deletes the local snapshot via
     `BTRFS_IOC_SNAP_DESTROY_V2`. Non-Btrfs or non-subvolume sources fail explicitly with no
     plain-copy fallback. This layer remains last-resort only, never a replacement for daily
     logical exports.

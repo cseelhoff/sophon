@@ -158,14 +158,16 @@ SFTP repository password/key/pins outside the encrypted repository. Restoration
 is explicit, never invoked by Configure. The console's `sophon-restore` runs a
 one-shot coordinator from the offline Kopia image using Podman alone, independently
 of Arcane, Gitea and the Kopia UI. It validates a snapshot/group against fresh
-IaC, waits for explicit approval, stops that group, replaces declared files with
-numeric ownership preserved, imports native exports using isolated matching-image
+IaC, waits for explicit approval, stops that group (including Compose peer
+services), replaces declared volume files directly via `/volumes` with numeric
+ownership preserved, imports native exports using isolated matching-image
 helpers, then starts producers before consumers. Failures leave the group stopped
 with a durable helper journal for retry/explicit cleanup. Planning shares the
-backup lock; a durable hold prevents scheduled backups of partial recovery state
-after interruption until success or explicit abandonment. The operator coordinator
-temporarily gets the full rootless socket; the primary proxy remains restricted.
-Decrypted recovery staging lives only in a private, labelled recovery volume and
-must be cleaned explicitly. Old snapshots require `kopia-legacy`, not a v3 shim.
-See the [operator guide](../roles/kopia/README.md) and
+backup lock; a durable `/source/restore.json` hold prevents scheduled backups of
+partial recovery state after interruption until success or explicit abandonment.
+The operator coordinator temporarily gets `/volumes` and the rootless socket;
+the primary `dump-proxy` remains restricted. Decrypted recovery staging lives
+only in a private, labelled recovery volume and must be cleaned explicitly. Old
+snapshots require `kopia-legacy`, not a v3 shim.
+See the [Kopia backup & restore guide](../roles/kopia/README.md) and
 [outside-workload migration](kopia-v3-migration.md).

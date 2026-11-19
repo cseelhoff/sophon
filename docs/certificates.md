@@ -1,7 +1,7 @@
 # Certificates
 
 Traefik uses **one wildcard certificate** for every service: it names the domain and `*.<domain>` (so `traefik`,
-`arcane`, `dns`, `ldap`, `auth` and `git` are all covered) and uses an ECDSA P-256 key, from Let's Encrypt through
+`arcane`, `dns`, `kopia`, `ldap`, `auth` and `git` are all covered) and uses an ECDSA P-256 key, from Let's Encrypt through
 the Cloudflare DNS-01 challenge. Every router that requests a certificate carries the wildcard in its own labels, so
 Traefik never asks for per-service certificates. Its state is a single file, `acme.json`; the other services
 (LDAPS in particular) read their certificate out of it, so one small file is all that has to move.
