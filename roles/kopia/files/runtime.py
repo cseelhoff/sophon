@@ -1,5 +1,4 @@
 import base64
-import http.cookiejar
 import json
 import os
 from pathlib import Path
@@ -8,7 +7,6 @@ import signal
 import subprocess
 import sys
 import time
-import urllib.request
 
 import backup
 
@@ -20,12 +18,23 @@ def required(environment, name):
     return value
 
 
+def control_env(environment):
+    # ponytail: kopia server start reads KOPIA_SERVER_CONTROL_*, while kopia server status/snapshot read KOPIA_SERVER_*
+    env = dict(environment)
+    user = env.get("KOPIA_SERVER_CONTROL_USER") or env.get("KOPIA_SERVER_USERNAME") or "admin"
+    password = env.get("KOPIA_SERVER_CONTROL_PASSWORD") or env.get("KOPIA_SERVER_PASSWORD") or ""
+    env["KOPIA_SERVER_USERNAME"] = env["KOPIA_SERVER_CONTROL_USER"] = user
+    if password:
+        env["KOPIA_SERVER_PASSWORD"] = env["KOPIA_SERVER_CONTROL_PASSWORD"] = password
+    return env
+
+
 def kopia(environment, *arguments, timeout=180):
     result = subprocess.run(["kopia", "--file-log-level=info", "--disable-content-log", *arguments],
                             env=environment, capture_output=True, timeout=timeout)
     if result.returncode:
         detail = result.stderr.decode(errors="replace")
-        for name in ("KOPIA_PASSWORD", "KOPIA_SERVER_PASSWORD", "KOPIA_SFTP_PRIVATE_KEY_B64"):
+        for name in ("KOPIA_PASSWORD", "KOPIA_SERVER_PASSWORD", "KOPIA_SERVER_CONTROL_PASSWORD", "KOPIA_SFTP_PRIVATE_KEY_B64"):
             if environment.get(name):
                 detail = detail.replace(environment[name], "[redacted]")
         raise RuntimeError(f"Kopia {' '.join(arguments[:2])} failed: {detail.strip()}")
@@ -40,40 +49,53 @@ def startup_diagnostic(error, environment):
     return "KOPIA_STARTUP_ERROR_JSON=" + json.dumps({"message": detail})
 
 
-def _ui_session(environment):
-    authorization = base64.b64encode((required(environment, "KOPIA_SERVER_USERNAME") + ":" +
-                                     required(environment, "KOPIA_SERVER_PASSWORD")).encode()).decode()
-    headers = {"Authorization": "Basic " + authorization}
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    with opener.open(urllib.request.Request("http://127.0.0.1:51515/", headers=headers), timeout=10) as response:
-        token = re.search(r'<meta name="kopia-csrf-token" content="([^"]+)"', response.read().decode())
-    if token is None:
-        raise RuntimeError("Kopia UI did not issue a CSRF token")
-    headers["X-Kopia-Csrf-Token"] = token[1]
-    return opener, headers
-
-
 def health(environment):
-    opener, headers = _ui_session(environment)
-    with opener.open(urllib.request.Request("http://127.0.0.1:51515/api/v1/repo/status", headers=headers),
-                     timeout=10) as response:
-        if json.load(response).get("connected") is not True:
-            raise RuntimeError("Kopia repository is disconnected")
+    kopia(control_env(environment), "server", "status", timeout=10)
     print("Repository connected")
 
 
-def sync_ui(environment):
-    if not environment.get("KOPIA_SERVER_USERNAME") or not environment.get("KOPIA_SERVER_PASSWORD"):
-        return
-    try:
-        opener, headers = _ui_session(environment)
-        request = urllib.request.Request(
-            "http://127.0.0.1:51515/api/v1/repo/sync", data=b"{}",
-            headers=headers | {"Content-Type": "application/json"}, method="POST")
-        with opener.open(request, timeout=30) as response:
-            response.read()
-    except OSError:
-        pass
+def _server_idle(ctrl_env, target):
+    lines = kopia(ctrl_env, "server", "status", timeout=10).decode(errors="replace").splitlines()
+    matching = [line for line in lines if line.endswith(":" + target)]
+    return not matching or all(line.startswith("IDLE:") for line in matching)
+
+
+def wait_server_idle(environment, target, timeout=300, check_alive=None):
+    ctrl = control_env(environment)
+    deadline = time.monotonic() + timeout
+    while True:
+        if check_alive is not None and not check_alive():
+            return False
+        try:
+            if _server_idle(ctrl, target):
+                return True
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Timed out waiting for Kopia server idle on {target}")
+        time.sleep(0.25)
+
+
+def trigger_snapshot(environment, state_root, target, timeout=86400):
+    state_root = Path(state_root)
+    last_run_path = state_root / "last-run.json"
+    ctrl = control_env(environment)
+    wait_server_idle(ctrl, target, timeout=timeout)
+    with backup.locked(state_root):
+        last_run_path.unlink(missing_ok=True)
+    kopia(ctrl, "server", "snapshot", target, timeout=30)
+    deadline = time.monotonic() + timeout
+    while True:
+        if last_run_path.exists() and _server_idle(ctrl, target):
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Timed out waiting for snapshot completion on {target}")
+        time.sleep(0.25)
+    record = json.loads(last_run_path.read_text())
+    if record.get("status") != "complete" or record.get("upload_status") != "complete" or record.get("failures"):
+        raise RuntimeError(f"Kopia snapshot {target} failed: {json.dumps(record.get('failures') or record)}")
+    return record
 
 
 def connect(environment, readonly=False, enable_actions=False):
@@ -106,26 +128,50 @@ def connect(environment, readonly=False, enable_actions=False):
     kopia(environment, *arguments)
 
 
-def _trigger_initial_snapshot(server_env, source_root, server, is_shutting_down):
-    deadline = time.monotonic() + 30
-    while not is_shutting_down():
+def _trigger_initial_snapshot(server_env, state_root, target, server, is_shutting_down):
+    def alive():
+        if is_shutting_down():
+            return False
         if server.poll() is not None:
-            raise RuntimeError(f"Kopia UI server exited: {server.returncode}")
-        try:
-            kopia(server_env, "server", "status", timeout=10)
-            break
-        except RuntimeError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.25)
-    if is_shutting_down():
+            raise RuntimeError(f"Kopia server exited: {server.returncode}")
+        return True
+
+    if not wait_server_idle(server_env, target, timeout=30, check_alive=alive):
         return
-    if not (source_root / "last-run.json").exists():
-        kopia(server_env, "server", "snapshot", "/sophon-state", timeout=30)
+    if not (state_root / "last-run.json").exists():
+        kopia(server_env, "server", "snapshot", target, timeout=30)
+
+
+def run_server(server_cmd, server_env, initial_target=None, state_root=None):
+    server = None
+    shutting_down = False
+
+    def terminate(signum, frame):
+        nonlocal shutting_down
+        shutting_down = True
+
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+    try:
+        server = subprocess.Popen(server_cmd, env=server_env)
+        if initial_target and state_root is not None:
+            _trigger_initial_snapshot(server_env, state_root, initial_target, server, lambda: shutting_down)
+        while not shutting_down:
+            if server.poll() is not None:
+                raise RuntimeError(f"Kopia server exited: {server.returncode}")
+            time.sleep(0.5)
+    finally:
+        if server is not None and server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=180)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait()
 
 
 def start(environment):
-    server_password = required(environment, "KOPIA_SERVER_PASSWORD")
+    required(environment, "KOPIA_SERVER_PASSWORD")
     readonly = environment.get("KOPIA_READONLY", "false").strip().lower()
     if readonly not in ("true", "false"):
         raise ValueError("KOPIA_READONLY must be true or false")
@@ -146,10 +192,7 @@ def start(environment):
         raise ValueError("COMMAND_TIMEOUT must be positive")
     backup.engine_api(required(environment, "ENGINE_URL"), action_timeout)
 
-    server_env = dict(environment)
-    server_env["KOPIA_SERVER_CONTROL_USER"] = server_env.get("KOPIA_SERVER_USERNAME", "admin")
-    server_env["KOPIA_SERVER_CONTROL_PASSWORD"] = server_password
-
+    server_env = control_env(environment)
     source_root = Path(server_env.get("SOURCE_ROOT", "/source"))
     with backup.locked(source_root) as root:
         backup.cleanup_stale_runs(root)
@@ -174,15 +217,6 @@ def start(environment):
             "--snapshot-interval=" + (interval if enabled == "true" else "0s"),
         )
 
-    server = None
-    shutting_down = False
-
-    def terminate(signum, frame):
-        nonlocal shutting_down
-        shutting_down = True
-
-    signal.signal(signal.SIGTERM, terminate)
-    signal.signal(signal.SIGINT, terminate)
     server_cmd = [
         "kopia", "server", "start",
         "--address=http://0.0.0.0:51515",
@@ -191,22 +225,11 @@ def start(environment):
     ]
     if readonly != "true":
         server_cmd.append("--enable-actions")
-    try:
-        server = subprocess.Popen(server_cmd, env=server_env)
-        if readonly != "true" and enabled == "true":
-            _trigger_initial_snapshot(server_env, source_root, server, lambda: shutting_down)
-        while not shutting_down:
-            if server.poll() is not None:
-                raise RuntimeError(f"Kopia UI server exited: {server.returncode}")
-            time.sleep(0.5)
-    finally:
-        if server is not None and server.poll() is None:
-            server.terminate()
-            try:
-                server.wait(timeout=180)
-            except subprocess.TimeoutExpired:
-                server.kill()
-                server.wait()
+    run_server(
+        server_cmd, server_env,
+        initial_target="/sophon-state" if (readonly != "true" and enabled == "true") else None,
+        state_root=source_root,
+    )
 
 
 if __name__ == "__main__":

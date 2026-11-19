@@ -31,6 +31,8 @@ fi
 podman --remote=false volume exists "$source" || {
     echo "Configured backup source/coordination volume is missing." >&2; exit 1;
 }
+volumes_dir=$(podman --remote=false info --format '{{.Store.VolumePath}}')
+[[ -d $volumes_dir && ! -L $volumes_dir ]] || { echo "Podman volume store directory is missing." >&2; exit 1; }
 if podman --remote=false volume exists "$state"; then
     [[ $(podman --remote=false volume inspect --format '{{index .Labels "sophon.restore.state"}}' "$state") == 3 ]] || {
         echo "Refusing an unowned recovery state volume." >&2; exit 1;
@@ -42,6 +44,7 @@ args=(--remote=false run --rm -i --pull never --network host --read-only --user 
       --cap-drop ALL --cap-add DAC_OVERRIDE --cap-add CHOWN --cap-add FOWNER
       --security-opt label=disable --security-opt no-new-privileges
       --tmpfs /tmp:rw,mode=1777 -v "$state:/restore" -v "$source:/source"
+      -v "$volumes_dir:/volumes"
       -v "${XDG_RUNTIME_DIR:?}/podman/podman.sock:/socket/podman.sock:ro"
       --entrypoint python3)
 for name in SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT \
@@ -52,13 +55,13 @@ done
 
 run_restore() {
     printf '%s' "$connection" | podman "${args[@]}" "$image" /app/restore.py \
-        "$@" --connection-stdin --state-volume "$state" --image "$image"
+        "$@" --connection-stdin --state-volume "$state"
 }
 
 # Explicit low-level subcommands remain available for scripted or single-phase operations.
 first=${forwarded[0]:-}
 case "$first" in
-    plan|apply|status|cleanup|files|inspect|-h|--help)
+    plan|apply|status|cleanup|inspect|-h|--help)
         run_restore "${forwarded[@]}"
         exit $?
         ;;

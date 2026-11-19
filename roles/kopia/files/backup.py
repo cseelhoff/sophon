@@ -695,18 +695,6 @@ def resolve_volume(volume_name, volumes=None, volumes_root="/volumes"):
     fail(f"Volume {volume_name} was not found under {volumes_root}")
 
 
-def parse_explicit_volumes(environment):
-    raw = environment.get("BACKUP_VOLUMES", "").strip()
-    if not raw:
-        return {}
-    volumes = json.loads(raw)
-    if not isinstance(volumes, dict) or any(
-            not NAME.fullmatch(name) or not isinstance(path, str) or not Path(path).is_absolute()
-            for name, path in volumes.items()):
-        fail("BACKUP_VOLUMES must map named volumes to absolute read-only mount paths")
-    return volumes
-
-
 def collect(api, volumes, root, version, volumes_root="/volumes", run_id=None):
     root = Path(root)
     if (root / "restore.json").exists() or (root / "restore.json").is_symlink():
@@ -794,14 +782,13 @@ def prepare(api, volumes, root, version, volumes_root="/volumes"):
 
 def before_snapshot_action(environment):
     api = engine_api(environment["ENGINE_URL"], float(environment.get("COMMAND_TIMEOUT", "900")))
-    explicit_volumes = parse_explicit_volumes(environment)
     volumes_root = environment.get("VOLUMES_ROOT", "/volumes")
     source_root = Path(environment.get("SOURCE_ROOT", "/source"))
     snapshot_id = environment.get("KOPIA_SNAPSHOT_ID", "")
     with locked(source_root) as root:
         cleanup_stale_runs(root)
         result = collect(
-            api, explicit_volumes, root, environment["SOPHON_VERSION"],
+            api, None, root, environment["SOPHON_VERSION"],
             volumes_root=volumes_root, run_id=snapshot_id,
         )
         manifest = result["manifest"]
@@ -834,39 +821,13 @@ def after_snapshot_action(environment):
 
 
 def run(environment):
+    # ponytail: trigger the running kopia server via control API instead of spawning an out-of-band snapshot CLI
+    import runtime
     source_root = Path(environment.get("SOURCE_ROOT", "/source"))
     target = environment.get("KOPIA_SNAPSHOT_SOURCE", "/sophon-state")
-    upload = subprocess.run(
-        ["kopia", "snapshot", "create", target, "--json", "--fail-fast"],
-        capture_output=True, text=True, env=environment, timeout=86400,
-    )
-    if upload.returncode:
-        detail = upload.stderr
-        for name in ("KOPIA_PASSWORD", "KOPIA_SERVER_PASSWORD", "KOPIA_SFTP_PRIVATE_KEY_B64"):
-            if environment.get(name):
-                detail = detail.replace(environment[name], "[redacted]")
-        last_run_path = source_root / "last-run.json"
-        if not last_run_path.exists() or json.loads(last_run_path.read_text()).get("upload_status") == "pending":
-            with locked(source_root) as root:
-                cleanup_stale_runs(root)
-                existing = json.loads(last_run_path.read_text()) if last_run_path.exists() else {"failures": []}
-                existing.update(status="failed", upload_status="failed", upload_error=detail.strip())
-                write_json(root / "last-run.json", existing)
-        fail("Kopia snapshot failed: " + detail.strip())
-    snapshot = json.loads(upload.stdout)
-    if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("id"), str)
-            or not re.fullmatch(r"[a-f0-9]{32}", snapshot["id"])
-            or snapshot.get("rootEntry", {}).get("summ", {}).get("numFailed") != 0):
-        fail("Kopia returned an invalid or incomplete snapshot result")
-    last_run_path = source_root / "last-run.json"
-    with locked(source_root) as root:
-        record = json.loads(last_run_path.read_text()) if last_run_path.exists() else {"status": "complete", "failures": []}
-        record["snapshot"] = snapshot
-        record["upload_status"] = "complete"
-        write_json(root / "last-run.json", record)
-    import runtime
-    runtime.sync_ui(environment)
-    print(json.dumps({"status": record["status"], "failures": record.get("failures", []), "snapshot": snapshot}))
+    record = runtime.trigger_snapshot(environment, source_root, target)
+    print(json.dumps({"status": record["status"], "upload_status": record["upload_status"],
+                      "failures": record.get("failures", []), "run": record.get("run")}))
     return 0
 
 

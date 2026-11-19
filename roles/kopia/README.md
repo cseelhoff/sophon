@@ -354,12 +354,14 @@ schema. Invalid vendor seed entries outside that naming context are not reimport
 Partial-suffix merges are refused; custom schemas/ACLs belong in IaC.
 
 The one-shot coordinator uses Podman alone: no Arcane, Gitea, Kopia UI or
-running backup stack is required. It temporarily mounts the **full rootless
-engine socket** to create/remove no-network native/file helpers. This is an
-explicit operator privilege, never an expansion of the primary proxy allowlist.
-Helpers mount only planned named volumes. Files use the primary three
-capabilities; PostgreSQL additionally needs `SETUID`/`SETGID` for its vendor
-entrypoint to drop to the database OS user. No helper is privileged or host root.
+running backup stack is required. It mounts `/volumes` directly to restore
+named-volume files in-process and temporarily mounts the **full rootless
+engine socket** to stop/restart target groups and create/remove no-network
+native PostgreSQL/OpenLDAP import helpers. This is an explicit operator
+privilege, never an expansion of the primary proxy allowlist. Native database
+helpers mount only planned named volumes; PostgreSQL additionally needs
+`SETUID`/`SETGID` for its vendor entrypoint to drop to the database OS user.
+No helper is privileged or host root.
 
 Planning also holds the backup coordination lock, so a scheduled backup cannot
 temporarily stop a workload while its planned running state is being recorded.
@@ -392,14 +394,3 @@ variables, plus `SOPHON_RESTORE_SOURCE_VOLUME` (normally `kopia_source-v3`).
 image; the launcher resolves it to an immutable local ID and never pulls.
 Retain the backup coordination volume (`kopia_source-v3`) even when removing the
 UI/backup stack, as it serializes backup and recovery via `restore.json`.
-
-The disposable [M2 drill](../../tests/spikes/kopia_m2.py) rebuilds application
-containers/volumes from rendered repository templates and compares native
-Keycloak realm exports, LDAP entries, Gitea commits/SSH identity and certificate
-state. Its dev-only profile disables tunnels, runners, ACME and external OIDC,
-uses synthetic certificates, and deliberately injects a post-import start failure
-to exercise stopped-group retry. It is not a production rebuild command.
-
-Old snapshots remain usable only with the locally tagged `kopia-legacy` tool.
-[Historical evidence](../../docs/kopia-legacy-evidence.md) describes that old
-system, not v3 recovery coverage.

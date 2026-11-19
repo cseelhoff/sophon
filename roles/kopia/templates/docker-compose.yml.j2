@@ -109,6 +109,9 @@ services:
       KOPIA_CONFIG_PATH: /coarse/config/repository.config
       KOPIA_CACHE_DIRECTORY: /coarse/cache
       KOPIA_LOG_DIR: /coarse/logs
+      KOPIA_SERVER_ADDRESS: http://127.0.0.1:51516
+      KOPIA_SERVER_USERNAME: ${KOPIA_SERVER_USERNAME:-admin}
+      KOPIA_SERVER_PASSWORD: ${KOPIA_SERVER_PASSWORD:?Set the UI password}
       KOPIA_PASSWORD: ${KOPIA_PASSWORD:?Set the repository encryption password}
       KOPIA_SFTP_HOST: ${KOPIA_SFTP_HOST:?Set the SFTP host}
       KOPIA_SFTP_PORT: ${KOPIA_SFTP_PORT:-22}

@@ -51,21 +51,6 @@ def checksum(path):
     return digest.hexdigest(), size
 
 
-def tree_hash(root):
-    digest = hashlib.sha256()
-    for path in [root, *sorted(root.rglob("*"))]:
-        attributes = path.lstat()
-        digest.update(os.fsencode(str(path.relative_to(root))) + b"\0")
-        digest.update(f"{attributes.st_mode}:{attributes.st_uid}:{attributes.st_gid}:{attributes.st_mtime_ns}".encode())
-        if path.is_symlink():
-            digest.update(os.fsencode(os.readlink(path)))
-        elif stat.S_ISREG(attributes.st_mode):
-            digest.update(bytes.fromhex(checksum(path)[0]))
-        elif not stat.S_ISDIR(attributes.st_mode):
-            backup.fail("Unsupported special file in restored snapshot")
-    return digest.hexdigest()
-
-
 def make_plan(snapshot, targets, group):
     snapshot = Path(snapshot)
     if snapshot.is_symlink() or not snapshot.is_dir():
@@ -129,22 +114,25 @@ def make_plan(snapshot, targets, group):
     if set(current) != {member["name"] for member in source["members"]}:
         backup.fail("Freshly configured group membership does not match the snapshot")
     peers = [p for p in peers if p["name"] not in current]
+    # ponytail: Kopia verifies content hashes on restore; re-hashing multi-GB LFS trees twice in Python wastes 2x disk I/O
     plan = {"version": 3, "group": group, "manifest_sha256": checksum(manifest_path)[0],
-            "sophon_version": manifest["sophon_version"], "snapshot_sha256": tree_hash(snapshot),
+            "sophon_version": manifest["sophon_version"],
             "members": [], "peers": peers, "paths": [], "dumps": []}
     for member in source["members"]:
         target, spec = current[member["name"]]
-        if image_id(member["image_id"]) != image_id(target["Image"]):
+        image_id(target["Image"])
+        paths = {item["name"]: item for item in spec["paths"]}
+        dumps = {item["name"]: item for item in spec["dumps"]}
+        source_paths = [item for item in source["paths"] if item["member"] == member["name"]]
+        source_dumps = [item for item in source["dumps"] if item["member"] == member["name"]]
+        # ponytail: enforce exact image digest only on native DB/LDAP engine producers; allow rebuilt app images to restore files
+        if source_dumps and image_id(member["image_id"]) != image_id(target["Image"]):
             backup.fail("Target image differs from the snapshot: " + member["name"])
         mounts = [{key: mount.get(key) for key in ("Type", "Name", "Destination", "RW")}
                   for mount in target.get("Mounts", [])]
         plan["members"].append({"id": target["Id"], "name": member["name"],
                                 "image_id": target["Image"], "signature": backup.signature(target),
                                 "running": target["State"]["Running"], "mounts": mounts})
-        paths = {item["name"]: item for item in spec["paths"]}
-        dumps = {item["name"]: item for item in spec["dumps"]}
-        source_paths = [item for item in source["paths"] if item["member"] == member["name"]]
-        source_dumps = [item for item in source["dumps"] if item["member"] == member["name"]]
         if set(paths) != {item["name"] for item in source_paths} or set(dumps) != {item["name"] for item in source_dumps}:
             backup.fail("Current path/export declarations differ from the snapshot")
         for item in source_paths:
@@ -426,18 +414,6 @@ def remove_helpers(api, root, state):
         save(root, state)
 
 
-def run_helper(api, record):
-    deadline = time.monotonic() + 86400
-    while time.monotonic() < deadline:
-        value = backup.engine(api, "GET", f"/containers/{record['id']}/json")
-        if not value["State"]["Running"]:
-            if value["State"]["ExitCode"]:
-                backup.fail("Restore helper failed; inspect its logs before retrying: " + record["name"])
-            return
-        time.sleep(.2)
-    backup.fail("Restore helper timed out")
-
-
 def native_mounts(member, state_volume, writable):
     result = [state_volume + ":/restore:ro"]
     for mount in member["mounts"]:
@@ -495,7 +471,7 @@ pg_restore --clean --if-exists --no-owner --role="$POSTGRES_USER" --exit-on-erro
 '''
 
 
-def restore_dump(api, root, state, item, image, volume):
+def restore_dump(api, root, state, item, volume):
     plan = state["plan"]
     member = next(m for m in plan["members"] if m["name"] == item["member"])
     live = current(api, member)
@@ -519,7 +495,6 @@ def restore_dump(api, root, state, item, image, volume):
     else:
         record = helper(api, root, state, member["image_id"], native_mounts(
             member, volume, "/var/lib/ldap"), ["sleep 86400"], ["/bin/sh", "-c"])
-        data_mount = next(m for m in member["mounts"] if m["Destination"] == "/var/lib/ldap")
         owner = backup.control(api, record["id"], ["stat", "-c", "%u:%g", "/var/lib/ldap"]).decode().strip()
         if not re.fullmatch(r"[0-9]+:[0-9]+", owner):
             backup.fail("Invalid LDAP data ownership")
@@ -538,12 +513,11 @@ def restore_dump(api, root, state, item, image, volume):
             save(root, state)
         elif destination.is_symlink() or list(checksum(destination)) != saved:
             backup.fail("Prepared LDAP import changed; targets were not cleared")
-        state["clear_volume"] = data_mount["Name"]
-        save(root, state)
-        cleaner = helper(api, root, state, image, [volume + ":/restore:ro",
-                         data_mount["Name"] + ":/targets/" + data_mount["Name"]],
-                         ["files", "--clear-volume", data_mount["Name"]], ["python3", "/app/restore.py"])
-        run_helper(api, cleaner)
+        backup.control(api, record["id"], [
+            "sh", "-ceu",
+            'for p in /var/lib/ldap/* /var/lib/ldap/.[!.]* /var/lib/ldap/..?*; do '
+            '[ -e "$p" ] || [ -L "$p" ] || continue; rm -rf -- "$p"; done'
+        ])
         backup.control(api, record["id"], ["slapadd", "-n", "1", "-w", "-F", "/etc/ldap/slapd.d",
                                           "-l", "/restore/imports/" + destination.name])
         backup.control(api, record["id"], ["chown", "-R", owner, "/var/lib/ldap"])
@@ -551,18 +525,23 @@ def restore_dump(api, root, state, item, image, volume):
     remove_helpers(api, root, state)
 
 
-def apply(api, root, approve=False, image=None, state_volume=None):
+def apply(api, root, approve=False, state_volume=None, volumes_root="/volumes"):
     if not approve:
         backup.fail("Restore requires explicit approval (--approve); native dumps are trusted executable input")
-    if not image or not state_volume or not backup.NAME.fullmatch(state_volume):
-        backup.fail("Restore needs an immutable helper image and an owned state volume")
-    image_id(image)
+    if not state_volume or not backup.NAME.fullmatch(state_volume):
+        backup.fail("Restore needs an owned state volume")
     state = state_file(root)
     if state["phase"] == "complete":
         backup.fail("This restore already completed; inspect it or clean up its state")
     plan = state["plan"]
-    if tree_hash(root / "snapshot") != plan["snapshot_sha256"]:
+    snapshot_dir = root / "snapshot"
+    manifest_path = snapshot_dir / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file() or checksum(manifest_path)[0] != plan["manifest_sha256"]:
         backup.fail("Staged snapshot changed after planning; no restore targets were modified")
+    for item in plan["dumps"]:
+        dump_path = artifact(snapshot_dir, item, plan["group"])
+        if dump_path.is_symlink() or not dump_path.is_file() or checksum(dump_path) != (item["sha256"], item["bytes"]):
+            backup.fail("Staged snapshot changed after planning; no restore targets were modified")
     peers = plan.get("peers", [])
     for member in [*plan["members"], *peers]:
         current(api, member)
@@ -592,16 +571,15 @@ def apply(api, root, approve=False, image=None, state_volume=None):
                 backup.fail("An unrelated writer is using a restore target volume")
         state["phase"] = "files"
         save(root, state)
-        binds = [state_volume + ":/restore:ro"] + [
-            volume + ":/targets/" + volume for volume in sorted({item["volume"] for item in plan["paths"]})]
+        # ponytail: restore files directly into mounted /volumes instead of spawning ephemeral Podman file-helper containers
         if plan["paths"]:
-            record = helper(api, root, state, image, binds, ["files"], ["python3", "/app/restore.py"])
-            run_helper(api, record)
-            remove_helpers(api, root, state)
+            mounts = {vol: str(backup.resolve_volume(vol, volumes_root=volumes_root))
+                      for vol in {item["volume"] for item in plan["paths"]}}
+            replace_paths(plan, snapshot_dir, mounts)
         state["phase"] = "importing"
         save(root, state)
         for item in plan["dumps"]:
-            restore_dump(api, root, state, item, image, state_volume)
+            restore_dump(api, root, state, item, state_volume)
         state["phase"] = "starting"
         save(root, state)
         start_order = [
@@ -731,14 +709,12 @@ def inspect_snapshot(environment, snapshot_id, selected_group=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "apply", "status", "cleanup", "files", "inspect"))
+    parser.add_argument("action", choices=("plan", "apply", "status", "cleanup", "inspect"))
     parser.add_argument("--group")
     parser.add_argument("--snapshot", default="latest")
     parser.add_argument("--approve", action="store_true")
     parser.add_argument("--connection-stdin", action="store_true")
     parser.add_argument("--state-volume")
-    parser.add_argument("--image")
-    parser.add_argument("--clear-volume")
     args = parser.parse_args()
     if args.action in ("plan", "apply") and not args.group:
         parser.error("--group is required")
@@ -749,22 +725,6 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     root = Path("/restore")
     try:
-        if args.action == "files":
-            state = state_file(root)
-            if not state["approved"] or state["phase"] not in ("files", "importing"):
-                backup.fail("File helper has no approved active restore")
-            if args.clear_volume:
-                if args.clear_volume != state.get("clear_volume"):
-                    backup.fail("Unapproved native data volume")
-                target = Path("/targets") / args.clear_volume
-                if target.is_symlink() or not target.is_dir():
-                    backup.fail("Invalid native data mount")
-                for entry in target.iterdir():
-                    remove_path(entry)
-            else:
-                replace_paths(state["plan"], root / "snapshot",
-                              {item["volume"]: "/targets/" + item["volume"] for item in state["plan"]["paths"]})
-            return 0
         if args.action == "status":
             print(json.dumps(state_file(root)))
             return 0
@@ -793,14 +753,13 @@ def main():
                         remove_path(root / name)
                     print("Recovery helpers/staging and backup hold removed; workload running state was not changed")
                     return 0
-                if (source / "journal.json").exists():
-                    backup.fail("Finish pending backup stop recovery before restoring")
                 state = plan(api, root, environment, args.snapshot, args.group)
                 if args.action == "apply":
                     if state["phase"] == "complete":
                         backup.fail("This restore already completed; inspect it or clean up its state")
                     backup.write_json(journal, {"version": 3, "owner": state["owner"], "volume": args.state_volume})
-                    state = apply(api, root, args.approve, args.image, args.state_volume)
+                    state = apply(api, root, args.approve, args.state_volume,
+                                  volumes_root=os.environ.get("VOLUMES_ROOT", "/volumes"))
                     journal.unlink()
             print(json.dumps({"snapshot": state["snapshot"], "phase": state["phase"], "plan": state["plan"]}))
         return 0

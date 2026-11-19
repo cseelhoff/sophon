@@ -112,6 +112,29 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(any("maintenance" in call.args[0] or "policy" in call.args[0]
                                  or "set-client" in call.args[0] for call in commands.call_args_list))
 
+    def test_health_and_trigger_snapshot_use_control_api_without_ui_scraping(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = {"KOPIA_SERVER_USERNAME": "admin", "KOPIA_SERVER_PASSWORD": "secret"}
+            calls = []
+
+            def fake_kopia(env, *args, **kwargs):
+                self.assertEqual(env["KOPIA_SERVER_CONTROL_PASSWORD"], "secret")
+                self.assertEqual(env["KOPIA_SERVER_PASSWORD"], "secret")
+                calls.append(args)
+                if args == ("server", "snapshot", "/sophon-state"):
+                    (root / "last-run.json").write_text('{"status":"complete","upload_status":"complete","failures":[],"run":"r1"}')
+                    return b""
+                return b"IDLE: backup@sophon:/sophon-state\n"
+
+            out = io.StringIO()
+            with patch.object(runtime, "kopia", side_effect=fake_kopia), contextlib.redirect_stdout(out):
+                runtime.health(environment)
+                record = runtime.trigger_snapshot(environment, root, "/sophon-state")
+            self.assertIn("Repository connected", out.getvalue())
+            self.assertEqual(record["run"], "r1")
+            self.assertIn(("server", "snapshot", "/sophon-state"), calls)
+
 
 if __name__ == "__main__":
     unittest.main()
