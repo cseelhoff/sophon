@@ -121,7 +121,6 @@ Move-Item -LiteralPath $part -Destination ([IO.Path]::Combine($p.iso_dir, $p.nam
 CREATE = r'''
 New-Item -ItemType Directory -Force -Path $p.path | Out-Null
 $coreos = [IO.Path]::Combine($p.iso_dir, $p.coreos_name)
-$bundle = [IO.Path]::Combine($p.iso_dir, $p.bundle_name)
 $vm = New-VM -Name $p.name -Generation 2 -MemoryStartupBytes ([int64]$p.memory_mb * 1MB) `
     -Path $p.path -NewVHDPath ([IO.Path]::Combine($p.path, $p.name + '.vhdx')) -NewVHDSizeBytes ([int64]$p.disk_gb * 1GB) `
     -SwitchName $p.switch
@@ -130,12 +129,31 @@ Set-VM -VM $vm -StaticMemory -AutomaticCheckpointsEnabled $false -CheckpointType
 Set-VMProcessor -VM $vm -Count $p.cores
 Set-VMFirmware -VM $vm -EnableSecureBoot Off
 $null = Add-VMDvdDrive -VM $vm -Path $coreos
-$null = Add-VMDvdDrive -VM $vm -Path $bundle
+if ($p.bundle_name) {
+    $bundle = [IO.Path]::Combine($p.iso_dir, $p.bundle_name)
+    $null = Add-VMDvdDrive -VM $vm -Path $bundle
+}
+if ($p.secrets_name) {
+    $secrets = [IO.Path]::Combine($p.iso_dir, $p.secrets_name)
+    $null = Add-VMDvdDrive -VM $vm -Path $secrets
+}
 $disk = Get-VMHardDiskDrive -VM $vm
 $installer = Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $coreos }
 Set-VMFirmware -VM $vm -BootOrder $disk, $installer
 Set-VM -VM $vm -Notes $p.marker
 Start-VM -VM $vm
+'''
+
+DESTROY = r'''
+$vm = Get-VM | Where-Object { $_.Name -eq $p.name } | Select-Object -First 1
+if ($vm) {
+    if ($vm.State -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
+    $vhds = @(Get-VMHardDiskDrive -VM $vm | Select-Object -ExpandProperty Path)
+    Remove-VM -VM $vm -Force
+    foreach ($vhd in $vhds) {
+        if ($vhd -and (Test-Path -LiteralPath $vhd)) { Remove-Item -LiteralPath $vhd -Force }
+    }
+}
 '''
 
 START = r'''
@@ -150,12 +168,14 @@ def script(body, **arguments):
 
 
 def provision(params, host, info):
-    """Create (or start) InfraVM. `host` offers run(script, **args) -> parsed JSON and upload(local, remote)."""
+    """Create (or start) InfraVM or Backup VM. `host` offers run(script) -> parsed JSON and upload(local, remote)."""
     name = params['name']
+    marker = params.get('marker') or MARKER
+    min_disk_gb = params.get('min_disk_gb') or 40
     if not NAME.fullmatch(name):
         raise ValueError('VM name must contain 1-80 letters, digits, dots, underscores or hyphens.')
-    if params['cores'] < 1 or params['memory'] < 1024 or params['disk_gb'] < 40:
-        raise ValueError('Provide valid CPU/memory and at least 40 GiB of disk space.')
+    if params['cores'] < 1 or params['memory'] < 1024 or params['disk_gb'] < min_disk_gb:
+        raise ValueError(f'Provide valid CPU/memory and at least {min_disk_gb} GiB of disk space.')
     path = params.get('path') or info['vm_path']
     if not WINDOWS_PATH.fullmatch(path):
         raise ValueError('The VM folder must be an absolute Windows path such as D:\\Hyper-V.')
@@ -164,7 +184,7 @@ def provision(params, host, info):
     if found['count'] > 1:
         raise ValueError('Multiple VMs use this name. No VMs have been changed.')
     if found['count'] == 1:
-        if found['notes'] != MARKER:
+        if found['notes'] != marker:
             raise ValueError('Existing VM is unmanaged or an incomplete bootstrap. It has not been changed.')
         if found['state'] not in ('Running', 'Off'):
             raise ValueError(f"Existing VM state is {found['state']}; inspect it before continuing.")
@@ -172,8 +192,13 @@ def provision(params, host, info):
             host.run(script(START, name=name))
         return {'changed': found['state'] == 'Off', 'vm_path': f"{info['host']}/{name}", 'created': False}
 
+    iso_specs = [('coreos', params['coreos_iso'])]
+    if params.get('bundle_iso'):
+        iso_specs.append(('deployment', params['bundle_iso']))
+    if params.get('secrets_iso'):
+        iso_specs.append((f'secrets-{name}', params['secrets_iso']))
     media = []
-    for label, source in (('coreos', params['coreos_iso']), ('deployment', params['bundle_iso'])):
+    for label, source in iso_specs:
         source = Path(source)
         if not source.is_file():
             raise ValueError(f'Missing installation ISO: {source}')
@@ -192,10 +217,28 @@ def provision(params, host, info):
         host.upload(str(source), ntpath.join(iso_dir, filename + '.part'))
         host.run(script(FINALIZE_ISO, iso_dir=iso_dir, name=filename, sha256=digest))
 
+    bundle_name = media[1][1] if params.get('bundle_iso') else ''
+    secrets_name = media[-1][1] if params.get('secrets_iso') else ''
     host.run(script(CREATE, name=name, path=path, iso_dir=iso_dir, switch=params['switch'],
                     memory_mb=params['memory'], disk_gb=params['disk_gb'], cores=params['cores'],
-                    marker=MARKER, coreos_name=media[0][1], bundle_name=media[1][1]))
+                    marker=marker, coreos_name=media[0][1], bundle_name=bundle_name, secrets_name=secrets_name))
     return {'changed': True, 'vm_path': f"{info['host']}/{name}", 'created': True}
+
+
+def destroy(params, host, info):
+    name = params['name']
+    marker = params.get('marker') or MARKER
+    if not NAME.fullmatch(name):
+        raise ValueError('VM name must contain 1-80 letters, digits, dots, underscores or hyphens.')
+    found = host.run(script(FIND, name=name))
+    if found['count'] > 1:
+        raise ValueError('Multiple VMs use this name. No VMs have been changed.')
+    if found['count'] == 0:
+        return {'changed': False, 'vm_path': f"{info['host']}/{name}", 'destroyed': False}
+    if found['notes'] != marker:
+        raise ValueError('Existing VM is unmanaged; refusing to delete it.')
+    host.run(script(DESTROY, name=name))
+    return {'changed': True, 'vm_path': f"{info['host']}/{name}", 'destroyed': True}
 
 
 class WinRMHost:
@@ -230,14 +273,16 @@ class WinRMHost:
 
 def main():
     module = AnsibleModule(argument_spec={
-        'action': {'choices': ['authenticate', 'provision'], 'default': 'provision'},
+        'action': {'choices': ['authenticate', 'provision', 'absent'], 'default': 'provision'},
         'host': {'required': True}, 'port': {'type': 'int', 'default': 5985},
         'username': {'required': True}, 'password': {'required': True, 'no_log': True},
         'ca_file': {'type': 'path', 'default': ''}, 'switch': {'required': True}, 'path': {'default': ''},
         'name': {'default': 'sophon-infravm'}, 'cores': {'type': 'int', 'default': 8},
         'memory': {'type': 'int', 'default': 8192}, 'disk_gb': {'type': 'int', 'default': 100},
-        'coreos_iso': {'type': 'path'}, 'bundle_iso': {'type': 'path'},
-    }, required_if=[('action', 'provision', ['coreos_iso', 'bundle_iso'])])
+        'min_disk_gb': {'type': 'int', 'default': 40}, 'marker': {'default': MARKER},
+        'coreos_iso': {'type': 'path'}, 'bundle_iso': {'type': 'path', 'default': ''},
+        'secrets_iso': {'type': 'path', 'default': ''},
+    }, required_if=[('action', 'provision', ['coreos_iso'])])
     params = module.params
     try:
         if not SWITCH.fullmatch(params['switch']):
@@ -247,8 +292,12 @@ def main():
         except ImportError:
             raise ValueError('pypsrp is missing; run this through the sophon-tools container.')
         info = host.run(script(AUTHENTICATE, switch=params['switch']))
-        result = ({'changed': False, 'server': info['host']}
-                  if params['action'] == 'authenticate' else provision(params, host, info))
+        if params['action'] == 'authenticate':
+            result = {'changed': False, 'server': info['host']}
+        elif params['action'] == 'absent':
+            result = destroy(params, host, info)
+        else:
+            result = provision(params, host, info)
     except (OSError, ValueError, KeyError) as error:
         module.fail_json(msg=str(error))
     except Exception as error:  # pypsrp raises its own transport/authentication errors

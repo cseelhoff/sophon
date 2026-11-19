@@ -31,10 +31,14 @@ These surfaces explain deployment and backup failures:
    reconciles Compose projects directly over the rootless Podman socket (`roles/compose_stack`), completely decoupled
    from the management UI ([decisions.md](decisions.md)). Arcane mounts `/var/lib/sophon/stacks` and the Podman socket
    as a reconstructible OIDC-enabled GUI (`arcane.<domain>`).
-4. **The backup data path** (normal container stack). Declared source volumes are
-   read-only mounts in Kopia. Its private, unpublished HAProxy service exposes only
-   list/inspect/exec/stop/start on the existing rootless Podman socket. Native dumps
-   stream stdout, not archives. Arcane is absent from this path.
+4. **The backup data path** (normal container stack). Kopia mounts the Podman
+   `volumes` subvolume read-only (`/volumes:ro`) so newly deployed developer
+   volumes are discovered automatically from `sophon.backup.*` container labels
+   without redeploying Kopia. Its private, unpublished `dump-proxy` container
+   exposes only sanitized container inventory (`Config.Env` stripped) and
+   label-bound dump streaming (`POST /v1/dump/<id>/<name>`)—never arbitrary
+   `/exec`, `/stop`, `/start` or `/archive`. Backups are 100% hot and never stop
+   containers; Arcane is absent from this path.
 
 Before deploying any stacks, the console runner pairs/preflights the explicitly
 declared SFTP destination directly. Prepare includes Kopia 0.23.1, OpenSSH client
@@ -55,14 +59,13 @@ Step 1 writes everything into `artifacts/` and is cached: with a complete cache 
   Compose files use `pull_policy: never`, so a missing archive fails by name instead of pulling silently.
 
 `prepare_container_images` in `roles/prepare/defaults/main.yml` lists upstream
-images. Prepare also builds CoreDNS and the Kopia collector image from
+images. Prepare also builds CoreDNS and the Kopia collector/proxy image from
 Sophon sources. Their archives join the same manifest and deployment ISO; keep
 that complete list in step with each role's `*_image_tars`. Kopia is rebuilt
 through the engine's content cache and its archive is replaced when the image
 ID changes, so editing the collector cannot reuse an obsolete image archive.
-The pinned HAProxy image joins the same offline manifest. Bundle creation hashes
-the copied IaC sources into `bootstrap/sophon-version`, which snapshots record
-alongside the workload image references and immutable IDs.
+Bundle creation hashes the copied IaC sources into `bootstrap/sophon-version`,
+which snapshots record alongside the workload image references and immutable IDs.
 
 ## Order of the services
 
@@ -70,24 +73,23 @@ alongside the workload image references and immutable IDs.
 CoreDNS resolves *.<domain> ─▶ Traefik routes by Host and gets certificates
    ─▶ LDAPS at ldap.<domain> verifies ─▶ Keycloak federates OpenLDAP
    ─▶ Gitea and Arcane trust Keycloak (OIDC)
-   ─▶ Kopia mounts the now-existing declared source volumes
+   ─▶ Kopia connects with native actions enabled and triggers the initial hot snapshot
 ```
 
 Each link is load-bearing: a DNS problem shows up as Keycloak failing on an LDAPS certificate. Read
 failures from the left.
 
-Kopia is deployed last so external named-volume mounts already exist. Its code
-and images come from Sophon, not a Gitea project. Backups and their supervisor
-operate without Arcane, Gitea or the Kopia UI. The UI remains a repository
-browser, not the collector trigger. A console command stages a uniquely named
-immutable run, resumes writers, then uploads with a stable logical source
-identity (`backup@sophon:/sophon-state`). Partial runs upload successful groups
-and report failure; every report includes undeclared volumes.
-
-The supervisor runs scheduled backups only when explicitly enabled. Its own
-Kopia server child handles browsing; native snapshot scheduling stays disabled
-to prevent snapshots bypassing the collector. No host backup timer or unit is
-created. The primary stack never mounts the whole volumes directory.
+Kopia is deployed last so core services are already healthy for the initial
+snapshot. Its code and image come from Sophon, not a Gitea project. Backups and
+scheduling run natively inside `kopia server start --enable-actions` via Kopia's
+own `--snapshot-interval` policy and `--before-snapshot-root-action=/app/backup.py`
+(`--action-command-mode=essential`, `--no-persist-action-script`). Before each
+snapshot of `backup@sophon:/sophon-state`, `backup.py` stages declared volume/path
+reflinks, writes `.kopiaignore` exclusions, streams hot logical dumps through
+`dump-proxy`, emits `KOPIA_SNAPSHOT_PATH=<staged_dir>` for Kopia to deduplicate
+and upload, and cleans staging in `--after-snapshot-root-action=/app/backup.py`.
+Every run report in `/source/last-run.json` records undeclared volumes. No host
+backup timer or unit is created.
 
 An opt-in `coarse` service uses the same image and requires no Podman socket or
 proxy container. Step 3 formats `/var` as Btrfs (`sophon-var`, mounted with
@@ -142,13 +144,14 @@ names the files after the certificate's main domain (`<domain>.crt`, `<domain>.k
 ## State
 
 Reconstructible state (the Keycloak realm, seeded users, routing) is rebuilt by a rerun. Irreplaceable
-state (Gitea repositories, user-created LDAP entries, `acme.json`, the ACME account) is not;
-back it up ([decisions.md](decisions.md)). V3 labels declare irreproducible paths,
-native stdout dumps and stopped writers. Only declared named volumes are mounted;
-native database exports do not require exposing database directories.
-Snapshots contain real files, dumps and a v3 manifest, never tar artifacts,
-container environments, Arcane state, images or reconstructible configuration.
-The journal and per-run report are outside snapshot staging.
+state (Gitea repositories and Git LFS objects, user-created LDAP entries, `acme.json`, the ACME account) is not;
+back it up ([decisions.md](decisions.md)). Concise `sophon.backup.*` labels declare
+whole volumes (with `.kopiaignore` exclusions), selective paths, INI identity keys,
+and hot native stdout dumps (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`)—all
+captured online with zero container downtime. Raw database directories are never
+copied in primary backups. Snapshots contain real files, uncompressed dumps and
+a v3 manifest, never tar artifacts, container environments, Arcane state, images
+or reconstructible configuration.
 
 Arcane is recreated from IaC, not restored. Retain external inputs and the
 SFTP repository password/key/pins outside the encrypted repository. Restoration

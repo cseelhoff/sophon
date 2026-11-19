@@ -34,9 +34,6 @@ services:
       keycloak-db:
         condition: service_healthy
     labels:
-      - 'sophon.backup.version=3'
-      - 'sophon.backup.group=keycloak'
-      - 'sophon.backup.stop=true'
       - "traefik.enable=true"
       - "traefik.http.routers.keycloak.entrypoints=websecure"
       - "traefik.http.routers.keycloak.rule=Host(`{{ keycloak_hostname }}.{{ keycloak_domain }}`)"
@@ -51,12 +48,11 @@ services:
     pull_policy: never
     container_name: keycloak-db
     labels:
-      - 'sophon.backup.version=3'
+      - 'sophon.backup.enable=true'
       - 'sophon.backup.group=keycloak'
-      - 'sophon.backup.stop=false'
-      - 'sophon.backup.dumps.0.name=postgres-cluster.sql'
-      - 'sophon.backup.dumps.0.restore=postgres-cluster'
-      - 'sophon.backup.dumps.0.argv=["sh","-ec","exec pg_dumpall -U \"$$POSTGRES_USER\" --clean --if-exists"]'
+      - 'sophon.backup.dump=exec pg_dumpall -U "$$POSTGRES_USER" --clean --if-exists'
+      - 'sophon.backup.dump.name=postgres-cluster.sql'
+      - 'sophon.backup.dump.restore=postgres-cluster'
     restart: unless-stopped
     security_opt:
       - label=disable

@@ -43,18 +43,13 @@ class VersionTests(unittest.TestCase):
             keycloak['keycloak_postgres_image'],
             'docker.io/' + ldap['openldap_image_name'] + ':' + ldap['openldap_image_tag'],
             'docker.io/' + ldap['openldap_certs_dumper_image_name'] + ':' + ldap['openldap_certs_dumper_image_tag'],
-            'docker.io/library/haproxy:' + variables['kopia_proxy_version'],
         }
         prepared = set(defaults('prepare')['prepare_container_images'])
         prepared.remove('{{ arcane_image }}')
-        prepared.remove('{{ kopia_proxy_image }}')
-        prepared.add('docker.io/library/haproxy:' + variables['kopia_proxy_version'])
         prepared.add(variables['arcane_image_repo'] + ':' + variables['arcane_image_tag'])
         self.assertEqual(prepared, images)
         for image in images:
-            pattern = (r'^\d+\.\d+\.\d+-alpine$' if '/haproxy:' in image else
-                       r'^\d+\.\d+-alpine\d+\.\d+$' if '/postgres:' in image
-                       else r'^v?\d+\.\d+\.\d+$')
+            pattern = r'^\d+\.\d+-alpine\d+\.\d+$' if '/postgres:' in image else r'^v?\d+\.\d+\.\d+$'
             self.assertRegex(image.rsplit(':', 1)[1], pattern)
 
     def test_toolchain_tags_are_exact_and_traefik_matches_the_service(self):

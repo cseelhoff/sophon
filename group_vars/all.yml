@@ -40,6 +40,16 @@ infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(100, true
 # Written into the VM so a rerun can tell this workflow's VM from anyone else's.
 infravm_marker: "sophon-infravm-two-iso-v1"
 
+backup_vm_name: "{{ lookup('env', 'SOPHON_BACKUP_VM_NAME') | default('sophon-backup', true) }}"
+backup_vm_cores: "{{ lookup('env', 'SOPHON_BACKUP_VM_CORES') | default(2, true) | int }}"
+backup_vm_memory: "{{ lookup('env', 'SOPHON_BACKUP_VM_MEMORY') | default(2048, true) | int }}"
+backup_vm_disk_gb: "{{ lookup('env', 'SOPHON_BACKUP_VM_DISK_GB') | default(100, true) | int }}"
+backup_vm_marker: "sophon-backup-vm-v1"
+
+attach_secrets_iso: "{{ (lookup('env', 'SOPHON_ATTACH_SECRETS_ISO') | default('true', true) | lower) not in ['0', 'false', 'no', 'off'] }}"
+explicit_secrets_iso_path: "{{ lookup('env', 'SOPHON_SECRETS_ISO') | default('', true) }}"
+explicit_backup_secrets_iso_path: "{{ lookup('env', 'SOPHON_BACKUP_SECRETS_ISO') | default('', true) }}"
+
 # --- Step 4: services (InfraVM only) -----------------------------------------
 infravm_ip: "{{ lookup('env', 'SOPHON_INFRAVM_IP') | default('', true) }}"
 vnet_dns: "{{ lookup('env', 'SOPHON_VNET_DNS') | default('', true) }}"
@@ -74,9 +84,7 @@ gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(arcan
 kopia_version: "0.23.1"
 kopia_image: "localhost/sophon-kopia:{{ kopia_version }}"
 kopia_image_tarname: "sophon-kopia_{{ kopia_version }}.tar"
-kopia_proxy_version: "3.2.6-alpine"
-kopia_proxy_image: "docker.io/library/haproxy:{{ kopia_proxy_version }}"
-kopia_proxy_image_tarname: "library-haproxy_{{ kopia_proxy_version }}.tar"
+kopia_volumes_dir: "/var/home/core/.local/share/containers/storage/volumes"
 kopia_password: "{{ lookup('env', 'SOPHON_KOPIA_PASSWORD') }}"
 kopia_server_username: "{{ lookup('env', 'SOPHON_KOPIA_SERVER_USERNAME') | default('admin', true) }}"
 kopia_server_password: "{{ lookup('env', 'SOPHON_KOPIA_SERVER_PASSWORD') }}"
@@ -88,7 +96,6 @@ kopia_sftp_private_key_b64: "{{ lookup('env', 'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64
 kopia_sftp_known_hosts_b64: "{{ lookup('env', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64') }}"
 kopia_client_username: "{{ lookup('env', 'SOPHON_KOPIA_CLIENT_USERNAME') | default('backup', true) }}"
 kopia_client_hostname: "{{ lookup('env', 'SOPHON_KOPIA_CLIENT_HOSTNAME') | default('sophon', true) }}"
-kopia_extra_volumes: "{{ lookup('env', 'SOPHON_KOPIA_EXTRA_VOLUMES') | default('[]', true) | from_json }}"
 sophon_version: "{{ lookup('file', playbook_dir ~ '/bootstrap/sophon-version') | trim }}"
 kopia_backups_enabled: "{{ lookup('env', 'SOPHON_KOPIA_BACKUPS_ENABLED') | default('true', true) }}"
 kopia_snapshot_interval: "{{ lookup('env', 'SOPHON_KOPIA_SNAPSHOT_INTERVAL') | default('6h', true) }}"
@@ -104,6 +111,9 @@ installer_iso_path: "{{ artifacts_dir }}/coreos/sophon-installer.iso"
 bundle_iso_path: "{{ artifacts_dir }}/bootstrap/sophon-deployment.iso"
 # Standalone unattended Alpine SFTP backup server installer ISO (optional; for sites without an existing SFTP server).
 backup_installer_iso_path: "{{ artifacts_dir }}/backup/sophon-backup-installer.iso"
+secrets_iso_default_path: "{{ artifacts_dir }}/secrets/sophon-secrets.iso"
+certificate_iso_default_path: "{{ artifacts_dir }}/secrets/sophon-certificates.iso"
+backup_secrets_iso_default_path: "{{ artifacts_dir }}/secrets/sophon-backup-secrets.iso"
 # <vendor>-<image>_<tag>.tar, e.g. getarcaneapp-manager_v3.0.1.tar
 sophon_containers_dir: "{{ artifacts_dir }}/containers"
 arcane_image_tarname: "{{ (arcane_image_repo.split('/')[-2:] | join('-')) }}_{{ arcane_image_tag }}.tar"

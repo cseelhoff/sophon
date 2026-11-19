@@ -1,5 +1,21 @@
 ---
-- name: Provision a blank InfraVM with two immutable ISOs on vCenter
+- name: Resolve optional InfraVM secrets or certificate ISO
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ explicit_secrets_iso_path }}"
+    - "{{ secrets_iso_default_path }}"
+    - "{{ certificate_iso_default_path }}"
+  when: item | length > 0 and (item == explicit_secrets_iso_path or (attach_secrets_iso | bool))
+  register: infravm_secret_candidates
+
+- name: Require explicit secrets ISO when SOPHON_SECRETS_ISO was supplied
+  ansible.builtin.assert:
+    that: infravm_secret_candidates.results[0].stat.exists | default(false)
+    fail_msg: "SOPHON_SECRETS_ISO was set to '{{ explicit_secrets_iso_path }}', but that file does not exist."
+  when: explicit_secrets_iso_path | length > 0
+
+- name: Provision a blank InfraVM with immutable ISOs on vCenter
   vcenter_vm:
     url: "{{ vcenter_url }}"
     username: "{{ vcenter_username }}"
@@ -16,6 +32,13 @@
     disk_gb: "{{ infravm_disk_gb }}"
     coreos_iso: "{{ installer_iso_path }}"
     bundle_iso: "{{ bundle_iso_path }}"
+    secrets_iso: >-
+      {{ (infravm_secret_candidates.results
+          | selectattr('stat', 'defined')
+          | selectattr('stat.exists', 'equalto', true)
+          | map(attribute='stat.path')
+          | list
+          | first) | default('') }}
   register: infravm_vcenter
 
 - name: Show the selected vCenter VM

@@ -44,19 +44,51 @@
           - infravm_disk_gb | int >= 40
         fail_msg: "Provide valid CPU/memory and at least 40 GiB disk space; installation checks actual artifact capacity."
     # Content-addressed names: a mounted ISO belonging to another guest is never overwritten.
+    - name: Resolve optional InfraVM secrets or certificate ISO
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ explicit_secrets_iso_path }}"
+        - "{{ secrets_iso_default_path }}"
+        - "{{ certificate_iso_default_path }}"
+      when: item | length > 0 and (item == explicit_secrets_iso_path or (attach_secrets_iso | bool))
+      register: infravm_secret_candidates
+    - name: Require explicit secrets ISO when SOPHON_SECRETS_ISO was supplied
+      ansible.builtin.assert:
+        that: infravm_secret_candidates.results[0].stat.exists | default(false)
+        fail_msg: "SOPHON_SECRETS_ISO was set to '{{ explicit_secrets_iso_path }}', but that file does not exist."
+      when: explicit_secrets_iso_path | length > 0
+    - name: Select active InfraVM secrets ISO path
+      ansible.builtin.set_fact:
+        resolved_secrets_iso_path: >-
+          {{ (infravm_secret_candidates.results
+              | selectattr('stat', 'defined')
+              | selectattr('stat.exists', 'equalto', true)
+              | map(attribute='stat.path')
+              | list
+              | first) | default('') }}
     - name: Identify media by content
       ansible.builtin.stat:
         path: "{{ item }}"
         checksum_algorithm: sha256
-      loop: ["{{ installer_iso_path }}", "{{ bundle_iso_path }}"]
+      loop: "{{ [installer_iso_path, bundle_iso_path] + ([resolved_secrets_iso_path] if resolved_secrets_iso_path | length > 0 else []) }}"
       register: infravm_media
     - name: Name immutable hypervisor media
       ansible.builtin.set_fact:
-        infravm_isos:
-          - {source: "{{ installer_iso_path }}", filename: "sophon-coreos-{{ infravm_media.results[0].stat.checksum }}.iso",
-             size: "{{ infravm_media.results[0].stat.size }}"}
-          - {source: "{{ bundle_iso_path }}", filename: "sophon-deployment-{{ infravm_media.results[1].stat.checksum }}.iso",
-             size: "{{ infravm_media.results[1].stat.size }}"}
+        infravm_isos: >-
+          {{
+            [
+              {'source': installer_iso_path, 'filename': 'sophon-coreos-' ~ infravm_media.results[0].stat.checksum ~ '.iso',
+               'size': infravm_media.results[0].stat.size},
+              {'source': bundle_iso_path, 'filename': 'sophon-deployment-' ~ infravm_media.results[1].stat.checksum ~ '.iso',
+               'size': infravm_media.results[1].stat.size}
+            ] + (
+              [{'source': resolved_secrets_iso_path,
+                'filename': 'sophon-secrets-' ~ infravm_vm_name ~ '-' ~ infravm_media.results[2].stat.checksum ~ '.iso',
+                'size': infravm_media.results[2].stat.size}]
+              if resolved_secrets_iso_path | length > 0 else []
+            )
+          }}
     - name: Validate already uploaded immutable media sizes
       ansible.builtin.assert:
         that: >-
@@ -103,9 +135,16 @@
           net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
         virtio:
           virtio0: "{{ proxmox_disk_storage_id }}:{{ infravm_disk_gb }}"
-        ide:
-          ide2: "{{ proxmox_iso_storage_id }}:iso/{{ infravm_isos[0].filename }},media=cdrom"
-          ide3: "{{ proxmox_iso_storage_id }}:iso/{{ infravm_isos[1].filename }},media=cdrom"
+        ide: >-
+          {{
+            {
+              'ide2': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[0].filename ~ ',media=cdrom',
+              'ide3': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[1].filename ~ ',media=cdrom'
+            } | combine(
+              {'ide0': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[2].filename ~ ',media=cdrom'}
+              if (infravm_isos | length > 2) else {}
+            )
+          }}
         boot: "order=virtio0;ide2"
         serial:
           serial0: socket

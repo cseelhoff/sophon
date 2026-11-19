@@ -1,9 +1,8 @@
 ---
-kopia_backup_volumes: []
 kopia_fqdn: "kopia.{{ domain_name }}"
+kopia_volumes_dir: "/var/home/core/.local/share/containers/storage/volumes"
 kopia_image_tars:
   - "{{ sophon_containers_dir }}/{{ kopia_image_tarname }}"
-  - "{{ sophon_containers_dir }}/{{ kopia_proxy_image_tarname }}"
 kopia_environment:
   - {name: KOPIA_PASSWORD, value: "{{ kopia_password }}"}
   - {name: KOPIA_SERVER_USERNAME, value: "{{ kopia_server_username }}"}

@@ -9,9 +9,31 @@ a container on InfraVM itself.
 
 For a complete visual walkthrough with screenshots covering clean SFTP backup server setup, first-boot console configuration, Day-1 verification in Arcane, live Btrfs snapshots, and full disaster recovery, see the **[Installation, Operations & Disaster Recovery Guide](docs/operator-guide.md)**.
 
-You do two things: run one command on your laptop, then answer prompts on the VM's console.
+You can deploy Sophon **either interactively on the VM console** or **completely unattended** using optional mode-`0600`
+secrets ISOs (`sophon-secrets.iso` and `sophon-backup-secrets.iso`) across **Proxmox, VMware vCenter, and Microsoft Hyper-V**.
 The laptop needs only **Docker or Podman** (Linux, WSL, macOS or Windows). Under WSL, keep this folder on the Linux
 filesystem (`~/sophon`, not `/mnt/c/...`): building the ISOs is several times faster.
+
+### Option A: Zero-prompt unattended install & unified auto-restore (Proxmox, vCenter, Hyper-V)
+
+```bash
+# 1. Build immutable OS/deployment/backup ISOs
+bash sophon-provision.sh prepare                     # Windows: .\sophon-provision.ps1 prepare
+
+# 2. Generate private mode-0600 secrets ISOs (pre-pairs SFTP host + client SSH keys)
+bash sophon-provision.sh secrets --with-backup       # Windows: .\sophon-provision.ps1 secrets --with-backup
+
+# 3. Provision the SFTP Backup Server VM, then InfraVM (both boot & configure with zero console prompts)
+bash sophon-provision.sh provision-backup            # Windows: .\sophon-provision.ps1 provision-backup
+bash sophon-provision.sh provision                   # Windows: .\sophon-provision.ps1 provision
+```
+
+One `sophon-secrets.iso` handles **both Day-1 builds and automated restores** safely:
+- **Empty SFTP repository → Day-1 build:** InfraVM ingests `sophon-seed.json` into RAM (`tmpfs`), ejects the CD-ROM, sets the `core` password and static IPv4, initializes the encrypted Kopia repository, deploys all stacks, runs the first verified backup, and enables the `6h` schedule.
+- **Existing snapshots found → Safe Standby Auto-Restore:** InfraVM automatically postpones Cloudflare tunnel creation/DNS repointing, connects Kopia in `--readonly` mode with scheduled backups disabled, deploys the stacks, runs `sophon-restore --snapshot latest --yes`, verifies all containers and SNI TLS endpoints locally inside the guest, and reports `STANDBY RESTORE COMPLETE` on the VM login banner (`/etc/issue`).
+- **Optional production promotion (`sophon-activate`):** Standby/dev restores never touch live DNS or write to the backup repository. Only when replacing a lost production server, log in as `core` and run `sophon-activate` to enable Cloudflare tunnel publishing and scheduled Kopia backups.
+
+### Option B: Interactive console install (no secrets ISO needed)
 
 **1. On your laptop** (internet needed)
 
@@ -109,11 +131,14 @@ upstream forwards back to it (for example the Hyper-V Default Switch address): l
 ### Backups
 
 Kopia is built during Prepare, carried offline and deployed after the core
-source volumes exist. Its [v3 collector](roles/kopia) operates without Arcane,
-Gitea or a management API key: named read-only mounts supply irreproducible
-files, native tools export databases through a restricted engine proxy.
-Writers resume before upload. Snapshots contain files, dumps and a versioned
-manifest, not images, caches, container environments or a system copy.
+stacks are running. Its [native action collector](roles/kopia) operates without
+Arcane, Gitea or a management API key: Kopia's built-in scheduler (`--snapshot-interval`)
+and native before/after snapshot actions (`/app/backup.py`) clone declared named
+volumes or paths via Btrfs CoW reflinks from `/volumes:ro`, apply `.kopiaignore`
+exclusions, and stream hot logical database dumps (`pg_dumpall`, `pg_dump -Fc -Z0`,
+`slapcat`) through a locked-down `dump-proxy` with **zero container stops**.
+Snapshots contain real files, uncompressed deduplicatable dumps and a versioned
+manifest—never images, caches, container environments or a system copy.
 
 Supply the external SFTP host/user/path, repository password and Kopia UI
 credentials at the console. If you do not already have an SFTP server or NAS,
@@ -126,16 +151,17 @@ see [backup inputs](docs/inputs.md#kopia-backup-inputs). Only a confirmed missin
 repository on an unused path may be created; all other errors fail closed.
 Keep repository decryption credentials
 outside the encrypted repository. `SOPHON_KOPIA_BACKUPS_ENABLED` defaults to
-`true`: Configure automatically runs and verifies the first snapshot and enables
-the six-hour schedule in one step (while offering to pause scheduled backups
-when a newly installed VM reconnects to an existing repository before
-`sophon-restore`).
+`true`: Configure configures Kopia's native snapshot policy and actions, triggers
+and verifies the first snapshot, and leaves the six-hour schedule active in one
+step (while offering to pause scheduled backups when a newly installed VM
+reconnects to an existing repository before `sophon-restore`).
 
-Core roles use only `sophon.backup.version=3` labels. Outside workloads need
-[explicit migration](docs/kopia-v3-migration.md) and a site volume list.
-Undeclared volumes are reported, not automatically copied. Failed groups do
-not block successful groups' uploads, but the result is explicitly partial
-and returns nonzero. Run from the console:
+Core services and developer workloads deployed via Gitea Actions opt in using
+concise Traefik-style `sophon.backup.*` container labels—no Sophon Ansible edits
+or volume mount lists required (see [self-service labels](roles/kopia/README.md#self-service-container-labels)).
+Undeclared volumes are reported, not automatically copied. Trigger an immediate
+snapshot from the Kopia Web UI (**Snapshot Now** on `/sophon-state`) or from the
+console:
 
 ```bash
 podman exec kopia python3 /app/backup.py run
@@ -143,17 +169,19 @@ podman exec kopia cat /source/last-run.json
 ```
 
 Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
-rerun Configure, then explicitly restore state via `sophon-restore`. Configure
-never restores application state automatically. For non-destructive standby or
-test restores alongside a live production server, run
-`sophon-deploy --prepare-restore` before `sophon-restore` (disables Cloudflare
-tunnels/DNS repointing and connects Kopia read-only) and pair with the backup
-appliance's confined read-only `sophon-restore` SFTP account
-(`sophon-authorize-key --readonly`). On Proxmox, `bash sophon-provision.sh verify-restore`
-(PowerShell: `.\sophon-provision.ps1 verify-restore`, plus optional weekly
-`systemd --user` timer units in [contrib/systemd/](contrib/systemd)) automates
-the entire clean-VM install, `serial0` bootstrap, restore, and direct-IP SNI
-verification end to end. See the
+redeploy from code and restore state via `sophon-restore`—either automatically
+in **Safe Standby Mode** when booting with `sophon-secrets.iso` against an
+existing SFTP repository (promoting to live production only if you explicitly
+run `sophon-activate`), or interactively via `sophon-deploy --prepare-restore`
+followed by `sophon-restore`. Across **Proxmox, VMware vCenter, and Microsoft
+Hyper-V**, `bash sophon-provision.sh verify-restore` (PowerShell:
+`.\sophon-provision.ps1 verify-restore`, plus optional weekly `systemd --user`
+timer units in [contrib/systemd/](contrib/systemd)) destroys and reprovisions a
+clean drill VM (`sophon-dev-infravm`) with a read-only SFTP seed ISO so the VM
+restores the latest backup in Safe Standby Mode and verifies all services
+locally inside the guest—no `serial0` socket and no workstation-to-VM network
+path required. Treat `sophon-secrets.iso` and `sophon-backup-secrets.iso` like
+`sophon-certificates.iso`: delete or detach them once ingested. See the
 [full visual operator guide](docs/operator-guide.md) and the
 [Kopia role reference](roles/kopia/README.md).
 

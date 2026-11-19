@@ -34,17 +34,21 @@ preflights the declared SFTP destination; it has no hypervisor/guest SSH or host
 
 **Reconstructible / irreplaceable state**: what a rerun rebuilds, versus what only a backup can restore.
 
-**Backup group**: v3-labelled workloads whose writers pause together while declared
-irreproducible paths are cloned and native dumps are captured. Writers resume before upload.
+**Backup group**: `sophon.backup.enable=true` workloads grouped together (defaulting
+to `com.docker.compose.project`) whose hot volume reflinks, `.kopiaignore` rules
+and native stdout database dumps are staged together by Kopia's before-snapshot
+action without stopping containers.
 
 **Primary snapshot**: real irreproducible files, native dumps and a v3 manifest
-with workload images and Sophon source version; not a system or GUI backup.
+with workload images and Sophon source version, scheduled natively by Kopia
+(`backup@sophon:/sophon-state`); not a system or GUI backup.
 
 **Coarse snapshot**: an optional weekly, last-resort crash-consistent Btrfs
 read-only subvolume snapshot of the rootless Podman `volumes` subvolume on `/var`.
 Zero containers stop and no engine socket is mounted; Kopia uploads the read-only
 snapshot from a disjoint working directory on `/var` and destroys the snapshot when complete.
 
-**Engine proxy**: the unpublished allowlisted socket proxy used by the backup
-container, separate from Arcane. The primary collector has named read-only
-volume mounts, not the engine socket or whole volumes directory.
+**Dump proxy**: the unpublished, zero-capability Python socket proxy (`dump-proxy`)
+used by `kopia`. It strips `Config.Env` from container inspection and executes
+only dump commands declared on the target container's own `sophon.backup.*` labels;
+arbitrary `/exec`, `/stop`, `/start` and `/archive` endpoints are rejected.

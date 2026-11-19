@@ -296,7 +296,6 @@ class PrepareTests(unittest.TestCase):
         self.write('artifacts/bootstrap/busybox-1.38.0-musl', 'cached-helper')
         for name in ('getarcaneapp-manager_v3.0.1.tar', 'keycloak-keycloak_26.8.1.tar', 'coredns-dockerdiscovery.tar'):
             self.write('artifacts/containers/' + name, name)
-        self.write('artifacts/containers/library-haproxy_3.2.6-alpine.tar', 'cached-proxy')
         self.write('artifacts/containers/sophon-kopia_0.23.1.tar', 'cached-kopia')
         self.write('artifacts/containers/sophon-kopia_0.23.1.tar.id', 'sha256:cached-kopia')
         alpine_src = self.root / 'alpine-seed'
@@ -343,8 +342,7 @@ class PrepareTests(unittest.TestCase):
                 'kopia_image_tarname': 'sophon-kopia_0.23.1.tar',
                 'prepare_coredns_tar': str(self.root / 'artifacts/containers/coredns-dockerdiscovery.tar'),
                 'prepare_container_images': [
-                    'ghcr.io/getarcaneapp/manager:v3.0.1', 'quay.io/keycloak/keycloak:26.8.1',
-                    'docker.io/library/haproxy:3.2.6-alpine'],
+                    'ghcr.io/getarcaneapp/manager:v3.0.1', 'quay.io/keycloak/keycloak:26.8.1'],
             },
             'tasks': [{'ansible.builtin.import_role': {'name': 'prepare'}}],
         }]))
@@ -366,7 +364,7 @@ class PrepareTests(unittest.TestCase):
         manifest = json.loads((self.root / 'artifacts/containers/manifest.json').read_text())
         self.assertEqual([Path(path).name for path in manifest], [
             'getarcaneapp-manager_v3.0.1.tar', 'keycloak-keycloak_26.8.1.tar',
-            'library-haproxy_3.2.6-alpine.tar', 'coredns-dockerdiscovery.tar', 'sophon-kopia_0.23.1.tar'])
+            'coredns-dockerdiscovery.tar', 'sophon-kopia_0.23.1.tar'])
         # A changed runner image must be re-saved (saving is the only thing that should be attempted).
         image_id.write_text('sha256:rebuilt')
         changed = run()

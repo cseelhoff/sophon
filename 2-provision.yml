@@ -46,9 +46,9 @@
     - name: Hand off to the InfraVM console
       ansible.builtin.debug:
         msg: |
-          InfraVM is running. Step 3 installs CoreOS by itself and reboots; watch it on the VM's
-          hypervisor console (nothing to type). If it stops and says why, see "If the install stops"
-          in the README.
-          On the first boot, choose the password for the user core, log in, and run: sophon-deploy (step 4).
-          It first asks for the network (the VM starts on DHCP). At an air-gapped site, attach the
-          certificate disk (artifacts/secrets/sophon-certificates.iso) before running it.
+          InfraVM is running. Step 3 installs CoreOS automatically and reboots.
+          - If `artifacts/secrets/sophon-secrets.iso` was attached, networking, the `core` password,
+            and service deployment (Day-1 initialization if `/repository` is empty, or safe standby
+            auto-restore if snapshots exist) run completely unattended on first boot.
+          - If no unattended seed ISO was attached, open the hypervisor console on first boot to
+            choose the `core` password, log in, and run `sophon-deploy` interactively.

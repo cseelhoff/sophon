@@ -1,0 +1,54 @@
+---
+# Provision the standalone Alpine SFTP Backup Server VM on Proxmox, vCenter, or Hyper-V.
+# Automatically attaches `artifacts/secrets/sophon-backup-secrets.iso` when present so first-boot
+# network, admin password, and SSH host/client keys configure completely unattended.
+- name: Validate provisioning inputs
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Require a supported hypervisor
+      ansible.builtin.assert:
+        that: hypervisor_provider in ['proxmox', 'vcenter', 'hyperv']
+        fail_msg: "SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv."
+    - name: Require hypervisor settings
+      ansible.builtin.assert:
+        that: lookup('env', item) | trim | length > 0
+        fail_msg: "Supply {{ item }} before provisioning."
+        quiet: true
+      loop: >-
+        {{ ['SOPHON_PROXMOX_HOST', 'SOPHON_PROXMOX_PASSWORD'] if hypervisor_provider == 'proxmox' else
+           ['SOPHON_HYPERV_HOST', 'SOPHON_HYPERV_PASSWORD', 'SOPHON_HYPERV_SWITCH'] if hypervisor_provider == 'hyperv' else
+           ['SOPHON_VCENTER_URL', 'SOPHON_VCENTER_PASSWORD', 'SOPHON_VCENTER_DATACENTER',
+            'SOPHON_VCENTER_CLUSTER', 'SOPHON_VCENTER_DATASTORE', 'SOPHON_VCENTER_NETWORK'] }}
+
+- name: Prepare installation media
+  ansible.builtin.import_playbook: 1-prepare.yml
+
+- name: Create Sophon SFTP Backup Server VM
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Authenticate with Proxmox
+      ansible.builtin.include_role:
+        name: proxmox
+      when: hypervisor_provider == 'proxmox'
+    - name: Authenticate with vCenter
+      ansible.builtin.include_role:
+        name: vcenter
+      when: hypervisor_provider == 'vcenter'
+    - name: Authenticate with Hyper-V
+      ansible.builtin.include_role:
+        name: hyperv
+      when: hypervisor_provider == 'hyperv'
+    - name: Create Backup Server VM with installer and optional unattended seed ISO
+      ansible.builtin.include_role:
+        name: "{{ hypervisor_provider }}"
+        tasks_from: backup_vm
+    - name: Hand off Backup Server VM
+      ansible.builtin.debug:
+        msg: |
+          Sophon Backup Server VM ({{ backup_vm_name }}) is running.
+          Alpine installs to disk automatically and reboots in ~30 seconds.
+          If `artifacts/secrets/sophon-backup-secrets.iso` was attached, static networking, the admin password,
+          and pre-paired SSH host/client keys apply automatically on first boot (zero console input needed).
+          Otherwise, open the hypervisor console to set the admin password and run `sophon-backup-setup`.

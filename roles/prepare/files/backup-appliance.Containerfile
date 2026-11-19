@@ -11,6 +11,7 @@ RUN mkdir -p /rootfs /tmp/build \
       openssh chrony doas dhcpcd util-linux-misc sfdisk
 
 COPY sophon-backup-set-password /rootfs/usr/local/sbin/sophon-backup-set-password
+COPY sophon-backup-autoseed /rootfs/usr/local/sbin/sophon-backup-autoseed
 COPY sophon-backup-apply /rootfs/usr/local/sbin/sophon-backup-apply
 COPY sophon-backup-setup /rootfs/usr/local/bin/sophon-backup-setup
 COPY sophon-authorize-key /rootfs/usr/local/bin/sophon-authorize-key
@@ -18,6 +19,7 @@ COPY sophon-authorize-key /rootfs/usr/local/bin/sophon-authorize-key
 RUN set -eu; \
     chmod 0755 \
       /rootfs/usr/local/sbin/sophon-backup-set-password \
+      /rootfs/usr/local/sbin/sophon-backup-autoseed \
       /rootfs/usr/local/sbin/sophon-backup-apply \
       /rootfs/usr/local/bin/sophon-backup-setup \
       /rootfs/usr/local/bin/sophon-authorize-key; \
@@ -94,8 +96,16 @@ RUN set -eu; \
       '    PermitTTY no' \
       'Match all' > /rootfs/etc/ssh/sshd_config.d/50-sophon-backup.conf; \
     chmod 0644 /rootfs/etc/ssh/sshd_config.d/*.conf; \
+    install -d -m 0755 /rootfs/etc/local.d; \
     printf '%s\n' \
       '#!/bin/sh' \
+      '/usr/local/sbin/sophon-backup-autoseed || true' > /rootfs/etc/local.d/10-sophon-backup-seed.start; \
+    chmod 0755 /rootfs/etc/local.d/10-sophon-backup-seed.start; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      'if [ ! -e /var/lib/sophon-backup-seed-done ]; then' \
+      '    /usr/local/sbin/sophon-backup-autoseed || true' \
+      'fi' \
       'if [ ! -e /var/lib/sophon-backup-password-set ]; then' \
       '    /usr/local/sbin/sophon-backup-set-password || sleep 2' \
       'fi' \

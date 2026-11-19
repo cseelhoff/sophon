@@ -171,9 +171,21 @@ def test_domain_deferred_until_services():
                 "devices.virtio.virtio0 == 'disks:100'",
                 "devices.ide.ide2 == 'isos:iso/sophon-coreos-digest.iso,media=cdrom'",
                 "devices.ide.ide3 == 'isos:iso/sophon-deployment-digest.iso,media=cdrom'",
+                "'ide0' not in devices.ide",
                 "devices.boot == 'order=virtio0;ide2'",
                 "devices.net.net0 == 'model=virtio,bridge=vmbr0'",
                 "devices.serial.serial0 == 'socket'",
+            ]}},
+            {'ansible.builtin.set_fact': {
+                'infravm_isos': [{'filename': 'sophon-coreos-digest.iso'},
+                                 {'filename': 'sophon-deployment-digest.iso'},
+                                 {'filename': 'sophon-secrets-sophon-infravm-digest.iso'}],
+            }},
+            {'ansible.builtin.set_fact': {'devices_with_seed': {'ide': config['ide']}}},
+            {'ansible.builtin.assert': {'that': [
+                "devices_with_seed.ide.ide0 == 'isos:iso/sophon-secrets-sophon-infravm-digest.iso,media=cdrom'",
+                "devices_with_seed.ide.ide2 == 'isos:iso/sophon-coreos-digest.iso,media=cdrom'",
+                "devices_with_seed.ide.ide3 == 'isos:iso/sophon-deployment-digest.iso,media=cdrom'",
             ]}},
         ])
         assert result.returncode == 0, result.stdout + result.stderr
@@ -282,8 +294,7 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
         assert service['pull_policy'] == 'never' and service['networks'] == ['proxy']
         assert service['environment'] == ['TUNNEL_TOKEN=CONNECTOR_TOKEN']
         assert 'ports' not in service
-        assert set(service['labels']) == {
-            'sophon.backup.version=3', 'sophon.backup.group=cloudflared', 'sophon.backup.stop=false'}
+        assert 'labels' not in service
         # No tunnel (no token or no egress): the role must not touch the network or engine.
         result, _ = run_fixture(directory, [{
             'ansible.builtin.include_tasks': str(ROOT / 'roles/cloudflared/tasks/main.yml'),

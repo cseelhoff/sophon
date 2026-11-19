@@ -22,7 +22,7 @@ param(
     [int]$DiskGB = $(if ($env:SOPHON_INFRAVM_DISK_GB) { $env:SOPHON_INFRAVM_DISK_GB } else { 100 }),
     [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\sophon-installer.iso'),
     [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-deployment.iso'),
-    [string]$CertificatesIso = (Join-Path $PSScriptRoot 'artifacts\secrets\sophon-certificates.iso'),
+    [string]$CertificatesIso = $(if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } elseif (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso')) { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso' } else { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-certificates.iso' }),
     [switch]$AttachCertificates,
     [switch]$DetachCertificates
 )

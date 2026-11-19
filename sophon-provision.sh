@@ -66,38 +66,17 @@ need_secret() {
 }
 
 extra_mounts=()
-if [ "$command" = verify-restore ]; then
-    if [ -t 0 ]; then
-        need SOPHON_PROXMOX_HOST 'Proxmox host name or address'
-        need SOPHON_PROXMOX_NODE 'Proxmox node' proxmox
-        need_secret SOPHON_PROXMOX_PASSWORD
-    fi
-    if [ -z "${SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64:-}" ] && [ -n "${SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE:-}" ]; then
-        key_file=${SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE/#\~/$HOME}
-        [ -f "$key_file" ] || die "SFTP key file not found: $key_file"
-        SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64=$(base64 < "$key_file" | tr -d '\r\n')
-        export SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64
-        unset SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE
-    fi
-    if [ -z "${SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64:-}" ] && [ -n "${SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE:-}" ]; then
-        kh_file=${SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE/#\~/$HOME}
-        [ -f "$kh_file" ] || die "SFTP known_hosts file not found: $kh_file"
-        SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64=$(base64 < "$kh_file" | tr -d '\r\n')
-        export SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64
-        unset SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE
-    fi
-    if [ -n "${SOPHON_VERIFY_RESTORE_CA_FILE:-}" ]; then
-        ca_file=${SOPHON_VERIFY_RESTORE_CA_FILE/#\~/$HOME}
-        [ -f "$ca_file" ] || die "CA file not found: $ca_file"
-        ca_abs=$(cd "$(dirname "$ca_file")" && pwd)/$(basename "$ca_file")
-        extra_mounts+=(-v "$ca_abs:/tmp/sophon-verify-ca.pem:ro")
-        export SOPHON_VERIFY_RESTORE_CA_FILE=/tmp/sophon-verify-ca.pem
-    fi
+if [ "$command" = verify-restore ] && [ -n "${SOPHON_VERIFY_RESTORE_CA_FILE:-}" ]; then
+    ca_file=${SOPHON_VERIFY_RESTORE_CA_FILE/#\~/$HOME}
+    [ -f "$ca_file" ] || die "CA file not found: $ca_file"
+    ca_abs=$(cd "$(dirname "$ca_file")" && pwd)/$(basename "$ca_file")
+    extra_mounts+=(-v "$ca_abs:/tmp/sophon-verify-ca.pem:ro")
+    export SOPHON_VERIFY_RESTORE_CA_FILE=/tmp/sophon-verify-ca.pem
 fi
 
-if [ "$command" = provision ] && [ -t 0 ]; then
+if { [ "$command" = provision ] || [ "$command" = provision-backup ] || [ "$command" = destroy-vm ] || [ "$command" = verify-restore ]; } && [ -t 0 ]; then
     if [ -z "${SOPHON_HYPERVISOR:-}" ]; then
-        printf '%s\n' 'Where should InfraVM run?' '  1) Proxmox' '  2) VMware vCenter' \
+        printf '%s\n' 'Where should the VM run?' '  1) Proxmox' '  2) VMware vCenter' \
             '  3) Microsoft Hyper-V on another host (WinRM)' \
             '  4) Nowhere yet: only download and build the installation media (step 1), then exit'
         read -rp 'Choose 1-4: ' choice
@@ -109,7 +88,7 @@ if [ "$command" = provision ] && [ -t 0 ]; then
             *) die "Choose a number from 1 to 4." ;;
         esac
     fi
-    if [ "$command" = provision ]; then
+    if [ "$command" != prepare ]; then
         case ${SOPHON_HYPERVISOR:-proxmox} in
             vcenter)
                 need SOPHON_VCENTER_URL 'vCenter URL (https://...)'

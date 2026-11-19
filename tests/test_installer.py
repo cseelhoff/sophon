@@ -54,9 +54,14 @@ def bundle(media):
         "runner.tar": "fixture runner",
         "tools/busybox": "fixture binary",
         "project/src/console.py": "print('console')",
+        "project/src/activate.py": "print('activate')",
         "project/site.json": '{"SOPHON_INFRAVM_IP":"10.0.60.2"}',
         "guest/sophon-deploy": (SCRIPTS / "sophon-deploy").read_text(),
         "guest/sophon-restore": (SCRIPTS / "sophon-restore").read_text(),
+        "guest/sophon-activate": (SCRIPTS / "sophon-activate").read_text(),
+        "guest/sophon-seed-early": (SCRIPTS / "sophon-seed-early").read_text(),
+        "guest/sophon-autodeploy": (SCRIPTS / "sophon-autodeploy").read_text(),
+        "guest/sophon-update-issue": (SCRIPTS / "sophon-update-issue").read_text(),
         "guest/host-bootstrap.sh": (SCRIPTS / "host-bootstrap.sh").read_text(),
         "guest/sophon-network": NETWORK.read_text(),
         "guest/sophon-set-password": (SCRIPTS / "sophon-set-password").read_text(),
@@ -160,12 +165,13 @@ class InstallerTests(unittest.TestCase):
 
     def test_shell_syntax_and_no_python_on_host(self):
         scripts = [INSTALL, *(SCRIPTS / name for name in (
-            "sophon-deploy", "host-bootstrap.sh", "sophon-network", "sophon-set-password", "sophon-autoinstall"))]
+            "sophon-deploy", "sophon-activate", "sophon-seed-early", "sophon-autodeploy", "sophon-update-issue",
+            "host-bootstrap.sh", "sophon-network", "sophon-set-password", "sophon-autoinstall"))]
         for script in scripts:
             result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
             self.assert_success(result)
             self.assertTrue(os.access(script, os.X_OK))
-            if script.name != "sophon-deploy":  # the controller starts the runner container, which is Python
+            if script.name not in ("sophon-deploy", "sophon-activate"):
                 self.assertNotIn("python", script.read_text())
 
     def test_manifest_from_arbitrary_mountpoint(self):
@@ -455,11 +461,20 @@ sudo() {{ if [[ $1 == sh ]]; then cat > {shlex.quote(str(keyfile))}; fi; }}
                 set(units),
                 {
                     "var.mount",
+                    "sophon-seed-early.service",
                     "sophon-host-bootstrap.service",
+                    "sophon-autodeploy.service",
                     "sophon-set-password.service",
                     "sophon-set-password-serial.service",
                 },
             )
+            self.assertEqual(files["/usr/local/bin/sophon-activate"][0], 0o755)
+            self.assertEqual(files["/usr/local/libexec/sophon-seed-early"][0], 0o755)
+            self.assertEqual(files["/usr/local/libexec/sophon-autodeploy"][0], 0o755)
+            self.assertEqual(files["/usr/local/libexec/sophon-update-issue"][0], 0o755)
+            self.assertIn("Before=sophon-set-password.service", units["sophon-seed-early.service"]["contents"])
+            self.assertIn("ConditionPathExists=/run/sophon-seed/sophon-seed.json", units["sophon-autodeploy.service"]["contents"])
+            self.assertIn("ConditionPathExists=!/var/lib/sophon/autodeploy.done", units["sophon-autodeploy.service"]["contents"])
             var_mount = units["var.mount"]
             self.assertTrue(var_mount["enabled"])
             self.assertIn("What=/dev/disk/by-label/sophon-var", var_mount["contents"])

@@ -16,23 +16,22 @@ class RestoreTests(unittest.TestCase):
     def fixture(self, root):
         source = root / "snapshot"
         (source / "app/writer").mkdir(parents=True)
-        identity = source / "app/writer/identity"
+        identity = source / "app/writer/path-identity"
         identity.write_text("original-generated-identity")
         identity.chmod(0o400)
         os.chown(identity, 1001, 1002)
         target = {
             "Id": "a" * 64, "Name": "/writer", "Image": "sha256:" + "b" * 64,
             "Config": {"Image": "fixture:1", "Env": ["SECRET=NEVER_SAVE_ENV"], "Labels": {
-                "sophon.backup.version": "3", "sophon.backup.group": "app", "sophon.backup.stop": "true",
-                "sophon.backup.paths.0.name": "identity", "sophon.backup.paths.0.volume": "fresh-data",
-                "sophon.backup.paths.0.path": "identity"}},
+                "sophon.backup.enable": "true", "sophon.backup.group": "app",
+                "sophon.backup.paths": "/data/identity"}},
             "State": {"Running": True},
             "Mounts": [{"Type": "volume", "Name": "fresh-data", "Destination": "/data", "RW": True}],
         }
         manifest = {"version": 3, "sophon_version": "fixture", "failures": [], "groups": [{
             "name": "app", "members": [{"name": "writer", "image": "fixture:1", "image_id": target["Image"]}],
-            "paths": [{"name": "identity", "member": "writer", "volume": "old-data", "path": "identity",
-                       "optional": False, "present": True, "snapshot_path": "app/writer/identity"}], "dumps": []}]}
+            "paths": [{"name": "path-identity", "member": "writer", "volume": "old-data", "path": "identity",
+                       "optional": False, "present": True, "snapshot_path": "app/writer/path-identity"}], "dumps": []}]}
         (source / "manifest.json").write_text(json.dumps(manifest))
         return source, target, manifest
 
@@ -75,8 +74,10 @@ class RestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, target, manifest = self.fixture(root)
-            target["Config"]["Labels"]["sophon.backup.paths.0.path"] = "nested/identity"
-            manifest["groups"][0]["paths"][0]["path"] = "nested/identity"
+            (source / "app/writer/path-identity").rename(source / "app/writer/path-nested-identity")
+            target["Config"]["Labels"]["sophon.backup.paths"] = "/data/nested/identity"
+            manifest["groups"][0]["paths"][0].update(
+                name="path-nested-identity", path="nested/identity", snapshot_path="app/writer/path-nested-identity")
             (source / "manifest.json").write_text(json.dumps(manifest))
             plan = restore.make_plan(source, [target], "app")
             destination, outside = root / "fresh", root / "outside"
@@ -96,10 +97,110 @@ class RestoreTests(unittest.TestCase):
             state = {"version": 3, "owner": "f" * 32, "phase": "planned",
                      "resources": [], "plan": restore.make_plan(source, [target], "app")}
             restore.save(root, state)
-            (source / "app/writer/identity").write_text("corrupted-after-plan")
+            (source / "app/writer/path-identity").write_text("corrupted-after-plan")
             with self.assertRaisesRegex(RuntimeError, "changed after planning"):
                 restore.apply({"transport": lambda *args: calls.append(args)}, root, True, "e" * 64, "restore-state")
         self.assertEqual(calls, [])
+
+    def test_whole_volume_plus_ini_merge_preserves_fresh_db_password_and_skips_kopiaignore(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / "snapshot"
+            vol_snap = snapshot / "gitea/gitea/volume-data"
+            (vol_snap / "git/lfs/objects").mkdir(parents=True)
+            (vol_snap / "git/lfs/objects/oid1").write_text("lfs-content")
+            (vol_snap / ".kopiaignore").write_text("/git/lfs/tmp/\n/gitea/conf/app.ini\n")
+            ini_snap = snapshot / "gitea/gitea/ini-app.ini"
+            ini_snap.write_text("[security]\nSECRET_KEY = restored-secret\n[server]\nLFS_JWT_SECRET = restored-lfs-jwt\n")
+
+            target = {
+                "Id": "a" * 64, "Name": "/gitea", "Image": "sha256:" + "b" * 64,
+                "Config": {"Image": "gitea:1", "Env": [], "Labels": {
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.group": "gitea",
+                    "sophon.backup.volumes": "/data",
+                    "sophon.backup.exclude": "git/lfs/tmp/",
+                    "sophon.backup.ini": "/data/gitea/conf/app.ini:security.SECRET_KEY,server.LFS_JWT_SECRET",
+                }},
+                "State": {"Running": True},
+                "Mounts": [{"Type": "volume", "Name": "gitea_gitea_data", "Destination": "/data", "RW": True}],
+            }
+            manifest = {"version": 3, "sophon_version": "fixture", "failures": [], "groups": [{
+                "name": "gitea",
+                "members": [{"name": "gitea", "image": "gitea:1", "image_id": target["Image"]}],
+                "paths": [
+                    {"name": "volume-data", "member": "gitea", "volume": "old_gitea_data", "path": ".",
+                     "optional": False, "present": True, "snapshot_path": "gitea/gitea/volume-data"},
+                    {"name": "ini-app.ini", "member": "gitea", "volume": "old_gitea_data",
+                     "path": "gitea/conf/app.ini", "optional": False, "present": True,
+                     "ini": ["security.SECRET_KEY", "server.LFS_JWT_SECRET"],
+                     "snapshot_path": "gitea/gitea/ini-app.ini"},
+                ],
+                "dumps": [],
+            }]}
+            (snapshot / "manifest.json").write_text(json.dumps(manifest))
+
+            fresh_vol = root / "fresh-gitea-vol"
+            (fresh_vol / "gitea/conf").mkdir(parents=True)
+            (fresh_vol / "gitea/conf/app.ini").write_text(
+                "[database]\nPASSWD = fresh-rotated-db-password\n[security]\nSECRET_KEY = temporary-fresh-secret\n")
+            (fresh_vol / "stale-file").write_text("remove-me")
+
+            plan = restore.make_plan(snapshot, [target], "gitea")
+            restore.replace_paths(plan, snapshot, {"gitea_gitea_data": str(fresh_vol)})
+
+            self.assertFalse((fresh_vol / ".kopiaignore").exists())
+            self.assertFalse((fresh_vol / "stale-file").exists())
+            self.assertEqual((fresh_vol / "git/lfs/objects/oid1").read_text(), "lfs-content")
+            merged_ini = (fresh_vol / "gitea/conf/app.ini").read_text()
+            self.assertIn("fresh-rotated-db-password", merged_ini)
+            self.assertIn("restored-secret", merged_ini)
+            self.assertIn("restored-lfs-jwt", merged_ini)
+
+    def test_postgres_custom_plan_and_compose_peer_stop_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / "snapshot"
+            (snapshot / "keycloak/keycloak-db").mkdir(parents=True)
+            dump_file = snapshot / "keycloak/keycloak-db/app.dump"
+            dump_bytes = b"PGDMP-custom-archive"
+            dump_file.write_bytes(dump_bytes)
+            sha = hashlib.sha256(dump_bytes).hexdigest()
+
+            db_target = {
+                "Id": "1" * 64, "Name": "/keycloak-db", "Image": "sha256:" + "2" * 64,
+                "Config": {
+                    "Image": "postgres:18",
+                    "Env": ["POSTGRES_USER=keycloak", "POSTGRES_DB=keycloak", "PGDATA=/var/lib/postgresql/18/docker"],
+                    "Labels": {
+                        "com.docker.compose.project": "keycloak",
+                        "sophon.backup.enable": "true",
+                        "sophon.backup.group": "keycloak",
+                        "sophon.backup.dump": 'exec pg_dump -Fc -Z0 -U "$POSTGRES_USER" "$POSTGRES_DB"',
+                        "sophon.backup.dump.name": "app.dump",
+                        "sophon.backup.dump.restore": "postgres-custom",
+                    },
+                },
+                "State": {"Running": True},
+                "Mounts": [{"Type": "volume", "Name": "keycloak_db_data", "Destination": "/var/lib/postgresql", "RW": True}],
+            }
+            peer_app = {
+                "Id": "3" * 64, "Name": "/keycloak", "Image": "sha256:" + "4" * 64,
+                "Config": {"Image": "keycloak:26", "Env": [], "Labels": {"com.docker.compose.project": "keycloak"}},
+                "State": {"Running": True},
+                "Mounts": [],
+            }
+            manifest = {"version": 3, "sophon_version": "fixture", "failures": [], "groups": [{
+                "name": "keycloak",
+                "members": [{"name": "keycloak-db", "image": "postgres:18", "image_id": db_target["Image"]}],
+                "paths": [],
+                "dumps": [{"name": "app.dump", "member": "keycloak-db", "sha256": sha,
+                           "bytes": len(dump_bytes), "snapshot_path": "keycloak/keycloak-db/app.dump"}],
+            }]}
+            (snapshot / "manifest.json").write_text(json.dumps(manifest))
+            plan = restore.make_plan(snapshot, [db_target, peer_app], "keycloak")
+            self.assertEqual([p["name"] for p in plan["peers"]], ["keycloak"])
+            self.assertEqual(plan["dumps"][0]["restore"], "postgres-custom")
 
     def test_failed_start_stops_the_whole_group_and_retry_settles_missing_helpers(self):
         self.failed_start_scenario()
@@ -114,10 +215,7 @@ class RestoreTests(unittest.TestCase):
             source, target, manifest = self.fixture(root)
             second = copy.deepcopy(target)
             second.update(Id="c" * 64, Name="/zsecond", Mounts=[])
-            second["Config"]["Labels"] = {"sophon.backup.version": "3", "sophon.backup.group": "app",
-                                         "sophon.backup.stop": "true"}
-            manifest["groups"][0]["members"].append(
-                {"name": "zsecond", "image": "fixture:1", "image_id": second["Image"]})
+            second["Config"]["Labels"] = {"com.docker.compose.project": "app"}
             (source / "manifest.json").write_text(json.dumps(manifest))
             state = {"version": 3, "owner": "f" * 32, "phase": "planned", "approved": False,
                      "resources": [{"name": "sophon-restore-pending", "id": None, "image": "e" * 64, "binds": []}],

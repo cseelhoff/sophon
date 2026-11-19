@@ -15,26 +15,29 @@ it refuses an unexpected data mount rather than adopting it.
 
 1. Inventory irreproducible data and application-generated keys. Exclude images,
    caches and configuration your deployment recreates.
-2. Replace all `sophon.backup.*` and old `sophon.restore.*` declarations with
-   the [v3 contract](../roles/kopia/README.md#v3-declarations). Do not mix versions.
-3. Declare each filesystem path as a volume **name** and relative path. Add that
-   actual name to `SOPHON_KOPIA_EXTRA_VOLUMES`, retained in site IaC, and redeploy
-   Kopia to mount it read-only.
-4. Put every running filesystem writer in the same group with `stop=true`.
-   Database containers remain running and emit native dumps on stdout. No
-   live database-directory copy is a primary backup.
-5. Remove `${SOPHON_BACKUP_DIR}` temporary-file hooks, tar export helpers,
-   archive/pre/post/restore recipes, coverage and exclusion labels. A dump is
-   a single argv command; use an explicit shell only when needed. The producer
-   requires `sh` and `setsid`.
-6. Represent “reconstructible” with no paths/dumps, not an invented backup of
-   configuration. Unlabelled/undeclared volumes are visible in every report;
+2. Replace legacy `sophon.backup.*` / `sophon.restore.*` declarations with the
+   concise Traefik-style [`sophon.backup.*` label contract](../roles/kopia/README.md#self-service-container-labels)
+   (`sophon.backup.enable: "true"`).
+3. Declare persistent file storage with `sophon.backup.volumes: /data` (plus
+   optional `sophon.backup.exclude` `.kopiaignore` patterns) or selective
+   `sophon.backup.paths`. Kopia automatically discovers named volumes under
+   `/volumes:ro`—no `SOPHON_KOPIA_EXTRA_VOLUMES` variable or Kopia redeploy is needed.
+4. Keep containers running (`sophon.backup.stop` is retired; backups are 100% hot).
+   Database containers emit uncompressed native dumps on stdout (`sophon.backup.dump`
+   with `pg_dump -Fc -Z0` or `pg_dumpall`), executed inside the DB container via
+   `dump-proxy` without sharing DB credentials with Kopia. No live database-directory
+   copy is a primary backup.
+5. Remove `${SOPHON_BACKUP_DIR}` temporary-file hooks, tar export helpers, and
+   archive/pre/post/restore recipes.
+6. Represent reconstructible services with `sophon.backup.enable: "false"` (or omit
+   `sophon.backup.*` labels). Undeclared volumes are visible in every report;
    they are neither automatically backed up nor a whole-run failure.
-7. Keep deployment definitions and supplied secrets outside Portainer.
-   The collector no longer captures stack definitions or environment values.
-8. Run `podman exec kopia python3 /app/backup.py run`, check its exit status and
-   `/source/last-run.json`, and inspect a restored dev snapshot before enabling
-   the schedule.
+7. Keep deployment definitions and supplied secrets in Git / Gitea Actions Secrets,
+   never only in Arcane. `dump-proxy` strips `Config.Env` and never captures
+   container environment variables.
+8. Run `podman exec kopia python3 /app/backup.py run` (or click **Snapshot Now**
+   on `/sophon-state` in the Kopia UI), check `/source/last-run.json`, and verify
+   a test restore (`sophon-restore --group <group>`) before relying on the schedule.
 
 Examples requiring workload-specific decisions:
 

@@ -101,7 +101,18 @@ def host_keys(path, destination):
     return {kind: key.asbytes() for kind, key in keys.items()}
 
 
-def prepare(values, *, root, confirm=None, readonly=False):
+def list_snapshots(values, directory):
+    environment = dict(os.environ, KOPIA_PASSWORD=values['SOPHON_KOPIA_PASSWORD'],
+                       KOPIA_CONFIG_PATH=str(directory / 'repository.config'),
+                       KOPIA_CACHE_DIRECTORY=str(directory / 'cache'),
+                       KOPIA_LOG_DIR=str(directory / 'logs'))
+    return subprocess.run(
+        ['kopia', '--file-log-level=error', '--disable-content-log', 'snapshot', 'list', '--all', '--json'],
+        env=environment, capture_output=True, text=True, timeout=120,
+    )
+
+
+def prepare(values, *, root, confirm=None, readonly=False, auto=False):
     """Return deployable SSH material after authenticated SFTP and Kopia checks."""
     values = dict(values)
     state = Path(root)
@@ -188,7 +199,51 @@ def prepare(values, *, root, confirm=None, readonly=False):
                 path = values['SOPHON_KOPIA_SFTP_PATH']
                 if not stat.S_ISDIR(sftp.stat(path).st_mode):
                     raise ValueError('The SFTP repository path is not a directory.')
-                if readonly:
+                if auto:
+                    sftp.listdir(path)
+                    result = repository(values, directory, keyfile, known_hosts, 'connect')
+                    if result.returncode and result.stderr.strip() == NOT_INITIALIZED:
+                        if values.get('SOPHON_KOPIA_SFTP_USERNAME') == 'sophon-restore':
+                            raise ValueError('No Kopia repository found at the SFTP destination; '
+                                             'read-only SFTP account sophon-restore cannot initialize Day 1.')
+                        if not unused_destination(sftp, path):
+                            raise ValueError('No Kopia repository found, but the destination is not empty; refusing creation.')
+                        available = free_space(values, keyfile, known_hosts)
+                        payload = os.urandom(64)
+                        if available is not None and available < len(payload):
+                            raise ValueError('The SFTP destination has insufficient free space for the write check.')
+                        probe = path.rstrip('/') + '/.sophon-preflight-' + uuid.uuid4().hex
+                        created = False
+                        try:
+                            with sftp.open(probe, 'wx') as stream:
+                                created = True
+                                stream.write(payload)
+                            with sftp.open(probe, 'rb') as stream:
+                                if stream.read() != payload:
+                                    raise ValueError('SFTP read/write integrity check failed.')
+                        finally:
+                            if created:
+                                sftp.remove(probe)
+                        print('Empty SFTP repository detected; initializing Day-1 encrypted Kopia repository.')
+                        check_repository_result(repository(values, directory, keyfile, known_hosts, 'create'), values)
+                        check_repository_result(repository(values, directory, keyfile, known_hosts, 'connect'), values)
+                        values['_SOPHON_AUTO_MODE'] = 'day1'
+                    else:
+                        check_repository_result(result, values)
+                        snaps = list_snapshots(values, directory)
+                        check_repository_result(snaps, values)
+                        parsed_snaps = json.loads(snaps.stdout or '[]')
+                        if parsed_snaps:
+                            print(f'Existing Kopia repository with {len(parsed_snaps)} snapshot(s) detected; '
+                                  'entering safe standby restore mode.')
+                            values['_SOPHON_AUTO_MODE'] = 'standby_restore'
+                            values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+                        else:
+                            if values.get('SOPHON_KOPIA_SFTP_USERNAME') == 'sophon-restore':
+                                raise ValueError('Existing Kopia repository has zero snapshots to restore.')
+                            print('Existing empty Kopia repository detected; proceeding with Day-1 initialization.')
+                            values['_SOPHON_AUTO_MODE'] = 'day1'
+                elif readonly:
                     sftp.listdir(path)
                     print('SFTP reachability/authentication/read-only directory check passed.')
                     result = repository(values, directory, keyfile, known_hosts, 'connect')

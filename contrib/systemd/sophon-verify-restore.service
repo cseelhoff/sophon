@@ -1,5 +1,5 @@
 [Unit]
-Description=Sophon weekly automated disaster-recovery restore drill (Proxmox serial0)
+Description=Sophon weekly automated disaster-recovery restore drill (Proxmox, vCenter, or Hyper-V)
 Documentation=https://github.com/cseelhoff/sophon/blob/main/docs/operator-guide.md
 Wants=network-online.target
 After=network-online.target

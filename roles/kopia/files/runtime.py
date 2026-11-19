@@ -76,7 +76,7 @@ def sync_ui(environment):
         pass
 
 
-def connect(environment, readonly=False):
+def connect(environment, readonly=False, enable_actions=False):
     required(environment, "KOPIA_PASSWORD")
     host = required(environment, "KOPIA_SFTP_HOST")
     user = required(environment, "KOPIA_SFTP_USERNAME")
@@ -101,11 +101,31 @@ def connect(environment, readonly=False):
     ]
     if is_readonly:
         arguments.append("--readonly")
+    elif enable_actions:
+        arguments.append("--enable-actions")
     kopia(environment, *arguments)
 
 
+def _trigger_initial_snapshot(server_env, source_root, server, is_shutting_down):
+    deadline = time.monotonic() + 30
+    while not is_shutting_down():
+        if server.poll() is not None:
+            raise RuntimeError(f"Kopia UI server exited: {server.returncode}")
+        try:
+            kopia(server_env, "server", "status", timeout=10)
+            break
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
+    if is_shutting_down():
+        return
+    if not (source_root / "last-run.json").exists():
+        kopia(server_env, "server", "snapshot", "/sophon-state", timeout=30)
+
+
 def start(environment):
-    required(environment, "KOPIA_SERVER_PASSWORD")
+    server_password = required(environment, "KOPIA_SERVER_PASSWORD")
     readonly = environment.get("KOPIA_READONLY", "false").strip().lower()
     if readonly not in ("true", "false"):
         raise ValueError("KOPIA_READONLY must be true or false")
@@ -118,22 +138,43 @@ def start(environment):
     client_host = required(environment, "KOPIA_CLIENT_HOSTNAME")
     if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) for value in (client_user, client_host)):
         raise ValueError("Invalid backup source identity")
-    connect(environment, readonly=(readonly == "true"))
+    interval = required(environment, "KOPIA_SNAPSHOT_INTERVAL")
+    if not re.fullmatch(r"([1-9][0-9]*)(s|m|h|d)", interval):
+        raise ValueError("Snapshot interval must be a positive number followed by s, m, h or d")
+    action_timeout = int(environment.get("COMMAND_TIMEOUT", "900"))
+    if action_timeout <= 0:
+        raise ValueError("COMMAND_TIMEOUT must be positive")
+    backup.engine_api(required(environment, "ENGINE_URL"), action_timeout)
+
+    server_env = dict(environment)
+    server_env["KOPIA_SERVER_CONTROL_USER"] = server_env.get("KOPIA_SERVER_USERNAME", "admin")
+    server_env["KOPIA_SERVER_CONTROL_PASSWORD"] = server_password
+
+    source_root = Path(server_env.get("SOURCE_ROOT", "/source"))
+    with backup.locked(source_root) as root:
+        backup.cleanup_stale_runs(root)
+        if readonly != "true" and enabled == "true":
+            (root / "last-run.json").unlink(missing_ok=True)
+
+    connect(server_env, readonly=(readonly == "true"), enable_actions=(readonly != "true"))
     if readonly != "true":
-        kopia(environment, "repository", "set-client", "--username=" + client_user, "--hostname=" + client_host)
-        kopia(environment, "maintenance", "set", "--owner=" + client_user + "@" + client_host,
+        kopia(server_env, "repository", "set-client", "--username=" + client_user, "--hostname=" + client_host)
+        kopia(server_env, "maintenance", "set", "--owner=" + client_user + "@" + client_host,
               "--enable-quick=true", "--enable-full=true", "--quick-interval=24h", "--full-interval=168h")
-        kopia(environment, "policy", "set", "--global", "--keep-latest=10", "--keep-hourly=24",
+        kopia(server_env, "policy", "set", "--global", "--keep-latest=10", "--keep-hourly=24",
               "--keep-daily=14", "--keep-weekly=8", "--keep-monthly=12", "--keep-annual=3",
               "--snapshot-interval=0s", "--ignore-identical-snapshots=false")
-    interval = required(environment, "KOPIA_SNAPSHOT_INTERVAL")
-    match = re.fullmatch(r"([1-9][0-9]*)(s|m|h|d)", interval)
-    if not match:
-        raise ValueError("Snapshot interval must be a positive number followed by s, m, h or d")
-    seconds = int(match[1]) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[match[2]]
-    with backup.locked(environment.get("SOURCE_ROOT", "/source")) as root:
-        backup.recover(backup.engine_api(required(environment, "ENGINE_URL")), root)
-    server, worker = None, None
+        kopia(
+            server_env, "policy", "set", "/sophon-state",
+            "--before-snapshot-root-action=/app/backup.py",
+            "--after-snapshot-root-action=/app/backup.py",
+            "--no-persist-action-script",
+            "--action-command-mode=essential",
+            "--action-command-timeout=" + str(action_timeout) + "s",
+            "--snapshot-interval=" + (interval if enabled == "true" else "0s"),
+        )
+
+    server = None
     shutting_down = False
 
     def terminate(signum, frame):
@@ -142,35 +183,30 @@ def start(environment):
 
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
-    due = time.monotonic()
+    server_cmd = [
+        "kopia", "server", "start",
+        "--address=http://0.0.0.0:51515",
+        "--insecure", "--ui", "--control-api",
+        "--shutdown-grace-period=180s",
+    ]
+    if readonly != "true":
+        server_cmd.append("--enable-actions")
     try:
-        server = subprocess.Popen(["kopia", "server", "start", "--address=http://0.0.0.0:51515",
-                                   "--insecure", "--ui", "--control-api", "--shutdown-grace-period=180s"],
-                                  env=environment)
+        server = subprocess.Popen(server_cmd, env=server_env)
+        if readonly != "true" and enabled == "true":
+            _trigger_initial_snapshot(server_env, source_root, server, lambda: shutting_down)
         while not shutting_down:
             if server.poll() is not None:
                 raise RuntimeError(f"Kopia UI server exited: {server.returncode}")
-            if worker is not None and worker.poll() is not None:
-                if worker.returncode:
-                    print(f"ERROR backup run exited {worker.returncode}; inspect /source/last-run.json",
-                          file=sys.stderr, flush=True)
-                    if (Path(environment.get("SOURCE_ROOT", "/source")) / "journal.json").exists():
-                        raise RuntimeError("Backup recovery is pending; restart will retry before serving the UI")
-                worker = None
-                due = time.monotonic() + seconds
-            if enabled == "true" and worker is None and time.monotonic() >= due:
-                worker = subprocess.Popen(["python3", "/app/backup.py", "run"], env=environment)
-            time.sleep(.5)
+            time.sleep(0.5)
     finally:
-        for process in (worker, server):
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=180)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                    print("ERROR forced child termination; stop recovery remains journaled", file=sys.stderr)
+        if server is not None and server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=180)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait()
 
 
 if __name__ == "__main__":

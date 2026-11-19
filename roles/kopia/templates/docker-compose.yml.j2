@@ -1,6 +1,6 @@
 services:
-  engine-proxy:
-    image: {{ kopia_proxy_image }}
+  dump-proxy:
+    image: {{ kopia_image }}
     pull_policy: never
     container_name: kopia-engine
     user: "0:0"
@@ -8,19 +8,17 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["label=disable", "no-new-privileges:true"]
+    entrypoint: ["python3", "/app/dump_proxy.py"]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     networks: [backup-engine]
     volumes:
       - /run/user/1000/podman/podman.sock:/socket/podman.sock:ro
-      - ${SOPHON_PROJECT_PATH:-/var/lib/sophon/project}/roles/kopia/files/engine-proxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2375/containers/json"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:2375/healthz', timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 6
-    labels:
-      sophon.backup.version: "3"
-      sophon.backup.group: kopia
-      sophon.backup.stop: "false"
 
   kopia:
     image: {{ kopia_image }}
@@ -36,17 +34,19 @@ services:
     security_opt: ["label=disable", "no-new-privileges:true"]
     networks: [proxy, backup-engine]
     depends_on:
-      engine-proxy:
+      dump-proxy:
         condition: service_healthy
     environment:
       SOURCE_ROOT: /source
-      ENGINE_URL: http://engine-proxy:2375
+      VOLUMES_ROOT: /volumes
+      ENGINE_URL: http://dump-proxy:2375
       SOPHON_VERSION: {{ sophon_version | to_json }}
-      BACKUP_VOLUMES: {{ dict(kopia_volume_names | zip(kopia_volume_names | map('regex_replace', '^', '/volumes/'))) | to_json | to_json }}
       COMMAND_TIMEOUT: "900"
       KOPIA_PASSWORD: ${KOPIA_PASSWORD:?Set the repository encryption password}
       KOPIA_SERVER_USERNAME: ${KOPIA_SERVER_USERNAME:-admin}
       KOPIA_SERVER_PASSWORD: ${KOPIA_SERVER_PASSWORD:?Set the UI password}
+      KOPIA_SERVER_CONTROL_USER: ${KOPIA_SERVER_USERNAME:-admin}
+      KOPIA_SERVER_CONTROL_PASSWORD: ${KOPIA_SERVER_PASSWORD:?Set the UI password}
       KOPIA_SFTP_HOST: ${KOPIA_SFTP_HOST:?Set the SFTP host}
       KOPIA_SFTP_PORT: ${KOPIA_SFTP_PORT:-22}
       KOPIA_SFTP_USERNAME: ${KOPIA_SFTP_USERNAME:?Set the SFTP username}
@@ -65,9 +65,10 @@ services:
       - cache-v3:/cache
       - logs-v3:/logs
       - source-v3:/source
-{% for volume in kopia_volume_names %}
-      - input-{{ loop.index0 }}:/volumes/{{ volume }}:ro
-{% endfor %}
+      - type: bind
+        source: {{ kopia_volumes_dir | to_json }}
+        target: /volumes
+        read_only: true
     healthcheck:
       test: ["CMD", "python3", "/app/runtime.py", "health"]
       interval: 30s
@@ -75,9 +76,6 @@ services:
       retries: 5
       start_period: 120s
     labels:
-      sophon.backup.version: "3"
-      sophon.backup.group: kopia
-      sophon.backup.stop: "false"
       traefik.enable: "true"
       traefik.docker.network: proxy
       traefik.http.routers.kopia.rule: "Host(`{{ kopia_fqdn }}`)"
@@ -131,10 +129,6 @@ services:
         source: {{ kopia_coarse_work_dir | to_json }}
         target: /coarse
       - source-v3:/source:ro
-    labels:
-      sophon.backup.version: "3"
-      sophon.backup.group: kopia
-      sophon.backup.stop: "false"
 {% endif %}
 networks:
   proxy:
@@ -146,8 +140,3 @@ volumes:
   cache-v3:
   logs-v3:
   source-v3:
-{% for volume in kopia_volume_names %}
-  input-{{ loop.index0 }}:
-    external: true
-    name: {{ volume | to_json }}
-{% endfor %}

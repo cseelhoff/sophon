@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Unattended Sophon deployment & safe-standby auto-restore runner.
+# Consumes RAM-staged /run/sophon-seed/sophon-seed.json once per install, configures networking,
+# runs `sophon-deploy --auto`, auto-restores latest snapshot in safe standby mode if snapshots exist,
+# and verifies all services locally inside the guest.
+set -euo pipefail
+
+STAGE=/run/sophon-seed
+STATUS_FILE=/var/lib/sophon/autodeploy-status.json
+DONE_FILE=/var/lib/sophon/autodeploy.done
+
+[[ ! -e $DONE_FILE ]] || exit 0
+[[ -f $STAGE/sophon-seed.json ]] || exit 0
+
+write_status() {
+    local status=$1 mode=$2 domain=$3 ip=$4 snapshot=${5:-} err=${6:-}
+    install -d -m 0755 /var/lib/sophon
+    jq -n \
+        --arg status "$status" \
+        --arg mode "$mode" \
+        --arg domain "$domain" \
+        --arg ip "$ip" \
+        --arg snapshot "$snapshot" \
+        --arg error "$err" \
+        --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{status:$status, mode:$mode, domain:$domain, infravm_ip:$ip, snapshot:$snapshot, error:$error, updated_at:$updated_at}' \
+        > "${STATUS_FILE}.tmp"
+    chmod 0644 "${STATUS_FILE}.tmp"
+    mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+}
+
+seed_domain=$(jq -r '.env.SOPHON_DOMAIN // "sophon"' "$STAGE/sophon-seed.json")
+on_error() {
+    local rc=$?
+    rm -rf "$STAGE" /run/user/1000/sophon-seed
+    write_status "failed" "unknown" "$seed_domain" "" "" "sophon-autodeploy exited with status $rc"
+    /usr/local/libexec/sophon-update-issue failed "$seed_domain" "" "" || true
+    exit "$rc"
+}
+trap on_error ERR
+
+echo "== Sophon unattended deployment starting for ${seed_domain} =="
+write_status "running" "detecting" "$seed_domain" ""
+
+net_mode=$(jq -r '.network.mode // "dhcp"' "$STAGE/sophon-seed.json")
+net_dns=$(jq -r '.network.dns // "1.1.1.1"' "$STAGE/sophon-seed.json")
+deploy_net_args=()
+if [[ $net_mode == "static" ]]; then
+    net_cidr=$(jq -er '.network.cidr' "$STAGE/sophon-seed.json")
+    net_gw=$(jq -er '.network.gateway' "$STAGE/sophon-seed.json")
+    deploy_net_args=(--network-cidr "$net_cidr" --gateway "$net_gw" --dns "$net_dns")
+else
+    deploy_net_args=(--accept-dhcp --dns "$net_dns")
+fi
+
+core_seed_dir=/run/user/1000/sophon-seed
+rm -rf "$core_seed_dir"
+install -d -o core -g core -m 0700 "$core_seed_dir"
+install -o core -g core -m 0600 "$STAGE/sophon-seed.json" "$core_seed_dir/sophon-seed.json"
+
+if [[ -f $STAGE/acme.json ]]; then
+    install -d -o core -g core -m 0700 /var/lib/sophon/project/imports
+    install -o core -g core -m 0600 "$STAGE/acme.json" /var/lib/sophon/project/imports/acme.json
+fi
+rm -rf "$STAGE"
+
+runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 SOPHON_AUTODEPLOY=1 \
+    /usr/local/bin/sophon-deploy "${deploy_net_args[@]}" --auto
+rm -rf "$core_seed_dir"
+
+mode=$(jq -er '.mode' /var/lib/sophon/project/deploy-result.json)
+domain=$(jq -er '.domain' /var/lib/sophon/project/deploy-result.json)
+ip=$(jq -er '.infravm_ip' /var/lib/sophon/project/deploy-result.json)
+restored_snapshot=""
+
+if [[ $mode == "standby_restore" ]]; then
+    echo "== Existing backup repository detected: restoring latest snapshot in safe standby mode =="
+    write_status "restoring" "standby_restore" "$domain" "$ip"
+    runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        /usr/local/bin/sophon-restore --snapshot latest --yes
+    restored_snapshot=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        podman --remote=false exec kopia sh -c 'kopia snapshot list --all --json | jq -r "sort_by(.startTime) | last | .id[0:12] // empty"' 2>/dev/null || true)
+fi
+
+echo "== Verifying Sophon containers and HTTPS endpoints inside guest =="
+for svc in coredns traefik openldap keycloak gitea arcane kopia; do
+    ok=0
+    for _ in $(seq 1 60); do
+        state=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+            podman --remote=false inspect --format '{{.State.Status}}:{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$svc" 2>/dev/null || true)
+        if [[ $state == "running:healthy" || $state == "running:none" ]]; then
+            ok=1
+            break
+        fi
+        sleep 3
+    done
+    if [[ $ok -ne 1 ]]; then
+        echo "Verification failed: container $svc did not reach running/healthy state ($state)." >&2
+        exit 1
+    fi
+done
+
+if [[ $mode == "standby_restore" ]]; then
+    if runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        podman --remote=false container exists cloudflared; then
+        echo "Safety check failed: cloudflared must not be running in standby_restore mode." >&2
+        exit 1
+    fi
+    kopia_ro=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        podman --remote=false inspect --format '{{range .Config.Env}}{{println .}}{{end}}' kopia | awk -F= '$1=="KOPIA_READONLY"{print $2}')
+    if [[ $kopia_ro != "true" ]]; then
+        echo "Safety check failed: kopia must have KOPIA_READONLY=true in standby_restore mode." >&2
+        exit 1
+    fi
+fi
+
+verify_url() {
+    local host=$1 path=$2
+    for _ in $(seq 1 30); do
+        if curl -fsS --max-time 10 --resolve "${host}:443:${ip}" "https://${host}${path}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 3
+    done
+    echo "HTTPS verification failed for https://${host}${path} (${ip})." >&2
+    return 1
+}
+
+verify_url "auth.${domain}" "/realms/master/.well-known/openid-configuration"
+verify_url "git.${domain}" "/api/v1/version"
+verify_url "arcane.${domain}" "/"
+
+write_status "verified" "$mode" "$domain" "$ip" "$restored_snapshot"
+/usr/local/libexec/sophon-update-issue "$mode" "$domain" "$ip" "$restored_snapshot" || true
+install -m 0644 /dev/null "$DONE_FILE"
+echo "== Sophon unattended deployment verified (mode=${mode}, domain=${domain}, ip=${ip}${restored_snapshot:+, snapshot=$restored_snapshot}) =="

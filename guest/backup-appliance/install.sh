@@ -23,7 +23,7 @@ find_media() {
         fi
     done
     mkdir -p /mnt/sophon-media
-    for dev in /dev/disk/by-label/SOPHON_BACKUP_INSTALL /dev/sr0 /dev/sr1; do
+    for dev in /dev/disk/by-label/SOPHON_BACKUP_INSTALL /dev/sr0 /dev/sr1 /dev/sr2; do
         [ -b "$dev" ] || continue
         if mount -o ro "$dev" /mnt/sophon-media 2>/dev/null; then
             if [ -f /mnt/sophon-media/sophon-backup-os.tar.gz ]; then

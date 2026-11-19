@@ -2,11 +2,13 @@
 
 import argparse
 import getpass
+import json
 import os
 from pathlib import Path
 import select
 import subprocess
 import sys
+import tempfile
 import termios
 
 import deployment
@@ -106,14 +108,43 @@ def prompt_shared_password(values, fields):
     return shared
 
 
+def _write_json_private(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp = tempfile.mkstemp(prefix='.sophon-json-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Configure Sophon services on installed InfraVM')
     parser.add_argument('--run', action='store_true', help='Validate exported settings and run without prompting')
+    parser.add_argument('--auto', action='store_true',
+                        help='Unattended deployment: initialize Day 1 if SFTP repository is empty, or deploy in safe standby mode if snapshots exist')
+    parser.add_argument('--seed-file', type=Path, default=Path('/run/sophon-seed/sophon-seed.json'),
+                        help='Optional RAM-backed seed JSON file consumed and unlinked on startup')
     parser.add_argument('--refresh-certificates', action='store_true',
                         help='Replace an existing Traefik certificate store with the validated local handoff')
     parser.add_argument('--prepare-restore', action='store_true',
                         help='Deploy services as a read-only standby ready for sophon-restore without touching Cloudflare or writing backups')
     options = parser.parse_args(argv)
+    if options.auto:
+        options.run = True
+        if options.seed_file and options.seed_file.is_file() and not options.seed_file.is_symlink():
+            try:
+                seed_doc = json.loads(options.seed_file.read_text(encoding='utf-8'))
+            finally:
+                options.seed_file.unlink(missing_ok=True)
+            for k, v in (seed_doc.get('env') or {}).items():
+                if isinstance(k, str) and isinstance(v, str) and k.startswith('SOPHON_'):
+                    os.environ.setdefault(k, v)
     if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
         parser.error('Start this program using sophon-deploy on installed InfraVM.')
     try:
@@ -125,6 +156,17 @@ def main(argv=None):
     prepare_restore = options.prepare_restore or os.environ.get('SOPHON_PREPARE_RESTORE', '').strip().lower() == 'true'
     arguments = ['--step', 'configure']
     values = deployment.new_control(os.environ, 'configure')['values']
+    desired_standby = {
+        'domain': values.get('SOPHON_DOMAIN', ''),
+        'desired_cf_tunnel_enabled': values.get('SOPHON_CF_TUNNEL_ENABLED', 'true') == 'true' and bool(values.get('SOPHON_CF_TOKEN', '').strip()),
+        'desired_cf_tunnel_name': values.get('SOPHON_CF_TUNNEL_NAME', 'sophon'),
+        'desired_acme_email': values.get('SOPHON_ACME_EMAIL', 'admin@example.com'),
+        'desired_backups_enabled': values.get('SOPHON_KOPIA_BACKUPS_ENABLED', 'true') == 'true',
+        'desired_snapshot_interval': values.get('SOPHON_KOPIA_SNAPSHOT_INTERVAL', '6h'),
+        'desired_coarse_enabled': values.get('SOPHON_KOPIA_COARSE_ENABLED', 'false') == 'true',
+        'desired_coarse_volumes_dir': values.get('SOPHON_KOPIA_COARSE_VOLUMES_DIR', '/var/home/core/.local/share/containers/storage/volumes'),
+        'desired_coarse_work_dir': values.get('SOPHON_KOPIA_COARSE_WORK_DIR', '/var/home/core/sophon-coarse'),
+    }
     if prepare_restore:
         values['SOPHON_CF_TOKEN'] = ''
         values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
@@ -194,7 +236,17 @@ def main(argv=None):
     try:
         values = backup_destination.prepare(values, root=deployment.ROOT,
                                             confirm=None if options.run else ask_yes_no,
-                                            readonly=prepare_restore)
+                                            readonly=prepare_restore,
+                                            auto=options.auto)
+        auto_mode = values.pop('_SOPHON_AUTO_MODE', None)
+        if auto_mode == 'standby_restore':
+            prepare_restore = True
+            values['SOPHON_CF_TOKEN'] = ''
+            values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
+            values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+            values['SOPHON_KOPIA_COARSE_ENABLED'] = 'false'
+            values['SOPHON_KOPIA_CREATE_REPOSITORY'] = 'false'
+            # Discard any imported acme.json only if none was provided; if acme.json WAS on the ISO, keep it so Traefik starts with valid TLS immediately.
         values = deployment.stage_certificates(values)
         values['SOPHON_ARCANE_ENCRYPTION_KEY'] = deployment.ensure_arcane_encryption_key(deployment.ROOT)
     except KeyboardInterrupt:
@@ -207,6 +259,13 @@ def main(argv=None):
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f'Configure preflight failed: {error}', file=sys.stderr)
         return 2
+    standby_file = deployment.ROOT / 'standby.json'
+    desired_standby['domain'] = values.get('SOPHON_DOMAIN', desired_standby['domain'])
+    desired_standby['sftp_username'] = values.get('SOPHON_KOPIA_SFTP_USERNAME', '')
+    if prepare_restore:
+        _write_json_private(standby_file, desired_standby)
+    else:
+        standby_file.unlink(missing_ok=True)
     os.environ.pop('SOPHON_ACME_FILE', None)
     os.environ.update(values)
     os.environ['SOPHON_KOPIA_PREFLIGHT_COMPLETE'] = 'true'
@@ -215,7 +274,18 @@ def main(argv=None):
     else:
         os.environ.pop('SOPHON_PREPARE_RESTORE', None)
     extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
-    return deployment.main(arguments + ['--', '4-configure.yml', *extra])
+    rc = deployment.main(arguments + ['--', '4-configure.yml', *extra])
+    if rc == 0:
+        _write_json_private(
+            deployment.ROOT / 'deploy-result.json',
+            {
+                'mode': auto_mode or ('standby_restore' if prepare_restore else 'day1'),
+                'domain': values.get('SOPHON_DOMAIN', ''),
+                'infravm_ip': values.get('SOPHON_INFRAVM_IP', ''),
+                'prepare_restore': bool(prepare_restore),
+            },
+        )
+    return rc
 
 
 if __name__ == '__main__':

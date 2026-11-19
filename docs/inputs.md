@@ -103,9 +103,11 @@ resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on
 
 ### Kopia backup inputs
 
-Kopia deploys last, after core source volumes exist. Its backup operation needs
-no Arcane/Gitea token, stack definitions or environment capture. The collector
-uses a restricted engine proxy and explicitly mounted read-only source volumes.
+Kopia deploys last, after the core stacks exist. Its backup operation needs
+no Arcane/Gitea token, stack definitions or environment capture. Kopia's native
+scheduler and before/after snapshot actions use a locked-down `dump-proxy`
+(which strips `Config.Env` and only runs label-declared dump commands) and
+read-only `/volumes:ro` discovery for declared named volumes.
 Keep stack definitions in IaC and supplied secrets outside Arcane.
 
 These are Configure inputs on InfraVM, not laptop `.env` settings:
@@ -120,9 +122,8 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 | `SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64` | Optional single-line base64 of independently verified `known_hosts` for unattended pairing. Include all offered keys, with `[host]:port` for non-22 ports. Overrides cannot replace saved trust. |
 | `SOPHON_KOPIA_CREATE_REPOSITORY` | Optional unattended creation confirmation (`true`); default `false`. Used only for an exact missing repository on an unused path, never an existing repository or other error. No reset/rerun step is needed. |
 | `SOPHON_KOPIA_CLIENT_USERNAME`, `_CLIENT_HOSTNAME` | Stable snapshot source identity, default `backup@sophon`. Preserve it on reruns/recovery. |
-| `SOPHON_KOPIA_EXTRA_VOLUMES` | Site workload volume names as a JSON array, default `[]`. Core roles declare their own list. These become read-only mounts, not host paths. Retain the list in site IaC and redeploy after changes. |
-| `SOPHON_KOPIA_BACKUPS_ENABLED` | Default `true` (Configure runs and verifies the initial primary snapshot automatically and enables the schedule in one step; interactive pairing of a new VM to an existing repository offers to pause until `sophon-restore` runs). |
-| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix. The container supervisor schedules collector runs, not raw filesystem snapshots. |
+| `SOPHON_KOPIA_BACKUPS_ENABLED` | Default `true` (Configure triggers and verifies the initial primary snapshot automatically and leaves Kopia's native `--snapshot-interval` schedule active in one step; interactive pairing of a new VM to an existing repository offers to pause until `sophon-restore` runs). |
+| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix, applied directly to Kopia's native snapshot policy (`--snapshot-interval`). |
 | `SOPHON_KOPIA_COARSE_ENABLED` | Optional last-resort weekly live Btrfs subvolume snapshot layer, default `false`, independent of the primary schedule. |
 | `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | Host rootless Podman Btrfs `volumes` subvolume (default `/var/home/core/.local/share/containers/storage/volumes`), mounted read-only. |
 | `SOPHON_KOPIA_COARSE_WORK_DIR` | Disjoint host Btrfs working directory outside the volumes subvolume (default `/var/home/core/sophon-coarse`). Holds temporary read-only snapshot staging, config/cache/logs. |

@@ -1,5 +1,4 @@
 ---
-arcane_backup_volumes: []
 arcane_hostname: "arcane"
 arcane_domain: "{{ domain_name }}"
 arcane_fqdn: "{{ arcane_hostname }}.{{ arcane_domain | lower | regex_replace('\\.$', '') }}"

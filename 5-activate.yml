@@ -1,0 +1,57 @@
+---
+# Step 5 (optional) - promotes a standby-restored InfraVM into active production.
+# Switches Kopia from read-only standby to read-write scheduled backups (verifying an immediate snapshot)
+# and, when configured, publishes Cloudflare DNS records and connects cloudflared.
+- name: Promote standby-restored InfraVM to active production
+  hosts: localhost
+  gather_facts: false
+  pre_tasks:
+    - name: Require the InfraVM runner and completed write preflight
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'SOPHON_DEPLOYMENT_STEP') == 'configure'
+          - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
+          - lookup('env', 'SOPHON_VCENTER_PASSWORD') == ''
+          - lookup('env', 'SOPHON_KOPIA_PREFLIGHT_COMPLETE') == 'true'
+          - not (prepare_restore | bool)
+        fail_msg: "Start production promotion using sophon-activate on the restored InfraVM."
+      tags: [always]
+    - name: Validate domain, InfraVM address, and Kopia credentials
+      ansible.builtin.assert:
+        that:
+          - domain_name | length > 0
+          - infravm_ip is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
+          - kopia_password | trim | length > 0
+          - kopia_server_password | trim | length > 0
+          - kopia_sftp_private_key_b64 | trim | length > 0
+          - kopia_sftp_known_hosts_b64 | trim | length > 0
+        fail_msg: "Missing site or Kopia credentials required for production activation."
+      tags: [always]
+    - name: Point service names at InfraVM inside the runner
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} SOPHON SERVICE NAMES"
+        unsafe_writes: true
+        block: |
+          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia'] %}
+          {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
+          {% endfor %}
+      tags: [always]
+  tasks:
+    - name: Reconcile CoreDNS (and publish Cloudflare tunnel DNS routes when enabled)
+      ansible.builtin.include_role:
+        name: coredns
+      when: cf_tunnel_enabled | bool
+    - name: Reconcile Cloudflare tunnel connector
+      ansible.builtin.include_role:
+        name: cloudflared
+    - name: Promote Kopia to active read-write scheduled backups
+      ansible.builtin.include_role:
+        name: kopia
+    - name: Snapshot live acme.json after activation
+      ansible.builtin.include_role:
+        name: traefik
+        tasks_from: backup_acme
+    - name: Report production activation complete
+      ansible.builtin.debug:
+        msg: "Production activation complete for {{ domain_name }} ({{ infravm_ip }}). Scheduled backups are active."

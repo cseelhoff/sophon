@@ -63,10 +63,12 @@ args=(
 if [[ -t 0 && -t 1 ]]; then
     args+=(-it)
 fi
-# A secret disk (label SOPHON_CERTS) carries the pre-issued certificate file for air-gapped sites.
-# It is copied into the project's imports folder (removed again once it is staged) and then left alone.
+# A secret disk (label SOPHON_CERTS) carries the pre-issued certificate file for air-gapped sites
+# (or sophon-autodeploy may have already staged /var/lib/sophon/project/imports/acme.json before ejecting the ISO).
 certs_device=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
-if [[ -e $certs_device ]]; then
+if [[ -f /var/lib/sophon/project/imports/acme.json ]]; then
+    export SOPHON_ACME_FILE=/workspace/imports/acme.json
+elif [[ -e $certs_device ]]; then
     mount_point=$(mktemp -d)
     if sudo mount -o ro "$certs_device" "$mount_point" 2>/dev/null; then
         if [[ -f $mount_point/acme.json ]]; then
@@ -74,7 +76,7 @@ if [[ -e $certs_device ]]; then
             install -m 600 "$mount_point/acme.json" /var/lib/sophon/project/imports/acme.json
             export SOPHON_ACME_FILE=/workspace/imports/acme.json
             echo "Found the certificate disk; using its acme.json."
-        else
+        elif [[ ! -f $mount_point/sophon-seed.json ]]; then
             echo "Warning: the certificate disk has no acme.json." >&2
         fi
         sudo umount "$mount_point" || true
@@ -82,6 +84,9 @@ if [[ -e $certs_device ]]; then
         echo "Warning: the certificate disk could not be mounted; no certificate file was loaded." >&2
     fi
     rmdir "$mount_point" 2>/dev/null || true
+fi
+if [[ -d /run/user/1000/sophon-seed ]]; then
+    args+=(-v /run/user/1000/sophon-seed:/run/sophon-seed:Z)
 fi
 for name in \
     SOPHON_ACME_FILE SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
@@ -96,7 +101,7 @@ for name in \
     SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PATH \
     SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 \
     SOPHON_KOPIA_CREATE_REPOSITORY \
-    SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME SOPHON_KOPIA_EXTRA_VOLUMES \
+    SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME \
     SOPHON_KOPIA_BACKUPS_ENABLED SOPHON_KOPIA_SNAPSHOT_INTERVAL \
     SOPHON_KOPIA_COARSE_ENABLED SOPHON_KOPIA_COARSE_VOLUMES_DIR SOPHON_KOPIA_COARSE_WORK_DIR
 do

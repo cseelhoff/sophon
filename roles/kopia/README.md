@@ -1,18 +1,19 @@
-# Kopia v3: operator guide
+# Kopia: native hot-backup & restore guide
 
 Sophon backs up application state, not the system. Rebuild by rerunning Configure,
 then explicitly restore state. Images, binaries, caches and Configure-generated
 configuration are not primary backups. **Nothing may exist only in Arcane:**
-keep every stack definition in IaC and externally supplied secrets in a password
-manager. The backup never requests Arcane's database, stacks, environments or
-an administrator API key.
+keep every stack definition in IaC (or Gitea repositories deployed via Gitea Actions)
+and externally supplied secrets in a password manager or Gitea Secrets. The backup
+never requests Arcane's database, stacks, container environment variables
+(`Config.Env`), or an administrator API key.
 
 ## Deploy and operate
 
-Prepare carries the custom Kopia 0.23.1 image and pinned HAProxy 3.2.6-alpine
-socket-proxy image in the offline bundle. Configure deploys Kopia last, after
-the source volumes exist. The backup runs in a normal stack; no backup host
-service or timer is installed.
+Prepare builds the custom Kopia 0.23.1 image (containing `backup.py`, `dump_proxy.py`,
+`runtime.py`, `restore.py`, and `coarse.py`) and carries it in the offline bundle.
+Configure deploys Kopia last, after the core stacks are running. Backups run in a
+normal Compose stack (`kopia` + `dump-proxy`); no host backup service or timer is installed.
 
 Use the newly prepared runner when installing/updating this version: pairing
 needs its Kopia binary, OpenSSH client and Paramiko. Preparing media alone does
@@ -47,7 +48,34 @@ when missing; it never reinitializes existing storage and needs no reset step.
 Startup only connects. A later startup/health failure surfaces the redacted Kopia
 diagnostic through Ansible instead of hiding the reason behind `no_log`.
 
-Run and inspect backups from the InfraVM console as `core`:
+### Native Kopia scheduling & before/after snapshot actions
+
+`runtime.py` connects to the SFTP repository with `--enable-actions`, configures
+the policy on `/sophon-state` with:
+
+* `--before-snapshot-root-action=/app/backup.py`
+* `--after-snapshot-root-action=/app/backup.py`
+* `--no-persist-action-script` (action scripts stay local to the container image, never stored in the repository)
+* `--action-command-mode=essential` (any failed group or dump aborts the snapshot immediately so a broken or partial backup is never silently marked healthy)
+* `--snapshot-interval=<SOPHON_KOPIA_SNAPSHOT_INTERVAL>` (default `6h`, or `0s` when `SOPHON_KOPIA_BACKUPS_ENABLED=false` or `KOPIA_READONLY_MODE=true`)
+
+and runs `kopia server start --enable-actions` directly as the long-lived process.
+
+Whenever a scheduled snapshot fires—or whenever an operator clicks **Snapshot Now**
+on `/sophon-state` in the Kopia Web UI or runs `podman exec kopia python3 /app/backup.py run`:
+
+1. **Before-snapshot action (`KOPIA_ACTION=before-snapshot-root`):** `backup.py` queries
+   `dump-proxy` (`GET /v1/inventory`), stages declared named volumes and selective paths
+   via Btrfs CoW reflinks (`cp --archive --reflink=always`, falling back to `--reflink=never`)
+   into `/source/runs/<run_id>/`, writes `.kopiaignore` exclusion rules, filters INI
+   identity files, streams hot database dumps via `POST /v1/dump/<container_id>/<dump_name>`,
+   writes `manifest.json` + `/source/last-run.json`, and prints
+   `KOPIA_SNAPSHOT_PATH=/source/runs/<run_id>` so Kopia snapshots that immutable staged tree
+   under the logical identity `backup@sophon:/sophon-state`.
+2. **After-snapshot action (`KOPIA_ACTION=after-snapshot-root`):** `backup.py` deletes
+   `/source/runs/<run_id>` and marks `/source/last-run.json` `upload_status: "complete"`.
+
+Run or inspect backups from the InfraVM console as `core`:
 
 ```sh
 podman exec kopia python3 /app/backup.py run
@@ -55,42 +83,23 @@ podman exec kopia cat /source/last-run.json
 podman logs kopia
 ```
 
-Exit 0 means every group completed and uploaded. Exit 1 means a partial run or
-another failure. A partial run **uploads successful groups**, but its manifest,
-stderr and final report explicitly identify failed groups. A missing input mount
-reports the volume name and asks you to add it to
-`SOPHON_KOPIA_EXTRA_VOLUMES` and redeploy. An upload failure retains immutable
-staging for diagnosis. Never treat a healthy UI/repository connection as proof
-that the last backup was complete.
-
-`SOPHON_KOPIA_BACKUPS_ENABLED` defaults to `true`: Configure waits for and
-verifies the initial primary snapshot before succeeding, leaving the `6h`
-schedule active in a single deployment pass (when a newly installed VM connects
-to an existing repository interactively, `sophon-deploy` offers to pause
-scheduled backups until `sophon-restore` runs). The container supervisor runs
-backups at `SOPHON_KOPIA_SNAPSHOT_INTERVAL` (default `6h`); positive integer `s`,
-`m`, `h` or `d` intervals are accepted. It logs nonzero runs, refreshes the UI
-server's index after each upload, and keeps the UI server independent. Native
-Kopia scheduling is disabled: UI “Snapshot now” on the logical source is not the
-collector. Use the command above.
-
-Snapshots use stable identity `backup@sophon:/sophon-state` by default, even
-though each run has a unique immutable staging directory. Retention remains
+Snapshots use stable identity `backup@sophon:/sophon-state` by default (`zstd`
+content compression, content-defined chunking deduplication). Retention remains
 latest 10, hourly 24, daily 14, weekly 8, monthly 12 and annual 3. Quick/full
 maintenance intervals are 24/168 hours.
 
-## What the core declares
+## What the core declares (100% hot, zero container stops)
 
 | Role | Irreproducible state | Deliberately left out |
 |---|---|---|
-| Traefik | `acme.json`: generated ACME identity and certificate/private-key state. Traefik stops briefly for the clone. | Dynamic/file-provider configuration rendered by Configure; images and logs. |
-| OpenLDAP | Native `slapcat` of the configured site's directory subtree, including user entries, password hashes and entry identity. MDB remains online for its native consistent export. | Live MDB files, vendor/Configure-created `cn=config`, legacy migration guard and certificates derived from ACME. Custom schemas/ACLs must be represented in site IaC. |
-| Keycloak | Native `pg_dumpall` with Keycloak stopped while PostgreSQL remains running. It preserves user-created realms/accounts/clients and their identity/credential state as a coherent native database export. | Raw PostgreSQL files and Keycloak's transient runtime directory. |
-| Gitea | Native PostgreSQL export; repositories, LFS, attachments, avatars, packages, generated JWT and SSH identity keys. From `app.ini`, only declared generated identity keys are copied to `identity.ini`. Gitea stops while cloning/exporting. | Database directory, indexes, logs, sessions, uploads-in-progress, temporary worktrees, regenerated SSH configuration and externally supplied configuration/passwords in `app.ini`. |
-| CoreDNS | None: DNS records/configuration are reconstructed from IaC, labels and retained external Cloudflare inputs. | Binary, cache and transient inventory. |
-| cloudflared | None: Configure reconnects the named tunnel using externally retained Cloudflare access. | Connector/token environment and image. No duplicate production connector is needed for restore. |
-| Arcane | None: Configure recreates the management UI and reconciles declarative Compose stacks directly under `/var/lib/sophon/stacks/`. | Its SQLite database, local encryption key (`credentials/arcane/`), stack/environment capture and admin credentials. UI-only configuration is unsupported. |
-| Kopia/proxy | None: repository connection, policy and proxy config are reconstructed from deployment inputs. | Config/cache/log volumes, staging, recovery journal and the repository itself. Keep repository decryption credentials outside it. |
+| Traefik | `acme.json` (`sophon.backup.paths: /acme/acme.json`): generated ACME identity and certificate/private-key state, copied online (Traefik writes `acme.json` atomically via temp file + rename). | Dynamic/file-provider configuration rendered by Configure; images and logs. |
+| OpenLDAP | Online `slapcat` (`sophon.backup.dump`) of the configured site's directory subtree (`sophon.backup.dump.restore: ldap-subtree`), preserving user entries, password hashes and entry identity while LMDB MVCC stays online. | Live MDB files, vendor/Configure-created `cn=config`, legacy migration guard and certificates derived from ACME. Custom schemas/ACLs must be represented in site IaC. |
+| Keycloak | Online `pg_dumpall` (`sophon.backup.dump`, `sophon.backup.dump.restore: postgres-cluster`) from `keycloak-db` via PostgreSQL MVCC without stopping Keycloak. | Raw PostgreSQL files and Keycloak's transient runtime directory. |
+| Gitea | Whole `/data` volume (`sophon.backup.volumes: /data`) including Git repositories, **Git LFS content-addressed objects** (`git/lfs`), attachments, avatars, packages, and SSH/JWT keys; selective generated secrets from `/data/gitea/conf/app.ini` (`sophon.backup.ini`); and online `pg_dumpall` from `gitea-db`. Never stops Gitea. | Excluded via `.kopiaignore` (`sophon.backup.exclude`): `git/lfs/tmp/` (in-flight LFS uploads before atomic SHA-256 rename), `gitea/indexers/`, `gitea/queues/`, `gitea/sessions/`, `gitea/log/`, `gitea/tmp/`, plus externally supplied passwords in `app.ini` (auto-excluded from whole-volume copy and merged on restore). |
+| CoreDNS | None (`sophon.backup.enable: "false"`): DNS records/configuration are reconstructed from IaC, labels and retained external Cloudflare inputs. | Binary, cache and transient inventory. |
+| cloudflared | None (`sophon.backup.enable: "false"`): Configure reconnects the named tunnel using externally retained Cloudflare access. | Connector/token environment and image. |
+| Arcane | None (`sophon.backup.enable: "false"`): Configure recreates the management UI and reconciles declarative Compose stacks directly under `/var/lib/sophon/stacks/`. | Its SQLite database, local encryption key (`credentials/arcane/`), stack/environment capture and admin credentials. UI-only configuration is unsupported. |
+| Kopia/proxy | None: repository connection, native policy and proxy are reconstructed from deployment inputs. | Config/cache/log volumes, staging, and the repository itself. Keep repository decryption credentials outside it. |
 
 Full native database exports necessarily contain related roles/schema and
 configured seed rows as well as irreproducible application state; these are
@@ -163,118 +172,120 @@ metadata, Arcane state or Kopia config/cache/coordination volumes**: rebuild
 those, especially stale copied stop/restore/coarse holds. Retain external inputs
 and repository credentials separately.
 
-## v3 declarations
+## Self-service container labels
 
-Only flat v3 split labels are accepted. Legacy v1/v2 recipes, archives, native
-Portainer backups and version-1 manifests are not read or upgraded.
+Developers deploying workloads via Gitea Actions + Gitea Secrets opt into hot
+backups and `sophon-restore` solely through concise Traefik-style `sophon.backup.*`
+labels in their own `compose.yaml`—without touching Sophon's Ansible codebase,
+restarting Kopia, or sharing database credentials with Kopia.
 
-```yaml
-labels:
-  sophon.backup.version: "3"
-  sophon.backup.group: application
-  sophon.backup.stop: "true"
-  sophon.backup.paths.0.name: files
-  sophon.backup.paths.0.volume: site_application_data
-  sophon.backup.paths.0.path: user-files
-```
-
-`paths.N.path` is a normalized relative path within that named volume, not an
-engine archive path or host bind. The volume must be attached to the declaring
-workload and mounted read-only into Kopia. `optional=true` is only for explicitly
-declared lazily-created paths; missing required paths fail the group. Optional
-absences are recorded in the manifest, not silently converted to data.
-
-The optional `paths.N.ini` is a JSON array of explicit `section.key` selectors.
-Only those values survive in the staged INI file. Gitea uses this to retain
-generated identity without backing up its reconstructible database/server
-configuration. Restore must merge these identity fields into freshly configured
-settings, not replace the whole configuration.
-
-A database declares stdout exports, never data-directory paths:
+### Developer Compose example (files + PostgreSQL custom dump)
 
 ```yaml
-labels:
-  sophon.backup.version: "3"
-  sophon.backup.group: application
-  sophon.backup.stop: "false"
-  sophon.backup.dumps.0.name: database.sql
-  sophon.backup.dumps.0.restore: postgres-cluster
-  sophon.backup.dumps.0.argv: '["sh","-ec","exec pg_dumpall -U \"$POSTGRES_USER\" --clean --if-exists"]'
+services:
+  web:
+    image: ghcr.io/example/my-app:1.2.0
+    volumes:
+      - uploads:/var/lib/app/uploads
+    labels:
+      sophon.backup.enable: "true"
+      # Defaults to com.docker.compose.project if omitted:
+      sophon.backup.group: "my-app"
+      # Accepts container mount path (/var/lib/app/uploads) or Compose volume name (uploads):
+      sophon.backup.volumes: "/var/lib/app/uploads"
+      sophon.backup.exclude: "tmp/,cache/"
+
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}   # Injected from Gitea Secrets; never exposed to Kopia
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql
+    labels:
+      sophon.backup.enable: "true"
+      sophon.backup.group: "my-app"
+      # Runs inside `db` via dump-proxy; -Fc -Z0 disables Postgres compression so Kopia zstd deduplicates blocks:
+      sophon.backup.dump: 'exec pg_dump -U "$$POSTGRES_USER" -Fc -Z0 "$$POSTGRES_DB"'
+      sophon.backup.dump.name: "app.dump"
+      sophon.backup.dump.restore: "postgres-custom"
+
+volumes:
+  uploads:
+  pgdata:
 ```
 
-Compose source must double `$` to `$$` to preserve the variable for in-container
-execution. Commands are JSON argv arrays, not implicit shell strings; `user`
-is optional. Export producers must stay running and provide `sh` and `setsid`
-for bounded, recoverable process-group execution. Writers sharing a filesystem
-volume must all belong to the same group with `stop=true`; otherwise the group
-fails instead of using an unsafe live plain copy.
+> **Compose `$` escaping:** Double `$$POSTGRES_USER` in `compose.yaml` so Docker/Podman
+> Compose passes literal `$POSTGRES_USER` into the container label for in-container
+> shell evaluation when `dump-proxy` triggers the dump.
 
-Indexes must be contiguous. Path/dump names must be unique within a member.
-Unknown labels and unsafe names/paths fail their group. Stateless declarations
-have a version, group and `stop=false` but no paths/dumps.
+### Supported `sophon.backup.*` labels
 
-## Source mounts and undeclared volumes
+| Label | Meaning |
+|---|---|
+| `sophon.backup.enable` | Required (`"true"` or `"false"`). `"false"` explicitly marks a container reconstructible. |
+| `sophon.backup.group` | Logical backup/restore group name. Defaults to `com.docker.compose.project` (or container name). |
+| `sophon.backup.volumes` | Comma-separated container mount destinations (`/data`) or volume names (`uploads`) for whole-volume hot backup. |
+| `sophon.backup.exclude` | Comma- or newline-separated `.kopiaignore` patterns applied to `sophon.backup.volumes` (e.g. `git/lfs/tmp/,cache/`). |
+| `sophon.backup.paths` | Comma-separated selective paths inside attached named volumes (`/acme/acme.json` or `vol:sub/path`), supporting `?optional=true`. |
+| `sophon.backup.ini` + optional `sophon.backup.ini.keys` | Captures only listed `section.key` entries from an INI file (`/data/gitea/conf/app.ini:security.SECRET_KEY,...`) and merges them into the fresh INI file on restore. Automatically excluded from any whole-volume copy of the same volume. |
+| `sophon.backup.dump` | Shell command (executed via `sh -ec`) or JSON argv array (`["slapcat", ...]`) streaming a logical dump to stdout. |
+| `sophon.backup.dump.name` | Artifact filename in snapshot (defaults by restore kind: `postgres-cluster.sql`, `database.dump`, `directory.ldif`, or `dump.out`). |
+| `sophon.backup.dump.restore` | Automated `sophon-restore` profile: `postgres-cluster` (`psql`), `postgres-custom` (`pg_restore --clean --if-exists --no-owner`), or `ldap-subtree` (`slapadd`, paired with `sophon.backup.dump.base`). |
+| `sophon.backup.dump.user` | Optional in-container user/UID for dump execution. |
+| `sophon.backup.dumps.<key>.cmd` (or `.argv`, `.name`, `.restore`, `.user`, `.base`) | Multi-database support when one container exports multiple databases. |
 
-Each core role declares its read-only backup-volume list in its defaults. The
-Kopia role combines those lists with the site's JSON array:
+## Dynamic volume discovery and undeclared volumes
 
-```sh
-export SOPHON_KOPIA_EXTRA_VOLUMES='["site_application_data"]'
-```
+Kopia mounts `/var/home/core/.local/share/containers/storage/volumes` read-only at
+`/volumes:ro`. Whenever a container with `sophon.backup.enable=true` declares a
+named volume or path, `backup.py` resolves `<volume>/_data` automatically—no
+`SOPHON_KOPIA_EXTRA_VOLUMES` list or Kopia stack redeploy is required.
 
-Keep that list in site IaC, not only in a UI. Redeploy after changing it: labels
-cannot add mounts to a running collector. This interface accepts volume names
-only, never arbitrary host paths. See [outside-workload migration](../../docs/kopia-v3-migration.md).
+Every manifest/report lists **undeclared volumes** (attached named volumes not
+covered by a `volumes` or `paths` declaration). They are not copied and do
+not fail the run. Raw database (`*_db_data`, `pgdata`) and collector cache/staging
+volumes intentionally appear here because native dumps protect database state instead
+of copying live database files.
 
-Every manifest/report lists **undeclared volumes**. They are not copied and do
-not fail the run. Raw database and collector cache/staging volumes intentionally
-appear here; native exports protect the database state, not those raw files.
-Review the list for real omissions after each workload change.
+## Hot consistency, interruption and least privilege
 
-## Consistency, interruption and permissions
+Backups never stop or restart running containers:
 
-For each group, validate declarations, journal stop intent, stop writers,
-clone paths with `cp --archive --reflink=always`, and stream native dumps into
-staging. A plain copy is attempted only for recognized unsupported-reflink or
-cross-filesystem errors, while all volume writers are stopped. Permission and
-I/O errors are not mistaken for lack of reflink support. Writers resume before
-upload; their pause does not depend on SFTP/upload speed.
+* **Databases** (`postgres-cluster`, `postgres-custom`, `ldap-subtree`) stream
+  transactional MVCC snapshots over stdout via `dump-proxy`. Every dump stream
+  ends with an out-of-band exit-status trailer frame; non-zero exit codes,
+  truncated streams or zero-byte stdout fail the action (`essential` mode) so
+  Kopia aborts the snapshot.
+* **Files & Git LFS** are cloned online from `/volumes:ro` with `cp --archive --reflink=always`
+  (falling back to `--reflink=never`) into an isolated per-run directory under
+  `/source/runs/<run_id>/`, pruned according to `sophon.backup.exclude`, and stamped
+  with `.kopiaignore`. Stale `/source/runs/*` directories from an interrupted process
+  are cleaned automatically at startup and before the next action.
+* **Pending operator restores** write `/source/restore.json`: `backup.py` refuses
+  to run while `restore.json` exists so Kopia can never snapshot half-restored state.
 
-The durable, fsynced v3 journal records exact container/image/mount identities
-and pending export process groups. Startup recovers it before serving the UI:
-cancel interrupted exports, then resume only writers that this run stopped.
-A lost stop response is settled before its compensating start. Replaced
-containers are never guessed by name. Manual retry is:
-
-```sh
-podman exec kopia python3 /app/backup.py recover
-```
-
-An interrupted or failed operator restore leaves a durable `restore.json` hold:
-the collector refuses to snapshot possibly partial recovery state. Resume that
-restore or deliberately abandon it using its explicit cleanup command.
-Do not delete an unresolved journal to make a run appear successful. Full
-failed-run reports live outside immutable snapshot staging.
-
-Kopia runs as **UID 0 inside rootless Podman**, not host root, with all
+`kopia` runs as **UID 0 inside rootless Podman**, not host root, with all
 capabilities dropped except:
 
-* `DAC_OVERRIDE`: read/traverse other mapped sub-UIDs and preserve user xattrs
-  during copying; source mounts and the container rootfs stay read-only.
+* `DAC_OVERRIDE`: read/traverse other mapped sub-UIDs in `/volumes:ro` and preserve
+  user xattrs during copying; `/volumes:ro` and the container rootfs stay read-only.
 * `CHOWN`: retain source numeric UID/GID in staging.
 * `FOWNER`: retain permissions/metadata after ownership changes.
 
-The [M0 measurements](../../docs/kopia-m0.md) include negative controls for each
-capability. No `SYS_ADMIN`, privileged container or whole-volume-directory
-mount is used in the primary backup. `label=disable` permits these shared
-rootless volumes without relabeling live application data; `no-new-privileges`
-prevents gaining further privilege through executable files.
+Only the separate, zero-capability (`cap_drop: [ALL]`, `read_only: true`,
+`no-new-privileges:true`) `dump-proxy` container mounts `/run/user/<uid>/podman/podman.sock`.
+It sits on an internal-only network (`kopia_engine`) and exposes only three routes:
 
-Only the separate, cap-free socket proxy mounts the engine socket. It is
-unpublished on an internal network and allows list/inspect/exec/stop/start
-routes only. It denies archive transfer, create/delete, image and volume APIs.
-Permitted exec remains powerful; this is a reduced engine surface, not a claim
-that arbitrary allowed commands are harmless.
+* `GET /healthz`: engine reachability check
+* `GET /v1/inventory`: container metadata with `Config.Env` and non-backup labels stripped
+* `POST /v1/dump/<container_id>/<dump_name>`: re-inspects `<container_id>` on the Podman
+  socket, verifies `sophon.backup.enable=true` and `<dump_name>` in that container's own
+  labels, and executes **only** that label-declared command
+
+Arbitrary `/exec`, `/stop`, `/start`, `/kill`, `/archive`, container creation/deletion,
+and secret environment inspection are unconditionally rejected (`403`).
 
 ## Snapshot and recovery boundary
 
@@ -329,15 +340,18 @@ refused. Producers start before consumers. Members originally stopped stay stopp
 
 Native exports are **trusted executable input**: PostgreSQL dumps execute SQL as
 a temporary database superuser. Only restore from your authenticated repository.
-`postgres-cluster` imports with the matching PostgreSQL image and an isolated
-Unix socket, not a live data-directory copy. PostgreSQL's non-droppable initial
-superuser is renamed to an owner-specific `sophon_system_*` role and disabled
-(`NOLOGIN`, password cleared); temporary login/database resources are removed.
-`ldap-subtree` requires `dumps.N.base` to equal the configured MDB suffix
-(the dc-style site DN). It reconstructs MDB from that site's export using
-`slapadd` and validates against freshly configured schema. Invalid vendor seed
-entries outside that naming context are not reimported. Partial-suffix merges
-are refused; custom schemas/ACLs belong in IaC.
+`postgres-cluster` (`psql`) and `postgres-custom` (`pg_restore --clean --if-exists --no-owner`)
+import with the matching PostgreSQL image and an isolated Unix socket, not a live
+data-directory copy. PostgreSQL's non-droppable initial superuser is renamed to an
+owner-specific `sophon_system_*` role and disabled (`NOLOGIN`, password cleared);
+temporary login/database resources are removed. During `apply`, `sophon-restore`
+also stops and restarts any running containers in the same Compose project (`peers`)
+so web/app containers do not hold open database connections while `pg_restore` or
+`psql` replaces the database. `ldap-subtree` requires `sophon.backup.dump.base`
+to equal the configured MDB suffix (the dc-style site DN). It reconstructs MDB
+from that site's export using `slapadd` and validates against freshly configured
+schema. Invalid vendor seed entries outside that naming context are not reimported.
+Partial-suffix merges are refused; custom schemas/ACLs belong in IaC.
 
 The one-shot coordinator uses Podman alone: no Arcane, Gitea, Kopia UI or
 running backup stack is required. It temporarily mounts the **full rootless
@@ -376,10 +390,8 @@ printing/persisting its environment. Otherwise export the Configure
 variables, plus `SOPHON_RESTORE_SOURCE_VOLUME` (normally `kopia_source-v3`).
 `SOPHON_KOPIA_RESTORE_IMAGE` optionally selects an already loaded custom recovery
 image; the launcher resolves it to an immutable local ID and never pulls.
-Retain the backup coordination volume even when removing the UI/backup stack.
-It serializes backup/recovery; pending backup stop journals must be recovered
-before restoring. Run `backup.py recover` with the existing backup configuration
-if needed, rather than deleting a pending journal.
+Retain the backup coordination volume (`kopia_source-v3`) even when removing the
+UI/backup stack, as it serializes backup and recovery via `restore.json`.
 
 The disposable [M2 drill](../../tests/spikes/kopia_m2.py) rebuilds application
 containers/volumes from rendered repository templates and compares native

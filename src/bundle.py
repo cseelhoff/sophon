@@ -20,12 +20,15 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 # Only what step 4 runs; hypervisor roles and credentials never reach the VM.
 PROJECT = (
-    '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
+    '4-configure.yml', '5-activate.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
     *(f'roles/{role}' for role in ('compose_stack', 'arcane', 'coredns', 'traefik',
                                    'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea')),
-    'src/console.py', 'src/deployment.py', 'src/certificates.py', 'src/backup_destination.py',
+    'src/console.py', 'src/activate.py', 'src/deployment.py', 'src/certificates.py', 'src/backup_destination.py',
 )
-GUEST = ('host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-network', 'sophon-set-password')
+GUEST = (
+    'host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-activate',
+    'sophon-network', 'sophon-set-password', 'sophon-seed-early', 'sophon-autodeploy', 'sophon-update-issue',
+)
 EXCLUDED = frozenset((
     'artifacts', 'deployment', 'logs', 'log', 'keys', 'credentials', 'secrets',
     '__pycache__', 'node_modules', 'result', 'results',

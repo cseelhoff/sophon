@@ -56,7 +56,7 @@ function NeedSecret([string]$Name) {
 }
 
 # Ask where InfraVM should run unless SOPHON_HYPERVISOR already says (automation sets it).
-if ($command -eq 'provision' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
+if ($command -in 'provision', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
     Write-Host 'Where should InfraVM run?'
     Write-Host '  1) Proxmox'
     Write-Host '  2) VMware vCenter'
@@ -78,30 +78,13 @@ $localHyperV = $hypervisor -eq 'hyperv' -and (-not $env:SOPHON_HYPERV_HOST -or
     $env:SOPHON_HYPERV_HOST -in 'localhost', '127.0.0.1', $env:COMPUTERNAME)
 
 $extraMounts = @()
-if ($command -eq 'verify-restore') {
-    if ($interactive) {
-        Need 'SOPHON_PROXMOX_HOST' 'Proxmox host name or address'
-        Need 'SOPHON_PROXMOX_NODE' 'Proxmox node' 'proxmox'
-        NeedSecret 'SOPHON_PROXMOX_PASSWORD'
-    }
-    if (-not $env:SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 -and $env:SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE) {
-        $keyBytes = [IO.File]::ReadAllBytes($env:SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE)
-        $env:SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 = [Convert]::ToBase64String($keyBytes)
-        Remove-Item Env:SOPHON_VERIFY_RESTORE_SFTP_PRIVATE_KEY_FILE -ErrorAction SilentlyContinue
-    }
-    if (-not $env:SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 -and $env:SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE) {
-        $khBytes = [IO.File]::ReadAllBytes($env:SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE)
-        $env:SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 = [Convert]::ToBase64String($khBytes)
-        Remove-Item Env:SOPHON_VERIFY_RESTORE_SFTP_KNOWN_HOSTS_FILE -ErrorAction SilentlyContinue
-    }
-    if ($env:SOPHON_VERIFY_RESTORE_CA_FILE) {
-        $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
-        $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
-        $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
-    }
+if ($command -eq 'verify-restore' -and $env:SOPHON_VERIFY_RESTORE_CA_FILE) {
+    $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
+    $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
+    $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
 }
 
-if ($command -eq 'provision' -and $interactive -and -not $localHyperV) {
+if ($command -in 'provision', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $localHyperV) {
     switch ($hypervisor) {
         'vcenter' {
             Need 'SOPHON_VCENTER_URL' 'vCenter URL (https://...)'

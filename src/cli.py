@@ -8,7 +8,10 @@ import sys
 
 COMMANDS = {
     'prepare': lambda args: ['ansible-playbook', '1-prepare.yml', *args],
+    'secrets': lambda args: ['python3', 'src/secrets_iso.py', *args],
+    'provision-backup': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision-backup.yml'],
     'provision': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '2-provision.yml'],
+    'destroy-vm': lambda args: ['python3', 'src/deployment.py', '--step', 'provision', *args, '--', '3-destroy-vm.yml'],
     'verify-restore': lambda args: ['python3', 'src/verify_restore.py', *args],
     'certificates': lambda args: ['python3', 'src/certificates.py', *args],
     # </dev/null: the wizard tests assume no terminal, and `docker run -it` would make them wait for keystrokes.
@@ -20,11 +23,13 @@ COMMANDS = {
 HELP = """usage: docker run --rm -it -v <project>:/workspace -v <engine socket>:/var/run/docker.sock \\
            -v sophon-state:/state sophon-tools <command> [args]
 
-  prepare                 step 1: cache downloads, build the runner image, the installer ISO and the deployment ISO
-  provision               steps 1-2: create the blank InfraVM (settings via -e SOPHON_*)
-  verify-restore          step 7: automated Proxmox restore drill over serial0 (tunnel disabled, read-only Kopia)
-  certificates issue ...  air-gapped sites: issue the wildcard certificate and write the secret certificate ISO
-                          (artifacts/secrets/sophon-certificates.iso; --output-iso, --output-file)
+  prepare                 step 1: cache downloads and build installer, deployment, and backup appliance ISOs
+  secrets                 optional: build mode-0600 unattended seed ISOs (sophon-secrets.iso & sophon-backup-secrets.iso)
+  provision-backup        optional: create the standalone Alpine SFTP Backup Server VM (Proxmox, vCenter, or Hyper-V)
+  provision               steps 1-2: create InfraVM and auto-attach sophon-secrets.iso when present
+  destroy-vm              stop and delete a Sophon-managed VM across Proxmox, vCenter, or Hyper-V
+  verify-restore          step 7: hypervisor-agnostic restore drill using sophon-secrets.iso (safe standby mode)
+  certificates issue ...  air-gapped sites: issue the wildcard certificate and write artifacts/secrets/sophon-certificates.iso
   test | shell            development helpers
 Anything else runs as a command in the container."""
 

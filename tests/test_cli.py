@@ -13,6 +13,8 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(cli.COMMANDS['prepare'](['-e', 'prepare_force=true']),
                          ['ansible-playbook', '1-prepare.yml', '-e', 'prepare_force=true'])
         self.assertEqual(cli.COMMANDS['provision']([])[-2:], ['--', '2-provision.yml'])
+        self.assertEqual(cli.COMMANDS['provision-backup']([])[-2:], ['--', '2-provision-backup.yml'])
+        self.assertEqual(cli.COMMANDS['destroy-vm']([])[-2:], ['--', '3-destroy-vm.yml'])
         self.assertIn('--step', cli.COMMANDS['provision']([]))
         self.assertNotIn('dashboard', cli.COMMANDS)
         self.assertEqual(cli.COMMANDS['verify-restore'](['--teardown', 'destroy']),

@@ -75,7 +75,6 @@ FIELDS = {
     'SOPHON_KOPIA_CREATE_REPOSITORY': ('Confirm creation only if no repository exists', 'Backup', 'choice', 'false', False),
     'SOPHON_KOPIA_CLIENT_USERNAME': ('Backup source username', 'Backup', 'text', 'backup', True),
     'SOPHON_KOPIA_CLIENT_HOSTNAME': ('Backup source hostname', 'Backup', 'text', 'sophon', True),
-    'SOPHON_KOPIA_EXTRA_VOLUMES': ('Additional site workload volumes (JSON array)', 'Backup', 'text', '[]', False),
     'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups', 'Backup', 'choice', 'true', True),
     'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
     'SOPHON_KOPIA_COARSE_ENABLED': ('Enable weekly live Btrfs volume snapshots (true/false)', 'Backup', 'choice', 'false', False),
@@ -150,12 +149,6 @@ def validate_settings(current, changes, step='provision'):
         try:
             if name == 'SOPHON_KOPIA_SNAPSHOT_INTERVAL' and not re.fullmatch(r'[1-9][0-9]*(s|m|h|d)', value):
                 return None, 'Snapshot interval must be a positive integer followed by s, m, h or d.'
-            if name == 'SOPHON_KOPIA_EXTRA_VOLUMES':
-                volumes = json.loads(value)
-                if not isinstance(volumes, list) or any(
-                        not isinstance(volume, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)
-                        for volume in volumes) or len(volumes) != len(set(volumes)):
-                    return None, 'Additional backup volumes must be a JSON array of unique volume names.'
             if kind == 'choice' and value not in CHOICES[name]:
                 return None, f'{label} ({name}) must be one of {", ".join(CHOICES[name])}.'
             if name in ('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'):
@@ -288,7 +281,21 @@ def main(argv=None):
         parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
     allowed = set(step_fields(options.step))
     if options.step == 'provision':
-        allowed.update(('SOPHON_PROXMOX_USER', 'SOPHON_PROXMOX_VALIDATE_CERTS', 'SOPHON_PROXMOX_ONBOOT'))
+        allowed.update((
+            'SOPHON_PROXMOX_USER',
+            'SOPHON_PROXMOX_VALIDATE_CERTS',
+            'SOPHON_PROXMOX_ONBOOT',
+            'SOPHON_SECRETS_ISO',
+            'SOPHON_BACKUP_SECRETS_ISO',
+            'SOPHON_ATTACH_SECRETS_ISO',
+            'SOPHON_BACKUP_VM_NAME',
+            'SOPHON_BACKUP_VM_CORES',
+            'SOPHON_BACKUP_VM_MEMORY',
+            'SOPHON_BACKUP_VM_DISK_GB',
+            'SOPHON_DESTROY_VM_NAME',
+            'SOPHON_DESTROY_VM_MARKER',
+            'SOPHON_ALLOW_PRODUCTION_DESTROY',
+        ))
     if options.step == 'configure':
         allowed.add('SOPHON_ARCANE_ENCRYPTION_KEY')
         allowed.add('SOPHON_KOPIA_PREFLIGHT_COMPLETE')
@@ -303,8 +310,16 @@ def main(argv=None):
     if not arguments:
         parser.print_help()
         return 2
-    expected = '2-provision.yml' if options.step == 'provision' else '4-configure.yml'
-    if arguments[0] in ('2-provision.yml', '4-configure.yml') and arguments[0] != expected:
+    step_for_playbook = {
+        '2-provision.yml': 'provision',
+        '2-provision-backup.yml': 'provision',
+        '3-destroy-vm.yml': 'provision',
+        '4-configure.yml': 'configure',
+        '5-activate.yml': 'configure',
+    }
+    required_step = step_for_playbook.get(arguments[0])
+    if required_step and required_step != options.step:
+        expected = '2-provision.yml' if options.step == 'provision' else '4-configure.yml'
         parser.error(f'{options.step} requires {expected}; choose the correct deployment step.')
     return launch(arguments)
 

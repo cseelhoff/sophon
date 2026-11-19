@@ -46,9 +46,6 @@ services:
       retries: 10
       start_period: 15s
     labels:
-      - 'sophon.backup.version=3'
-      - 'sophon.backup.group=arcane'
-      - 'sophon.backup.stop=false'
       - "coredns.dockerdiscovery.host={{ arcane_fqdn }}"
       - "traefik.enable=true"
       - "traefik.http.routers.arcane.rule=Host(`{{ arcane_fqdn }}`)"

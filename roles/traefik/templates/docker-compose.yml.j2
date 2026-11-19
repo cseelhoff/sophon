@@ -11,10 +11,6 @@ services:
         touch /etc/traefik/dynamic.yml
     volumes:
       - traefik_config:/etc/traefik
-    labels:
-      - sophon.backup.version=3
-      - sophon.backup.group=traefik
-      - sophon.backup.stop=false
 
   traefik:
     image: docker.io/library/traefik:{{ traefik_image_tag }}
@@ -62,13 +58,9 @@ services:
       - --providers.file.watch=true
       - --log.level={{ traefik_log_level }}
     labels:
-      - 'sophon.backup.version=3'
+      - 'sophon.backup.enable=true'
       - 'sophon.backup.group=traefik'
-      - 'sophon.backup.stop=true'
-      - 'sophon.backup.paths.0.volume=traefik_traefik_data'
-      - 'sophon.backup.paths.0.path=acme.json'
-      - 'sophon.backup.paths.0.name=acme'
-      - 'sophon.backup.paths.0.optional=true'
+      - 'sophon.backup.paths=/data/acme.json?optional=true'
       - "coredns.dockerdiscovery.host={{ traefik_fqdn }}"
       - "traefik.enable=true"
       - "traefik.http.routers.dashboard.rule=Host(`{{ traefik_fqdn }}`)"
