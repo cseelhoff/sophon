@@ -307,15 +307,16 @@ def find_existing_acme_bytes(domain: str, state_dir: Path, explicit_acme: str = 
         return certificates.minimal_store(data, domain)
 
     state_acme = state_dir.expanduser().resolve() / 'certificates' / domain / 'acme.json'
-    if state_acme.is_file() and not state_acme.is_symlink():
-        data = state_acme.read_bytes()
-        certificates.validate_data(data, domain)
-        return certificates.minimal_store(data, domain)
+    if state_acme.is_file() and not state_acme.is_symlink() and certificates.ready_to_export(state_acme, domain):
+        return certificates.minimal_store(state_acme.read_bytes(), domain)
 
     extracted = extract_acme_from_iso(SECRETS_ISO)
     if extracted:
-        certificates.validate_data(extracted, domain)
-        return certificates.minimal_store(extracted, domain)
+        try:
+            certificates.validate_data(extracted, domain)
+            return certificates.minimal_store(extracted, domain)
+        except (ValueError, KeyError, TypeError, UnicodeError):
+            pass
     return None
 
 

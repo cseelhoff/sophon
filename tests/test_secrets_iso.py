@@ -81,6 +81,14 @@ def make_test_acme(domain: str) -> tuple[bytes, bytes]:
 
 
 class SecretsIsoTests(unittest.TestCase):
+    def test_empty_or_partial_cached_acme_is_ignored_instead_of_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / 'state'
+            cert_dir = state_dir / 'certificates' / 'sophon.example.com'
+            cert_dir.mkdir(parents=True)
+            (cert_dir / 'acme.json').write_bytes(b'')
+            self.assertIsNone(secrets_iso.find_existing_acme_bytes('sophon.example.com', state_dir))
+
     def test_sha512_crypt_matches_openssl_passwd(self):
         pw = 'SophonStrongPass123!'
         salt = 'Salt1234567890Ab'
