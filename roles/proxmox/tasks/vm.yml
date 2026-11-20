@@ -138,10 +138,12 @@
           {{
             {
               'ide2': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[0].filename ~ ',media=cdrom',
-              'ide3': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[1].filename ~ ',media=cdrom',
-              'ide0': (proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[2].filename ~ ',media=cdrom')
-                      if (infravm_isos | length > 2) else 'none,media=cdrom'
+              'ide3': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[1].filename ~ ',media=cdrom'
             }
+            | combine(
+                {'ide0': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[2].filename ~ ',media=cdrom'}
+                if (infravm_isos | length > 2) else {}
+              )
           }}
         boot: "order=virtio0;ide2"
         serial:
