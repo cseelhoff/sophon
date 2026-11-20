@@ -18,8 +18,8 @@ keeps the individual service names out of public Certificate Transparency logs.
 
 ## Make the secret certificate ISO (connected machine)
 
-```bash
-bash sophon-provision.sh certificates issue --domain example.com
+```sh
+sh sophon-build-isos.sh certificates issue --domain example.com
 ```
 
 Prompts (on stderr) for the domain, an ACME email and a Cloudflare token (hidden), then issues the certificate for
@@ -33,7 +33,8 @@ holding `acme.json` with the wildcard certificate, its **full chain** and its pr
 nothing has to be pasted and nothing has to be rebuilt from the deployment ISO, whatever chain Let's Encrypt currently uses.
 
 Options: `--email`, `--timeout`, `--output-iso PATH` (another location) and `--output-file PATH` (also write the bare
-`acme.json`). The token can come from `CF_DNS_API_TOKEN` in your environment. An older store in the volume that holds
+`acme.json`). Domain, email and token can come from `SOPHON_DOMAIN`, `SOPHON_ACME_EMAIL` and `SOPHON_CF_TOKEN` in `.env`
+or your environment. An older store in the volume that holds
 per-service certificates is not reused: a new wildcard certificate is issued.
 
 ## Attach and import it (InfraVM, step 4)

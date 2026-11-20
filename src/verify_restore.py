@@ -34,7 +34,7 @@ def inspect_seed_iso(iso_path: Path) -> dict:
     if not iso_path.is_file() or iso_path.is_symlink():
         raise ValueError(
             f'Missing unattended secrets ISO: {iso_path}\n'
-            'Generate one first with: bash sophon-provision.sh secrets'
+            'Generate one first with: sh sophon-build-isos.sh'
         )
     if not shutil.which('xorriso'):
         raise ValueError('xorriso is missing; run this through the sophon-tools container.')
@@ -48,7 +48,7 @@ def inspect_seed_iso(iso_path: Path) -> dict:
         if res.returncode != 0 or not seed_out.is_file():
             raise ValueError(
                 f'{iso_path} does not contain /sophon-seed.json (it appears to be a certificate-only ISO).\n'
-                'Build an unattended seed ISO with: bash sophon-provision.sh secrets'
+                'Build an unattended seed ISO with: sh sophon-build-isos.sh'
             )
         doc = json.loads(seed_out.read_text(encoding='utf-8'))
     net = doc.get('network') or {}
@@ -211,7 +211,7 @@ def main(argv=None) -> int:
         )
         if rc != 0:
             return rc
-        prov_env: dict[str, str] = {'SOPHON_INFRAVM_NAME': vm_name}
+        prov_env: dict[str, str] = {'SOPHON_INFRAVM_NAME': vm_name, 'SOPHON_SKIP_BACKUP_VM': 'true'}
         if options.secrets_iso is not None:
             prov_env['SOPHON_SECRETS_ISO'] = str(Path(os.path.abspath(options.secrets_iso)))
             prov_env['SOPHON_ATTACH_SECRETS_ISO'] = 'true'

@@ -1,6 +1,6 @@
 # Manual commands (without the wrapper scripts)
 
-`sophon-provision.sh` / `sophon-provision.ps1` run exactly the commands below after detecting your engine and socket.
+`sophon-build-isos.sh` / `sophon-provision.sh` (and `.ps1`) run the container commands below after detecting your engine and socket.
 Use this page when you want to see or customise them. Every setting is listed in [inputs.md](inputs.md).
 
 ## Build the tools image
@@ -117,10 +117,10 @@ On a connected machine, to make or update `artifacts/secrets/sophon-secrets.iso`
 the ACME account and issued certificate between runs:
 
 ```bash
-docker run --rm -it -v "$(pwd):/workspace" -v sophon-state:/state -e CF_DNS_API_TOKEN sophon-tools certificates issue --domain example.com
+docker run --rm -it -v "$(pwd):/workspace" -v sophon-state:/state -e SOPHON_ACME_EMAIL -e SOPHON_CF_TOKEN sophon-tools certificates issue --domain example.com
 ```
 
-It prompts for the ACME email (and the Cloudflare token if `CF_DNS_API_TOKEN` is unset, hidden). Options:
+It prompts for the ACME email and Cloudflare token (hidden) when `SOPHON_ACME_EMAIL` or `SOPHON_CF_TOKEN` are unset. Options:
 `--email`, `--timeout`, `--output-iso PATH`, `--output-file PATH` (also write the bare `acme.json`).
 
 ## Notes

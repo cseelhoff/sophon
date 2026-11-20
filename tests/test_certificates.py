@@ -265,6 +265,9 @@ class CertificateTests(unittest.TestCase):
             'Path(target).chmod(0o600)\ntime.sleep(60)\n')
         executable.chmod(0o700)
         environment = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'])
+        environment.pop('SOPHON_DOMAIN', None)
+        environment.pop('SOPHON_ACME_EMAIL', None)
+        environment.pop('SOPHON_CF_TOKEN', None)
         environment.pop('CF_DNS_API_TOKEN', None)
         iso = self.directory / 'secrets/sophon-secrets.iso'
         with patch.dict(os.environ, environment, clear=True), \
@@ -307,13 +310,17 @@ class CertificateTests(unittest.TestCase):
         executable = self.directory / 'traefik'
         executable.write_text(f'#!{sys.executable}\nprint("FAKE_PRIVATE_ISSUER_DETAIL")\nraise SystemExit(27)\n')
         executable.chmod(0o700)
-        with patch.dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
-                        CF_DNS_API_TOKEN='FAKE_TOKEN'), \
+        environment = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
+                           SOPHON_DOMAIN='fixture.example', SOPHON_ACME_EMAIL='admin@fixture.example',
+                           SOPHON_CF_TOKEN='FAKE_TOKEN')
+        environment.pop('CF_DNS_API_TOKEN', None)
+        with patch.dict(os.environ, environment, clear=True), \
+                patch('builtins.input', side_effect=AssertionError('unexpected prompt')), \
+                patch('getpass.getpass', side_effect=AssertionError('unexpected secret prompt')), \
                 patch('certificates.write_certificate_iso') as write, \
                 contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit) as stopped:
-            certificates.main(['issue', '--domain', 'fixture.example', '--email', 'admin@fixture.example',
-                               '--state-dir', str(self.directory / 'failed')])
+            certificates.main(['issue', '--state-dir', str(self.directory / 'failed')])
         self.assertEqual(stopped.exception.code, 1)
         self.assertEqual(output.getvalue(), '')
         write.assert_not_called()

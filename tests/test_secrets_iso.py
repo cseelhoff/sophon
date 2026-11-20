@@ -33,7 +33,7 @@ def make_test_acme(domain: str) -> tuple[bytes, bytes]:
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=30))
+        .not_valid_after(now + dt.timedelta(days=60))
         .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
         .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), critical=True)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
@@ -47,7 +47,7 @@ def make_test_acme(domain: str) -> tuple[bytes, bytes]:
         .public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=30))
+        .not_valid_after(now + dt.timedelta(days=60))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName([x509.DNSName(domain), x509.DNSName(f'*.{domain}')]),
@@ -191,6 +191,59 @@ class SecretsIsoTests(unittest.TestCase):
             for fname in ('admin.shadow', 'network.env', 'ssh_host_ed25519_key', 'authorized_keys_backup', 'authorized_keys_restore'):
                 self.assertTrue((extracted_bk / fname).is_file(), fname)
             self.assertIn('IP=10.0.60.100', (extracted_bk / 'network.env').read_text())
+
+    def test_default_build_auto_enables_backup_and_preserves_cf_token_with_cached_acme(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            acme_bytes, ca_pem = make_test_acme('sophon.example.com')
+            ca_file = tmp_dir / 'ca.pem'
+            ca_file.write_bytes(ca_pem)
+            state_dir = tmp_dir / 'state'
+            cert_dir = state_dir / 'certificates' / 'sophon.example.com'
+            cert_dir.mkdir(parents=True)
+            (cert_dir / 'acme.json').write_bytes(acme_bytes)
+            sophon_iso = tmp_dir / 'sophon-secrets.iso'
+            backup_iso = tmp_dir / 'sophon-sftp-secrets.iso'
+
+            old_env = os.environ.copy()
+            try:
+                for key in list(os.environ):
+                    if key.startswith('SOPHON_') or key == 'CF_DNS_API_TOKEN':
+                        os.environ.pop(key, None)
+                os.environ.update({
+                    'SSL_CERT_FILE': str(ca_file),
+                    'SOPHON_DOMAIN': 'sophon.example.com',
+                    'SOPHON_ACME_EMAIL': 'ops@sophon.example.com',
+                    'SOPHON_CF_TOKEN': 'cf-live-token-123456',
+                    'SOPHON_SHARED_PASSWORD': 'SharedTestPassword!123',
+                    'SOPHON_KOPIA_PASSWORD': 'KopiaRepoPassword!123',
+                    'SOPHON_NETWORK_CIDR': '10.0.60.101/24',
+                    'SOPHON_NETWORK_GATEWAY': '10.0.60.1',
+                    'SOPHON_BACKUP_NETWORK_CIDR': '10.0.60.100/24',
+                })
+                rc = secrets_iso.main([
+                    '--state-dir', str(state_dir),
+                    '--output-iso', str(sophon_iso),
+                    '--backup-output-iso', str(backup_iso),
+                ])
+                self.assertEqual(rc, 0)
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
+
+            self.assertTrue(sophon_iso.is_file())
+            self.assertTrue(backup_iso.is_file())
+            extracted = tmp_dir / 'extracted'
+            extracted.mkdir()
+            subprocess.run(
+                ['xorriso', '-osirrox', 'on', '-indev', str(sophon_iso), '-extract', '/', str(extracted)],
+                check=True, capture_output=True,
+            )
+            seed = json.loads((extracted / 'sophon-seed.json').read_text())
+            self.assertEqual(seed['env']['SOPHON_CF_TOKEN'], 'cf-live-token-123456')
+            self.assertEqual(seed['env']['SOPHON_CF_TUNNEL_ENABLED'], 'true')
+            self.assertEqual(seed['env']['SOPHON_ACME_EMAIL'], 'ops@sophon.example.com')
+            self.assertTrue((extracted / 'acme.json').is_file())
 
 
 if __name__ == '__main__':

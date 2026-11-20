@@ -418,7 +418,7 @@ def build_infravm_secrets_iso(
     elif not checked.get('SOPHON_CF_TOKEN', '').strip():
         raise ValueError(
             f'Air-gapped seed for {domain} has neither SOPHON_CF_TOKEN nor a pre-issued acme.json. '
-            'Run `bash sophon-provision.sh certificates issue` first or pass --acme-file.'
+            'Run `sh sophon-build-isos.sh certificates issue` first or pass --acme-file.'
         )
 
     clean_env = {k: v for k, v in checked.items() if k != 'SOPHON_ACME_FILE' and v != ''}
@@ -450,7 +450,7 @@ def derive_dev_secrets_iso(source_iso: Path, env: dict[str, str], output_iso: Pa
     if not source_iso.is_file() or source_iso.is_symlink():
         raise ValueError(
             f'Missing unattended secrets ISO: {source_iso}\n'
-            'Generate one first with: bash sophon-provision.sh secrets'
+            'Generate one first with: sh sophon-build-isos.sh'
         )
     if not shutil.which('xorriso'):
         raise ValueError('xorriso is missing; run this through the sophon-tools container.')
@@ -464,7 +464,7 @@ def derive_dev_secrets_iso(source_iso: Path, env: dict[str, str], output_iso: Pa
         if res.returncode != 0 or not seed_path.is_file():
             raise ValueError(
                 f'{source_iso} does not contain /sophon-seed.json (it appears to be a certificate-only ISO).\n'
-                'Build an unattended seed ISO with: bash sophon-provision.sh secrets'
+                'Build an unattended seed ISO with: sh sophon-build-isos.sh'
             )
         seed_doc = json.loads(seed_path.read_text(encoding='utf-8'))
         acme_bytes = extract_acme_from_iso(source_iso)
@@ -569,8 +569,22 @@ def main(argv=None) -> int:
         except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
             print(f'Dev secrets ISO generation failed: {error}', file=sys.stderr)
             return 1
-    with_backup = options.with_backup or env.get('SOPHON_WITH_BACKUP_SECRETS', '').strip().lower() in ('1', 'true', 'yes')
+    explicit_with_backup = options.with_backup or env.get('SOPHON_WITH_BACKUP_SECRETS', '').strip().lower() in ('1', 'true', 'yes')
+    has_backup_cidr = bool(env.get('SOPHON_BACKUP_NETWORK_CIDR', '').strip())
+    with_backup = explicit_with_backup or has_backup_cidr
     readonly_sftp = options.readonly_sftp or env.get('SOPHON_SECRETS_READONLY_SFTP', '').strip().lower() in ('1', 'true', 'yes')
+
+    def require_tty(missing_name: str) -> None:
+        if not sys.stdin.isatty():
+            parser.error(f'{missing_name} is unset; set it in .env or run from an interactive terminal.')
+
+    def need_field(name: str, label: str, kind: str, current: str, required: bool = True, fallback: str = '') -> str:
+        if current.strip():
+            return current.strip()
+        if not required and not sys.stdin.isatty():
+            return fallback
+        require_tty(name)
+        return console.prompt_field(name, label, kind, fallback, required)
 
     try:
         shared_pw = env.get('SOPHON_SHARED_PASSWORD', '')
@@ -583,18 +597,19 @@ def main(argv=None) -> int:
         backup_admin_plain = env.get('SOPHON_BACKUP_ADMIN_PASSWORD', '') or core_plain
 
         net_mode = (env.get('SOPHON_NETWORK_MODE') or ('static' if env.get('SOPHON_NETWORK_CIDR') else '')).strip().lower()
-        net_cidr = env.get('SOPHON_NETWORK_CIDR', '').strip()
+        raw_net_cidr = env.get('SOPHON_NETWORK_CIDR', '').strip()
+        net_cidr = raw_net_cidr
         net_gw = env.get('SOPHON_NETWORK_GATEWAY', '').strip()
-        net_dns = (env.get('SOPHON_VNET_DNS') or '1.1.1.1').strip()
+        raw_net_dns = env.get('SOPHON_VNET_DNS', '').strip()
+        net_dns = raw_net_dns or '1.1.1.1'
         dev_cidr = env.get('SOPHON_DEV_NETWORK_CIDR', '').strip()
         dev_gw = env.get('SOPHON_DEV_NETWORK_GATEWAY', '').strip()
         dev_dns = env.get('SOPHON_DEV_VNET_DNS', '').strip()
 
         if not options.run:
-            if not sys.stdin.isatty():
-                parser.error('Interactive secrets builder requires a terminal; pass --run with SOPHON_* env vars.')
-            print('== Sophon Unattended Secrets ISO Builder ==')
             if not core_hash and not core_plain:
+                require_tty('SOPHON_SHARED_PASSWORD')
+                print('== Sophon Unattended Secrets ISO Builder ==')
                 while True:
                     pw = console.read_secret('Console password for InfraVM user `core` (12+ characters): ')
                     if len(pw) < 12:
@@ -604,49 +619,51 @@ def main(argv=None) -> int:
                     else:
                         core_plain = pw
                         break
-            if not shared_pw and console.ask_yes_no('Use this same password for local Sophon service accounts?', default=True):
-                _apply_shared_service_password(env, core_plain)
+                if not shared_pw and console.ask_yes_no('Use this same password for local Sophon service accounts?', default=True):
+                    _apply_shared_service_password(env, core_plain)
             if not net_mode:
+                require_tty('SOPHON_NETWORK_CIDR')
                 use_static = console.ask_yes_no('Configure a static IPv4 address for InfraVM (recommended)?', default=True)
                 net_mode = 'static' if use_static else 'dhcp'
             if net_mode == 'static':
-                net_cidr = console.prompt_field('SOPHON_NETWORK_CIDR', 'InfraVM IPv4 CIDR (e.g. 10.0.60.101/24)', 'text', net_cidr, True)
-                net_gw = console.prompt_field('SOPHON_NETWORK_GATEWAY', 'InfraVM IPv4 gateway', 'ipv4', net_gw, True)
-                dev_cidr = console.prompt_field(
-                    'SOPHON_DEV_NETWORK_CIDR',
-                    'Optional Dev / Restore-Drill IPv4 CIDR (e.g. 10.0.60.107/24, Enter to skip)',
-                    'text',
-                    dev_cidr,
-                    False,
-                )
-            net_dns = console.prompt_field('SOPHON_VNET_DNS', 'Upstream DNS server IPv4', 'ipv4', net_dns, True)
-            env['SOPHON_DOMAIN'] = console.prompt_field('SOPHON_DOMAIN', 'Sophon domain', 'host', env.get('SOPHON_DOMAIN', ''), True)
+                net_cidr = need_field('SOPHON_NETWORK_CIDR', 'InfraVM IPv4 CIDR (e.g. 10.0.60.101/24)', 'text', net_cidr, True)
+                net_gw = need_field('SOPHON_NETWORK_GATEWAY', 'InfraVM IPv4 gateway', 'ipv4', net_gw, True)
+                if not raw_net_cidr and not dev_cidr and sys.stdin.isatty():
+                    dev_cidr = console.prompt_field(
+                        'SOPHON_DEV_NETWORK_CIDR',
+                        'Optional Dev / Restore-Drill IPv4 CIDR (e.g. 10.0.60.107/24, Enter to skip)',
+                        'text',
+                        dev_cidr,
+                        False,
+                    )
+            if not raw_net_dns and not raw_net_cidr and sys.stdin.isatty():
+                net_dns = console.prompt_field('SOPHON_VNET_DNS', 'Upstream DNS server IPv4', 'ipv4', net_dns, True)
+            env['SOPHON_DOMAIN'] = need_field('SOPHON_DOMAIN', 'Sophon domain', 'host', env.get('SOPHON_DOMAIN', ''), True)
 
-            if not with_backup:
+            if not with_backup and not env.get('SOPHON_KOPIA_SFTP_HOST', '').strip():
+                require_tty('SOPHON_BACKUP_NETWORK_CIDR or SOPHON_KOPIA_SFTP_HOST')
                 with_backup = console.ask_yes_no('Also generate a paired unattended secrets ISO for a Sophon SFTP Backup VM?', default=True)
 
             if with_backup:
-                bk_cidr = console.prompt_field('SOPHON_BACKUP_NETWORK_CIDR', 'Backup VM IPv4 CIDR (e.g. 10.0.60.100/24)',
-                                               'text', env.get('SOPHON_BACKUP_NETWORK_CIDR', ''), True)
+                bk_cidr = need_field('SOPHON_BACKUP_NETWORK_CIDR', 'Backup VM IPv4 CIDR (e.g. 10.0.60.100/24)',
+                                     'text', env.get('SOPHON_BACKUP_NETWORK_CIDR', ''), True)
                 env['SOPHON_BACKUP_NETWORK_CIDR'] = bk_cidr
-                env['SOPHON_BACKUP_NETWORK_GATEWAY'] = console.prompt_field(
-                    'SOPHON_BACKUP_NETWORK_GATEWAY', 'Backup VM IPv4 gateway', 'ipv4',
-                    env.get('SOPHON_BACKUP_NETWORK_GATEWAY', net_gw), True)
-                env['SOPHON_BACKUP_NETWORK_DNS'] = console.prompt_field(
-                    'SOPHON_BACKUP_NETWORK_DNS', 'Backup VM DNS IPv4', 'ipv4',
-                    env.get('SOPHON_BACKUP_NETWORK_DNS', net_dns), True)
+                env['SOPHON_BACKUP_NETWORK_GATEWAY'] = env.get('SOPHON_BACKUP_NETWORK_GATEWAY', '').strip() or net_gw
+                if not env['SOPHON_BACKUP_NETWORK_GATEWAY']:
+                    env['SOPHON_BACKUP_NETWORK_GATEWAY'] = need_field(
+                        'SOPHON_BACKUP_NETWORK_GATEWAY', 'Backup VM IPv4 gateway', 'ipv4', '', True)
+                env['SOPHON_BACKUP_NETWORK_DNS'] = env.get('SOPHON_BACKUP_NETWORK_DNS', '').strip() or net_dns
                 env.setdefault('SOPHON_KOPIA_SFTP_HOST', bk_cidr.split('/')[0])
                 if not backup_admin_hash and not backup_admin_plain:
                     backup_admin_plain = core_plain
             else:
-                env['SOPHON_KOPIA_SFTP_HOST'] = console.prompt_field(
+                env['SOPHON_KOPIA_SFTP_HOST'] = need_field(
                     'SOPHON_KOPIA_SFTP_HOST', 'SFTP server hostname or IPv4', 'host', env.get('SOPHON_KOPIA_SFTP_HOST', ''), True)
 
-            env['SOPHON_KOPIA_SFTP_PORT'] = console.prompt_field(
-                'SOPHON_KOPIA_SFTP_PORT', 'SFTP port', 'number', env.get('SOPHON_KOPIA_SFTP_PORT', '22'), True)
-            env['SOPHON_KOPIA_SFTP_PATH'] = console.prompt_field(
-                'SOPHON_KOPIA_SFTP_PATH', 'SFTP repository path', 'text', env.get('SOPHON_KOPIA_SFTP_PATH', '/repository'), True)
+            env.setdefault('SOPHON_KOPIA_SFTP_PORT', '22')
+            env.setdefault('SOPHON_KOPIA_SFTP_PATH', '/repository')
             if not env.get('SOPHON_KOPIA_PASSWORD'):
+                require_tty('SOPHON_KOPIA_PASSWORD')
                 while True:
                     kpw = console.read_secret('Kopia repository encryption password: ')
                     if not kpw.strip():
@@ -657,23 +674,47 @@ def main(argv=None) -> int:
                         env['SOPHON_KOPIA_PASSWORD'] = kpw
                         break
             fields = deployment.step_fields('configure')
+            has_cf_token = bool(env.get('SOPHON_CF_TOKEN', '').strip())
             has_acme = find_existing_acme_bytes(env['SOPHON_DOMAIN'], options.state_dir, options.acme_file) is not None
-            has_internet = False if has_acme and not console.ask_yes_no(
-                'Pre-issued certificate found; does this site also use live internet/Cloudflare?', default=False
-            ) else (True if not has_acme else True)
+            if has_cf_token:
+                has_internet = True
+            elif options.acme_file:
+                has_internet = False
+            else:
+                require_tty('SOPHON_CF_TOKEN')
+                has_internet = console.ask_yes_no('Does InfraVM have outbound internet access?', default=not has_acme)
             if not has_internet:
                 env['SOPHON_CF_TOKEN'] = ''
                 env['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
+                if not has_acme:
+                    print('Issuing wildcard certificate on this connected workstation for air-gapped InfraVM...')
+                    issue_args = [
+                        'issue',
+                        '--domain', env['SOPHON_DOMAIN'],
+                        '--state-dir', str(options.state_dir.expanduser().resolve() / 'certificates'),
+                        '--output-iso', str(options.output_iso),
+                    ]
+                    if env.get('SOPHON_ACME_EMAIL', '').strip():
+                        issue_args.extend(['--email', env['SOPHON_ACME_EMAIL'].strip()])
+                    if certificates.main(issue_args) != 0:
+                        return 1
             else:
                 if not env.get('SOPHON_CF_TOKEN'):
+                    require_tty('SOPHON_CF_TOKEN')
                     env['SOPHON_CF_TOKEN'] = console.read_secret('Cloudflare API token (SOPHON_CF_TOKEN): ')
-                env['SOPHON_ACME_EMAIL'] = console.prompt_field(
-                    'SOPHON_ACME_EMAIL', 'ACME email', 'email', env.get('SOPHON_ACME_EMAIL', 'admin@example.com'), True)
-                tunnel_ok = console.ask_yes_no('Publish public Cloudflare tunnel & DNS records on Day 1?', default=True)
-                env['SOPHON_CF_TUNNEL_ENABLED'] = 'true' if tunnel_ok else 'false'
+                env['SOPHON_ACME_EMAIL'] = need_field(
+                    'SOPHON_ACME_EMAIL', 'ACME email', 'email', env.get('SOPHON_ACME_EMAIL', ''), True, 'admin@example.com')
+                if not env.get('SOPHON_CF_TUNNEL_ENABLED', '').strip():
+                    if has_cf_token:
+                        env['SOPHON_CF_TUNNEL_ENABLED'] = 'true'
+                    else:
+                        require_tty('SOPHON_CF_TUNNEL_ENABLED')
+                        tunnel_ok = console.ask_yes_no('Publish public Cloudflare tunnel & DNS records on Day 1?', default=True)
+                        env['SOPHON_CF_TUNNEL_ENABLED'] = 'true' if tunnel_ok else 'false'
 
             for name, (label, _grp, kind, default, required) in fields.items():
                 if kind == 'password' and required and not env.get(name) and name not in backup_destination_material():
+                    require_tty(name)
                     env[name] = console.prompt_field(name, label, kind, default, True)
 
         if not core_hash:
@@ -740,6 +781,10 @@ def main(argv=None) -> int:
         acme_bytes = None
         if not env.get('SOPHON_CF_TOKEN', '').strip() or options.acme_file:
             acme_bytes = find_existing_acme_bytes(domain, options.state_dir, options.acme_file)
+        else:
+            cached_acme = options.state_dir.expanduser().resolve() / 'certificates' / certificates.normalize_domain(domain) / 'acme.json'
+            if cached_acme.is_file() and not cached_acme.is_symlink() and certificates.ready_to_export(cached_acme, domain):
+                acme_bytes = certificates.minimal_store(cached_acme.read_bytes(), domain)
 
         if with_backup:
             if not backup_admin_hash:
@@ -755,6 +800,8 @@ def main(argv=None) -> int:
                 output=options.backup_output_iso,
             )
             print(f'Backup Server secrets ISO written: {bk_iso} ({bk_iso.stat().st_size} bytes, label {BACKUP_SECRETS_LABEL})')
+        elif options.backup_output_iso == BACKUP_SECRETS_ISO and BACKUP_SECRETS_ISO.exists() and not BACKUP_SECRETS_ISO.is_symlink():
+            BACKUP_SECRETS_ISO.unlink(missing_ok=True)
 
         infra_iso = build_infravm_secrets_iso(
             core_password_hash=core_hash,

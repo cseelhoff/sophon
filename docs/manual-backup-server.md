@@ -1,6 +1,6 @@
 # Manual & Custom SFTP Backup Server Setup
 
-Use this guide only if you are **not** using the default unattended `provision-backup` workflow from the [Operator Guide](./operator-guide.md).
+Use this guide only if you are **not** using the default unattended `sh sophon-build-isos.sh` + `sh sophon-provision.sh` workflow from the [Operator Guide](./operator-guide.md).
 
 - **Option A:** Boot a blank VM manually with `artifacts/backup/sophon-sftp-server.iso` and configure it interactively on the console.
 - **Option B:** Point Sophon at an existing Linux server or NAS with a jailed OpenSSH `internal-sftp` configuration.
@@ -9,7 +9,7 @@ Use this guide only if you are **not** using the default unattended `provision-b
 
 ## Option A: Interactive VM Setup with `sophon-sftp-server.iso`
 
-`bash sophon-provision.sh prepare` builds a secret-free hybrid BIOS + UEFI **Alpine 3.24 SFTP Backup Server ISO** at `artifacts/backup/sophon-sftp-server.iso`.
+`sh sophon-build-isos.sh --os-only` (or `sh sophon-build-isos.sh`) builds a secret-free hybrid BIOS + UEFI **Alpine 3.24 SFTP Backup Server ISO** at `artifacts/backup/sophon-sftp-server.iso`.
 
 ### 1. Create and boot the VM
 
@@ -81,4 +81,4 @@ sudo sshd -t && sudo systemctl reload ssh
 for pub in /etc/ssh/ssh_host_*_key.pub; do sudo ssh-keygen -lf "$pub"; done
 ```
 
-- If you use unattended `bash sophon-provision.sh secrets`, copy the generated public keys from `~/.local/state/sophon/sftp/` (or authorize the `restrict ssh-ed25519 ...` lines printed during interactive `sophon-deploy`) into `/etc/ssh/authorized_keys/sophon-backup` and `/etc/ssh/authorized_keys/sophon-restore` (`root:root`, mode `0644`).
+- If you use unattended `sh sophon-build-isos.sh`, copy the generated public keys from `~/.local/state/sophon/sftp/` (or authorize the `restrict ssh-ed25519 ...` lines printed during interactive `sophon-deploy`) into `/etc/ssh/authorized_keys/sophon-backup` and `/etc/ssh/authorized_keys/sophon-restore` (`root:root`, mode `0644`).

@@ -258,7 +258,7 @@ def launch(arguments):
         return subprocess.run(['ansible-playbook', *arguments], env=environment).returncode
     except OSError:
         print('Could not start ansible-playbook. Run this through the sophon-tools container '
-              '(bash sophon-provision.sh) or install ansible-core.', file=sys.stderr)
+              '(sh sophon-provision.sh) or install ansible-core.', file=sys.stderr)
         return 127
     except KeyboardInterrupt:
         return 130
@@ -293,6 +293,7 @@ def main(argv=None):
             'SOPHON_BACKUP_VM_CORES',
             'SOPHON_BACKUP_VM_MEMORY',
             'SOPHON_BACKUP_VM_DISK_GB',
+            'SOPHON_SKIP_BACKUP_VM',
             'SOPHON_DESTROY_VM_NAME',
             'SOPHON_DESTROY_VM_MARKER',
             'SOPHON_ALLOW_PRODUCTION_DESTROY',

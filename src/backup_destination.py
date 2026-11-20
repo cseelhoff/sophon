@@ -8,6 +8,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 import uuid
 
 from cryptography.hazmat.primitives import serialization
@@ -154,9 +155,16 @@ def prepare(values, *, root, confirm=None, readonly=False, auto=False):
             print('Authorize this line on the confined SFTP destination account:')
             print(f'restrict {key.get_name()} {key.get_base64()} sophon-backup')
         known_hosts = directory / 'known_hosts'
-        scan = subprocess.run(['ssh-keyscan', '-T', '10', '-t', 'rsa,ecdsa,ed25519', '-p', str(port), host],
-                              capture_output=True, text=True, timeout=45)
-        if scan.returncode or not scan.stdout.strip():
+        attempts = 18 if auto else 1
+        scan = None
+        for attempt in range(attempts):
+            scan = subprocess.run(['ssh-keyscan', '-T', '10', '-t', 'rsa,ecdsa,ed25519', '-p', str(port), host],
+                                  capture_output=True, text=True, timeout=45)
+            if scan.returncode == 0 and scan.stdout.strip():
+                break
+            if attempt + 1 < attempts:
+                time.sleep(5)
+        if not scan or scan.returncode or not scan.stdout.strip():
             raise ValueError(f'Cannot scan SSH host keys at {destination}; check reachability.')
         scanned = directory / 'scanned'
         private_file(scanned, scan.stdout.encode())

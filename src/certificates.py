@@ -278,7 +278,11 @@ def issue_main(argv):
             email = options.email or os.environ.get('SOPHON_ACME_EMAIL') or prompt('ACME contact email: ')
             if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
                 raise ValueError('Supply a valid ACME contact email.')
-            token = os.environ.get('CF_DNS_API_TOKEN') or getpass.getpass('Cloudflare DNS API token: ', stream=sys.stderr)
+            token = (
+                os.environ.get('SOPHON_CF_TOKEN')
+                or os.environ.get('CF_DNS_API_TOKEN')
+                or getpass.getpass('Cloudflare DNS API token: ', stream=sys.stderr)
+            )
             if not token.strip():
                 raise ValueError('A Cloudflare API token is required for issuance.')
             if not shutil.which('traefik'):

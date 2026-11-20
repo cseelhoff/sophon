@@ -22,12 +22,12 @@ Sophon runs on one **Fedora CoreOS** virtual machine (**InfraVM**) alongside an 
 
 ---
 
-## 2. Configure `.env` & Build Media
+## 2. Configure `.env` & Build ISOs
 
-On your workstation (with Docker or Podman installed), copy `.env.example` to `.env` and fill in your hypervisor and network settings:
+On your workstation (with Docker or Podman installed), copy `.env.example` to `.env` and fill in your hypervisor, Cloudflare/ACME, and network settings:
 
-```bash
-cp .env.example .env              # Windows PowerShell: Copy-Item .env.example .env
+```sh
+install -m 600 .env.example .env  # Windows PowerShell: Copy-Item .env.example .env
 ```
 
 Configure your hypervisor target, domain, and separate static IPv4 addresses and VM names for **production** and **dev / restore drills** in `.env` (each VM points to its own IP for split-horizon DNS; put comments on `#` lines rather than inline):
@@ -37,6 +37,8 @@ Configure your hypervisor target, domain, and separate static IPv4 addresses and
 # (Also set your hypervisor's connection/storage/VLAN settings in .env — e.g. SOPHON_PROXMOX_* and SOPHON_VNET_*)
 SOPHON_HYPERVISOR=proxmox
 SOPHON_DOMAIN=sophon.example.com
+SOPHON_ACME_EMAIL=admin@example.com
+SOPHON_CF_TOKEN=<your-cloudflare-api-token>
 
 # Production InfraVM
 SOPHON_INFRAVM_NAME=sophon-infravm
@@ -44,42 +46,35 @@ SOPHON_NETWORK_CIDR=10.0.60.101/24
 SOPHON_NETWORK_GATEWAY=10.0.60.1
 SOPHON_VNET_DNS=1.1.1.1
 
-# Dev / Restore-Drill InfraVM (`provision-dev` always replaces this VM; `sophon-activate` promotes it to prod IP)
+# Dev / Restore-Drill InfraVM (`sh sophon-provision.sh dev` always replaces this VM; `sophon-activate` promotes it to prod IP)
 SOPHON_DEV_INFRAVM_NAME=sophon-dev-infravm
 SOPHON_DEV_NETWORK_CIDR=10.0.60.107/24
 
-# Alpine SFTP Backup Server VM
+# Alpine SFTP Backup Server VM (leave blank if using an external SFTP server via SOPHON_KOPIA_SFTP_HOST)
 SOPHON_BACKUP_NETWORK_CIDR=10.0.60.100/24
-SOPHON_KOPIA_SFTP_HOST=10.0.60.100
 ```
 
-*(See [`.env.example`](../.env.example) and [`docs/inputs.md`](./inputs.md) for all hypervisor-specific fields. Leave passwords blank in `.env` if you prefer to be prompted interactively.)*
+*(See [`.env.example`](../.env.example) and [`docs/inputs.md`](./inputs.md) for all hypervisor-specific fields, and [README — Cloudflare API token](../README.md#cloudflare-api-token) for creating `SOPHON_CF_TOKEN`. Leave passwords blank in `.env` if you prefer to be prompted interactively; for air-gapped sites without internet on the VM network, leave `SOPHON_CF_TOKEN` blank.)*
 
-Then generate your private mode-`0600` unattended secrets ISOs (`provision-backup` and `provision` automatically build the OS and installer media in Step 3):
+Then build all Sophon ISOs:
 
-```bash
-# 1. (Optional — air-gapped sites without outbound DNS-01 access) Pre-issue wildcard TLS certificate into artifacts/secrets/sophon-secrets.iso
-bash sophon-provision.sh certificates issue          # PowerShell: .\sophon-provision.ps1 certificates issue
-
-# 2. Generate unattended secrets ISOs (`sophon-secrets.iso` + `sophon-sftp-secrets.iso`)
-bash sophon-provision.sh secrets --with-backup       # PowerShell: .\sophon-provision.ps1 secrets --with-backup
+```sh
+sh sophon-build-isos.sh           # PowerShell: .\sophon-build-isos.ps1
 ```
 
-`secrets --with-backup` pre-pairs SSH host and client keys (`sophon-backup` for read-write production backups and `sophon-restore` for read-only standby drills) and writes `artifacts/secrets/sophon-secrets.iso` plus `artifacts/secrets/sophon-sftp-secrets.iso`. Treat both files like passwords and delete them once your VMs are provisioned (or keep them solely on an encrypted admin workstation if running scheduled restore drills).
+`sophon-build-isos.sh` prompts for any passwords you left out of `.env`, writes your private mode-`0600` unattended secrets ISOs (`artifacts/secrets/sophon-secrets.iso`, plus `sophon-sftp-secrets.iso` with pre-paired read-write `sophon-backup` and read-only `sophon-restore` SSH keys whenever `SOPHON_BACKUP_NETWORK_CIDR` is set), and builds the offline OS and app ISOs (`sophon-coreos.iso`, `sophon-apps.iso`, and `sophon-sftp-server.iso`). Treat `artifacts/secrets/*.iso` like passwords and delete them once your VMs are provisioned (or keep them solely on an encrypted admin workstation if running scheduled restore drills).
 
 ---
 
-## 3. Deploy the Backup Server & Production InfraVM
+## 3. Provision Sophon
 
-Deploy the Alpine SFTP Backup Server VM (ideally on separate storage or a separate host from InfraVM) and then deploy the production InfraVM:
+Deploy your Sophon VM(s) to the configured hypervisor:
 
-```bash
-# 1. Deploy the Alpine SFTP Backup Server VM (`sophon-sftp-server.iso` + `sophon-sftp-secrets.iso`)
-bash sophon-provision.sh provision-backup            # PowerShell: .\sophon-provision.ps1 provision-backup
-
-# 2. Deploy the production InfraVM (`sophon-infravm` on SOPHON_NETWORK_CIDR)
-bash sophon-provision.sh provision                   # PowerShell: .\sophon-provision.ps1 provision
+```sh
+sh sophon-provision.sh            # PowerShell: .\sophon-provision.ps1
 ```
+
+When `artifacts/secrets/sophon-sftp-secrets.iso` exists, `sophon-provision.sh` ensures the Alpine SFTP Backup Server VM (`sophon-backup`) is running first and then deploys the production InfraVM (`sophon-infravm` on `SOPHON_NETWORK_CIDR`). *(To place the backup VM on a separate hypervisor or storage pool, deploy it there first with `sh sophon-provision.sh backup` or see [Manual & Custom SFTP Backup Server Setup](./manual-backup-server.md).)*
 
 Both VMs install to disk, apply their static IPv4 settings and passwords, eject their secrets ISOs, and come up without console prompts:
 
@@ -154,15 +149,15 @@ podman exec kopia cat /source/last-run.json
 
 Sophon uses the same workflow for **routine restore drills** and **real disaster-recovery cutovers**: deploy a clean dev/standby VM from `sophon-secrets.iso`, verify the restored services on the dev IP, and—only when cutting over to production—run `sophon-activate`.
 
-### 6.1 Deploy or refresh the dev / restore-drill InfraVM (`provision-dev`)
+### 6.1 Deploy or refresh the dev / restore-drill InfraVM (`dev`)
 
 From your workstation, run one command:
 
-```bash
-bash sophon-provision.sh provision-dev               # PowerShell: .\sophon-provision.ps1 provision-dev
+```sh
+sh sophon-provision.sh dev        # PowerShell: .\sophon-provision.ps1 dev
 ```
 
-`provision-dev` automatically:
+`sh sophon-provision.sh dev` (alias for `provision-dev`) automatically:
 1. Stops and deletes any existing `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`) VM on Proxmox, vCenter, or Hyper-V (while refusing to touch `SOPHON_INFRAVM_NAME` or `sophon-backup`).
 2. Configures the new VM with `SOPHON_DEV_NETWORK_CIDR` (using that dev IP as its own DNS address) and the confined read-only `sophon-restore` SFTP key, while keeping your production IP and `sophon-backup` credentials staged privately for optional promotion.
 3. Installs CoreOS, deploys all stacks in **Safe Standby Mode** (Cloudflare tunnel disabled, Kopia `--readonly`, scheduled backups paused), runs `sophon-restore --snapshot latest --yes`, verifies all containers and HTTPS endpoints locally inside the guest, and sets the console banner to `STANDBY RESTORE VERIFIED`.
@@ -170,7 +165,7 @@ bash sophon-provision.sh provision-dev               # PowerShell: .\sophon-prov
 *(Append `--wait-https` if your workstation can reach `SOPHON_DEV_NETWORK_CIDR` over `:443` and you want the command to wait until external HTTPS checks pass.)*
 
 - **For a restore drill:** You are done—inspect the VM console banner (or verify `https://arcane.<domain>` and `https://git.<domain>` against the dev IP) and leave it in Safe Standby Mode. To automate weekly drills on Linux, enable the user timer in [`contrib/systemd/`](../contrib/systemd):
-  ```bash
+  ```sh
   mkdir -p ~/.config/systemd/user
   cp contrib/systemd/sophon-verify-restore.{service,timer} ~/.config/systemd/user/
   systemctl --user daemon-reload
@@ -182,16 +177,16 @@ bash sophon-provision.sh provision-dev               # PowerShell: .\sophon-prov
 When recovering from an actual production outage:
 
 1. Delete (or shut down) the old broken production VM from your workstation so its IP address is free:
-   ```bash
-   bash sophon-provision.sh destroy-vm               # PowerShell: .\sophon-provision.ps1 destroy-vm
+   ```sh
+   sh sophon-provision.sh destroy-vm                 # PowerShell: .\sophon-provision.ps1 destroy-vm
    ```
 2. SSH (or log in on the console) as `core` to the restored `sophon-dev-infravm` VM and run:
-   ```bash
+   ```sh
    sophon-activate
    ```
    `sophon-activate` switches the VM's static IPv4 address and self-pointing DNS (including CoreDNS, Podman network resolvers, and stack host mappings) from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`, switches Kopia from read-only `sophon-restore` to read-write `sophon-backup`, enables `cloudflared` if configured, runs and verifies an immediate backup, and marks the server `PRODUCTION ACTIVE`. *(If connected over SSH on the dev IP, reconnect at the prod IP once `sophon-activate` switches the interface.)*
 
-> **Alternative—replace the production VM directly in place:** If you prefer to rebuild `sophon-infravm` directly on `SOPHON_NETWORK_CIDR` instead of promoting `sophon-dev-infravm`, run `bash sophon-provision.sh provision --recreate` (which confirms, deletes `sophon-infravm`, and boots a fresh `sophon-infravm` into Safe Standby Mode), then log in as `core` and run `sophon-activate`.
+> **Alternative—replace the production VM directly in place:** If you prefer to rebuild `sophon-infravm` directly on `SOPHON_NETWORK_CIDR` instead of promoting `sophon-dev-infravm`, run `sh sophon-provision.sh --recreate` (which confirms, deletes `sophon-infravm`, and boots a fresh `sophon-infravm` into Safe Standby Mode), then log in as `core` and run `sophon-activate`.
 >
 > **Recovering without `sophon-secrets.iso`?** Follow [Interactive Disaster Recovery in Manual Installation](./manual-installation.md#3-interactive-disaster-recovery-without-sophon-secretsiso).
 

@@ -8,11 +8,11 @@ Use this guide when deploying or recovering Sophon **without** hypervisor API au
 
 If you are creating InfraVM by hand (for example on VMware Workstation or an unmanaged host), first build the installation media on a machine with Docker or Podman:
 
-```bash
-bash sophon-provision.sh prepare          # Windows: .\sophon-provision.ps1 prepare
+```sh
+sh sophon-build-isos.sh --os-only # Windows: .\sophon-build-isos.ps1 --os-only
 ```
 
-*(For air-gapped sites without internet access on the VM network, also run `bash sophon-provision.sh certificates issue --domain <your-domain>` to write your wildcard TLS certificate to `artifacts/secrets/sophon-secrets.iso`.)*
+*(For air-gapped sites without internet access on the VM network, also run `sh sophon-build-isos.sh certificates issue --domain <your-domain>` to write your wildcard TLS certificate to `artifacts/secrets/sophon-secrets.iso`.)*
 
 1. Copy `artifacts/coreos/sophon-coreos.iso` and `artifacts/bootstrap/sophon-apps.iso` (plus `artifacts/secrets/sophon-secrets.iso` if using pre-issued certificates or unattended seeding) to the hypervisor.
 2. Create a 64-bit Linux VM (`8` vCPU, `8 GiB` RAM, one blank `40+ GiB` disk, and one NIC on your target network). On Hyper-V, use Generation 2 with Secure Boot disabled.
@@ -63,7 +63,7 @@ When `sophon-secrets.iso` does not contain an unattended seed (or no secrets ISO
 
 To recover from an existing SFTP Kopia repository without an unattended `sophon-secrets.iso`:
 
-1. Boot a clean InfraVM (via `bash sophon-provision.sh provision` or Section 1 above), set the `core` password, and log in as `core`.
+1. Boot a clean InfraVM (via `sh sophon-provision.sh` or Section 1 above), set the `core` password, and log in as `core`.
 2. Stage the stacks in safe standby mode so public Cloudflare DNS/tunnels are untouched and scheduled backups stay paused before state is restored:
    ```bash
    sophon-deploy --prepare-restore

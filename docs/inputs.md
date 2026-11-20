@@ -3,21 +3,19 @@
 Nothing site-specific is baked into the reusable ISOs. Each step asks only for what it needs.
 Keep every credential in a password manager: reruns need the same existing values.
 
-## On the laptop: prepare (internet)
+## On the laptop: build ISOs (`sophon-build-isos`)
 
-No inputs. Needs Docker or Podman, space for the images and ISOs, and internet.
-Pass `-e prepare_force=true` after `prepare` to refresh cached downloads and force an ISO rebuild, for example:
-`bash sophon-provision.sh prepare -e prepare_force=true` (or `.\sophon-provision.ps1 prepare -e prepare_force=true`;
-the raw `docker run` form is in [manual-commands.md](manual-commands.md)).
+Needs Docker or Podman, space for the images and ISOs, and internet.
+Run `sh sophon-build-isos.sh` (or `.\sophon-build-isos.ps1`) to build both the unattended mode-`0600` secrets ISOs and the reusable OS/app ISOs, or `--os-only` to build only the reusable OS/app ISOs (`--force` refreshes cached downloads and forces an ISO rebuild; the raw `docker run` form is in [manual-commands.md](manual-commands.md)).
 A laptop that is later offline
-must already have `artifacts/` and the built `sophon-tools` image from a completed run; steps 1-2 then
-use only the hypervisor's management network.
+must already have `artifacts/` and the built `sophon-tools` image from a completed run; provisioning then
+uses only the hypervisor's management network.
 
-## On the laptop: provision
+## On the laptop: provision (`sophon-provision`)
 
 Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or `hyperv`).
-Every step 1-2 variable below is also listed, with a comment, in [`.env.example`](../.env.example); copy it to `.env` and the
-`sophon-provision` scripts read it.
+Every variable below is also listed, with a comment, in [`.env.example`](../.env.example); copy it to `.env` and both
+`sophon-build-isos` and `sophon-provision` read it automatically.
 
 | Proxmox | Meaning |
 |---|---|

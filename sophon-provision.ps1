@@ -1,22 +1,39 @@
 <#
 .SYNOPSIS
-  Runs a sophon-tools command on Windows with whichever engine is available (Docker, Podman or Podman/Docker in WSL).
+  Provision or manage Sophon VMs on Proxmox, VMware vCenter, or Microsoft Hyper-V.
 .EXAMPLE
-  .\sophon-provision.ps1                 # steps 1+2 (default command: provision)
-  .\sophon-provision.ps1 prepare         # step 1 only
-  .\sophon-provision.ps1 certificates issue --domain example.com   # connected laptop: write the secret certificate ISO
-  .\sophon-provision.ps1 attach-certificates   # local Hyper-V: insert that ISO into the InfraVM (detach-certificates ejects it)
-.NOTES
-  With no SOPHON_HYPERVISOR set it asks where InfraVM should run (or to only download and build, then exit), and
-  asks for any missing required setting. Every SOPHON_* variable (and CF_DNS_API_TOKEN) is passed by name.
-  For Hyper-V on this machine (SOPHON_HYPERVISOR=hyperv with no SOPHON_HYPERV_HOST) it runs step 1 in the container,
-  then 2-provision-hyperv-local.ps1 as the signed-in user, so no WinRM or credentials are needed.
+  .\sophon-provision.ps1                 # deploy SFTP Backup VM (if paired) + production InfraVM
+  .\sophon-provision.ps1 --recreate      # replace production InfraVM in place (safe standby until sophon-activate)
+  .\sophon-provision.ps1 dev             # recreate & restore dev/drill InfraVM on SOPHON_DEV_NETWORK_CIDR
+  .\sophon-provision.ps1 backup          # deploy only the standalone Alpine SFTP Backup Server VM
+  .\sophon-provision.ps1 destroy-vm      # stop and delete a Sophon-managed VM
+  .\sophon-provision.ps1 attach-certificates   # local Hyper-V: insert sophon-secrets.iso (detach-certificates ejects it)
 #>
 param([Parameter(ValueFromRemainingArguments)][string[]]$Rest)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$command = if ($Rest) { $Rest[0] } else { 'provision' }
-$more = @($Rest | Select-Object -Skip 1)
+
+$command = 'provision'
+$more = @($Rest)
+if ($Rest -and $Rest[0] -in '-h', '--help') {
+    $command = '--help'
+    $more = @()
+} elseif ($Rest -and -not $Rest[0].StartsWith('-')) {
+    if ($Rest[0] -in 'build-isos', 'prepare', 'secrets', 'certificates') {
+        $sub = if ($Rest[0] -eq 'build-isos') { '' } else { " $($Rest[0])" }
+        throw "ISO/secrets commands live in sophon-build-isos.ps1 — run: .\sophon-build-isos.ps1$sub"
+    }
+    $command = switch ($Rest[0]) {
+        'dev' { 'provision-dev' }
+        'backup' { 'provision-backup' }
+        default { $Rest[0] }
+    }
+    if ($command -notin 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore',
+                        'attach-certificates', 'detach-certificates', 'test', 'shell', 'help') {
+        throw "Unknown command '$($Rest[0])' (expected dev, backup, destroy-vm, or --recreate)."
+    }
+    $more = @($Rest | Select-Object -Skip 1)
+}
 
 function Load-EnvFile([string]$FilePath) {
     if (-not (Test-Path -LiteralPath $FilePath)) { return }
@@ -31,45 +48,21 @@ function Load-EnvFile([string]$FilePath) {
         }
     }
 }
-
-if ($command -in 'provision-dev', 'verify-restore') {
-    $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
-    Load-EnvFile (Join-Path $cfgRoot 'sophon/verify-restore.env')
-}
-Load-EnvFile '.env'
+if ($command -notin 'test', 'shell', '--help', 'help') { Load-EnvFile '.env' }
 
 $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
-
-function Need([string]$Name, [string]$Prompt, [string]$Default = '') {
-    if ([Environment]::GetEnvironmentVariable($Name)) { return }
-    $answer = Read-Host ($Prompt + $(if ($Default) { " [$Default]" }))
-    if (-not $answer) { $answer = $Default }
-    if (-not $answer) { throw "$Prompt is required." }
-    [Environment]::SetEnvironmentVariable($Name, $answer)
-}
-function NeedSecret([string]$Name) {
-    if ([Environment]::GetEnvironmentVariable($Name)) { return }
-    $secure = Read-Host $Name -AsSecureString
-    $value = [pscredential]::new('x', $secure).GetNetworkCredential().Password
-    if (-not $value) { throw "$Name is required." }
-    [Environment]::SetEnvironmentVariable($Name, $value)
-}
-
-# Ask where InfraVM should run unless SOPHON_HYPERVISOR already says (automation sets it).
 if ($command -in 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
-    Write-Host 'Where should InfraVM run?'
+    Write-Host 'Where should the VM run?'
     Write-Host '  1) Proxmox'
     Write-Host '  2) VMware vCenter'
     Write-Host '  3) Microsoft Hyper-V on this PC (runs as you; no password)'
     Write-Host '  4) Microsoft Hyper-V on another host (WinRM)'
-    Write-Host '  5) Nowhere yet: only download and build the installation media (step 1), then exit'
-    switch (Read-Host 'Choose 1-5') {
+    switch (Read-Host 'Choose 1-4') {
         '1' { $env:SOPHON_HYPERVISOR = 'proxmox' }
         '2' { $env:SOPHON_HYPERVISOR = 'vcenter' }
         '3' { $env:SOPHON_HYPERVISOR = 'hyperv'; $env:SOPHON_HYPERV_HOST = '' }
-        '4' { $env:SOPHON_HYPERVISOR = 'hyperv'; Need 'SOPHON_HYPERV_HOST' 'Hyper-V host name or address' }
-        '5' { $command = 'prepare' }
-        default { throw 'Choose a number from 1 to 5.' }
+        '4' { $env:SOPHON_HYPERVISOR = 'hyperv' }
+        default { throw 'Choose a number from 1 to 4.' }
     }
 }
 
@@ -77,64 +70,39 @@ $hypervisor = if ($env:SOPHON_HYPERVISOR) { $env:SOPHON_HYPERVISOR } else { 'pro
 $localHyperV = $hypervisor -eq 'hyperv' -and (-not $env:SOPHON_HYPERV_HOST -or
     $env:SOPHON_HYPERV_HOST -in 'localhost', '127.0.0.1', $env:COMPUTERNAME)
 
-$extraMounts = @()
-if ($command -in 'provision-dev', 'verify-restore' -and $env:SOPHON_VERIFY_RESTORE_CA_FILE) {
-    $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
-    $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
-    $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
-}
-
-if ($command -in 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $localHyperV) {
-    switch ($hypervisor) {
-        'vcenter' {
-            Need 'SOPHON_VCENTER_URL' 'vCenter URL (https://...)'
-            Need 'SOPHON_VCENTER_USERNAME' 'vCenter username' 'administrator@vsphere.local'
-            Need 'SOPHON_VCENTER_DATACENTER' 'Datacenter'
-            Need 'SOPHON_VCENTER_CLUSTER' 'Cluster'
-            Need 'SOPHON_VCENTER_DATASTORE' 'Datastore'
-            Need 'SOPHON_VCENTER_NETWORK' 'Port group'
-            NeedSecret 'SOPHON_VCENTER_PASSWORD'
-        }
-        'hyperv' {
-            Need 'SOPHON_HYPERV_HOST' 'Hyper-V host name or address'
-            Need 'SOPHON_HYPERV_USERNAME' 'Hyper-V username' 'Administrator'
-            Need 'SOPHON_HYPERV_SWITCH' 'Virtual switch'
-            NeedSecret 'SOPHON_HYPERV_PASSWORD'
-        }
-        default {
-            Need 'SOPHON_PROXMOX_HOST' 'Proxmox host name or address'
-            Need 'SOPHON_PROXMOX_NODE' 'Proxmox node' 'proxmox'
-            NeedSecret 'SOPHON_PROXMOX_PASSWORD'
-        }
-    }
-}
-
-$names = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^(SOPHON_|CF_DNS_API_TOKEN$)' } | ForEach-Object Name)
-
-$engine = @('docker', 'podman') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
 if ($command -in 'attach-certificates', 'detach-certificates') {
-    # Insert or eject the secret certificate ISO (from `certificates issue`) on the local Hyper-V InfraVM.
     if ($command -eq 'attach-certificates') { & "$PSScriptRoot\2-provision-hyperv-local.ps1" -AttachCertificates }
     else { & "$PSScriptRoot\2-provision-hyperv-local.ps1" -DetachCertificates }
     return
 }
+
+$names = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^(SOPHON_|CF_DNS_API_TOKEN$)' } | ForEach-Object Name)
+$engine = @('docker', 'podman') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+
 if ($localHyperV -and $command -in 'provision', 'provision-dev') {
-    & $PSCommandPath prepare
-    if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    $hvArgs = @()
+    foreach ($iso in 'artifacts\coreos\sophon-coreos.iso', 'artifacts\bootstrap\sophon-apps.iso') {
+        if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $iso) -PathType Leaf)) {
+            throw "Missing installation ISO: $iso (run .\sophon-build-isos.ps1 first)."
+        }
+    }
     if ($command -eq 'provision-dev') {
+        if (-not $engine) { throw 'Docker or Podman is required to derive the dev secrets ISO.' }
         $devName = if ($env:SOPHON_DEV_INFRAVM_NAME) { $env:SOPHON_DEV_INFRAVM_NAME } else { 'sophon-dev-infravm' }
-        $srcIso = if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } else { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso' }
-        $devIso = Join-Path $PSScriptRoot 'artifacts\secrets\.tmp-sophon-dev-secrets.iso'
-        & $PSCommandPath secrets --output-iso $srcIso --derive-dev-iso $devIso
+        $srcIso = if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } else { 'artifacts/secrets/sophon-secrets.iso' }
+        $devIsoRel = 'artifacts/secrets/.tmp-sophon-dev-secrets.iso'
+        $devIsoAbs = Join-Path $PSScriptRoot 'artifacts\secrets\.tmp-sophon-dev-secrets.iso'
+        $drvRun = @('run', '--rm', '-e', 'SOPHON_LOAD_DOTENV=1', '-v', "${PSScriptRoot}:/workspace")
+        foreach ($name in $names) { $drvRun += '-e', $name }
+        & $engine @drvRun sophon-tools secrets --output-iso $srcIso --derive-dev-iso $devIsoRel
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         try {
-            & "$PSScriptRoot\2-provision-hyperv-local.ps1" -Name $devName -Recreate -CertificatesIso $devIso
+            & "$PSScriptRoot\2-provision-hyperv-local.ps1" -Name $devName -Recreate -CertificatesIso $devIsoAbs
         } finally {
-            Remove-Item -LiteralPath $devIso -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $devIsoAbs -Force -ErrorAction SilentlyContinue
         }
         return
     }
+    $hvArgs = @()
     if ($more -contains '--recreate') { $hvArgs += '-Recreate' }
     & "$PSScriptRoot\2-provision-hyperv-local.ps1" @hvArgs
     return
@@ -142,10 +110,17 @@ if ($localHyperV -and $command -in 'provision', 'provision-dev') {
 
 if (-not $engine) {
     if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) { throw 'Docker, Podman or WSL (with one of them) is required.' }
-    # Run the bash wrapper inside WSL; WSLENV carries the settings by name.
-    $env:WSLENV = (@($env:WSLENV -split ':' | Where-Object { $_ }) + $names | Select-Object -Unique) -join ':'
-    wsl --cd $PSScriptRoot -- bash ./sophon-provision.sh $command @more
+    if ($names) { $env:WSLENV = (@($env:WSLENV -split ':' | Where-Object { $_ }) + $names | Select-Object -Unique) -join ':' }
+    wsl --cd $PSScriptRoot -- sh ./sophon-provision.sh $command @more
     exit $LASTEXITCODE
+}
+
+$extraMounts = @()
+if ($command -in 'provision-dev', 'verify-restore' -and $env:SOPHON_VERIFY_RESTORE_CA_FILE) {
+    $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
+    $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
+    $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
+    if ('SOPHON_VERIFY_RESTORE_CA_FILE' -notin $names) { $names += 'SOPHON_VERIFY_RESTORE_CA_FILE' }
 }
 
 $socket = (& $engine info --format '{{.Host.RemoteSocket.Path}}' 2>$null)
@@ -158,7 +133,7 @@ if ($LASTEXITCODE -eq 0 -and $socket) {
 & $engine image inspect sophon-tools *> $null
 if ($LASTEXITCODE) { & $engine build -t sophon-tools -f Containerfile .; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
 
-$run = @('run', '--rm', '--init')
+$run = @('run', '--rm', '--init', '-e', 'PYTHONUNBUFFERED=1', '-e', 'SOPHON_LOAD_DOTENV=1', '-e', 'SOPHON_ENTRYPOINT=provision')
 if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) { $run += '-it' }
 $run += '-v', "${PSScriptRoot}:/workspace", '-v', "${socket}:/var/run/docker.sock", '-v', 'sophon-state:/state'
 $run += $extraMounts

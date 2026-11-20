@@ -65,7 +65,7 @@ if ($manageCertificates) {
         Write-Host 'Certificate disk ejected. Delete the ISO from this PC when you no longer need it.'
         return
     }
-    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing secrets ISO: $CertificatesIso (run: .\sophon-provision.ps1 secrets or certificates issue)." }
+    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing secrets ISO: $CertificatesIso (run: .\sophon-build-isos.ps1)." }
     $empty = $drives | Where-Object { -not $_.Path } | Select-Object -First 1
     if ($empty) { Set-VMDvdDrive -VMDvdDrive $empty -Path $full } else { $null = Add-VMDvdDrive -VM $vm -Path $full }
     Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-deploy and answer n to the internet access question."

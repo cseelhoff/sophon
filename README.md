@@ -16,17 +16,17 @@ filesystem (`~/sophon`, not `/mnt/c/...`): building the ISOs is several times fa
 
 ### Option A: Zero-prompt unattended install & unified auto-restore (Proxmox, vCenter, Hyper-V)
 
-```bash
-# 1. Build immutable OS/deployment/backup ISOs
-bash sophon-provision.sh prepare                     # Windows: .\sophon-provision.ps1 prepare
+Copy [`.env.example`](.env.example) to `.env`, configure your hypervisor, domain, and IP settings, and run two commands:
 
-# 2. Generate private mode-0600 secrets ISOs (pre-pairs SFTP host + client SSH keys)
-bash sophon-provision.sh secrets --with-backup       # Windows: .\sophon-provision.ps1 secrets --with-backup
+```sh
+# 1. Build all ISOs (prompts for any unset passwords and writes mode-0600 secrets ISOs + offline OS/app ISOs)
+sh sophon-build-isos.sh           # Windows: .\sophon-build-isos.ps1
 
-# 3. Provision the SFTP Backup Server VM, then production InfraVM (or `provision-dev` for a dev/drill restore VM)
-bash sophon-provision.sh provision-backup            # Windows: .\sophon-provision.ps1 provision-backup
-bash sophon-provision.sh provision                   # Windows: .\sophon-provision.ps1 provision
-bash sophon-provision.sh provision-dev               # Windows: .\sophon-provision.ps1 provision-dev (always recreates dev VM)
+# 2. Provision Sophon (deploys SFTP Backup Server VM when sophon-sftp-secrets.iso exists, then production InfraVM)
+sh sophon-provision.sh            # Windows: .\sophon-provision.ps1
+
+# Optional: deploy or refresh the isolated dev / restore-drill VM (`SOPHON_DEV_INFRAVM_NAME` on `SOPHON_DEV_NETWORK_CIDR`)
+sh sophon-provision.sh dev        # Windows: .\sophon-provision.ps1 dev
 ```
 
 One `sophon-secrets.iso` handles **both Day-1 builds and automated restores** safely:
@@ -38,8 +38,9 @@ One `sophon-secrets.iso` handles **both Day-1 builds and automated restores** sa
 
 **1. On your laptop** (internet needed)
 
-```bash
-bash sophon-provision.sh          # Windows: .\sophon-provision.ps1
+```sh
+sh sophon-build-isos.sh --os-only # Windows: .\sophon-build-isos.ps1 --os-only
+sh sophon-provision.sh            # Windows: .\sophon-provision.ps1
 ```
 
 Choose where InfraVM runs (Proxmox, vCenter or Hyper-V) and answer the prompts. It downloads everything, builds the
@@ -63,8 +64,8 @@ The script builds a tools image the first time (about 560 MB; allow several minu
 prompted for and never put on a command line. To skip the questions, copy [.env.example](.env.example) to `.env`
 and fill it in (git-ignored; the scripts read it automatically).
 
-```bash
-cp .env.example .env              # PowerShell: Copy-Item .env.example .env
+```sh
+install -m 600 .env.example .env  # PowerShell: Copy-Item .env.example .env
 ```
 
 | Hypervisor | Required settings |
@@ -89,13 +90,13 @@ Needed at `sophon-deploy` (connected sites) for Let's Encrypt DNS-01 and tunnel 
 
 3. **Zone Resources:** Include > Specific zone > your domain. **Account Resources:** Include > your account.
 4. **Continue to summary** > **Create Token**, and copy it now (it is shown once). Paste it at the *Cloudflare token*
-   prompt, or set `CF_DNS_API_TOKEN` for `certificates issue` (that needs only the two Zone permissions).
+   prompt, or set `SOPHON_CF_TOKEN` in `.env` (air-gapped `certificates issue` needs only the two Zone permissions).
    For LAN-only, dev, or standby VMs that still issue Let's Encrypt DNS-01 certificates without creating a Cloudflare
    tunnel or repointing public DNS CNAMEs, answer `false` at `SOPHON_CF_TUNNEL_ENABLED`.
 
 ### Another hypervisor (for example VMware Workstation)
 
-Run `prepare`, then do the VM part by hand:
+Run `sh sophon-build-isos.sh --os-only`, then do the VM part by hand:
 
 1. Copy `artifacts/coreos/sophon-coreos.iso` and `artifacts/bootstrap/sophon-apps.iso` to the hypervisor.
    At an [air-gapped site](#air-gapped-sites) (or when using unattended seeding) also copy `artifacts/secrets/sophon-secrets.iso`.
@@ -173,13 +174,13 @@ podman exec kopia cat /source/last-run.json
 
 Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
 redeploy from code and restore state via `sophon-restore`—either automatically
-in **Safe Standby Mode** via `bash sophon-provision.sh provision-dev` (promoting
+in **Safe Standby Mode** via `sh sophon-provision.sh dev` (promoting
 to live production and switching from `SOPHON_DEV_NETWORK_CIDR` to
 `SOPHON_NETWORK_CIDR` only if you explicitly run `sophon-activate`), or
 interactively via `sophon-deploy --prepare-restore` followed by `sophon-restore`
 (see [Manual Installation & Recovery](docs/manual-installation.md)). Across
-**Proxmox, VMware vCenter, and Microsoft Hyper-V**, `bash sophon-provision.sh provision-dev`
-(PowerShell: `.\sophon-provision.ps1 provision-dev`, plus optional weekly
+**Proxmox, VMware vCenter, and Microsoft Hyper-V**, `sh sophon-provision.sh dev`
+(PowerShell: `.\sophon-provision.ps1 dev`, plus optional weekly
 `systemd --user` timer units in [contrib/systemd/](contrib/systemd)) always
 deletes any existing `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`) first and
 boots a clean standby VM on `SOPHON_DEV_NETWORK_CIDR` with the confined
@@ -194,8 +195,8 @@ like passwords: delete or detach them once ingested. See the
 Run the laptop step while connected (it caches every image). The VM installs offline; `sophon-secrets.iso` carries your
 pre-issued wildcard certificate in place of live Let's Encrypt issuance.
 
-1. **Connected machine:** `bash sophon-provision.sh certificates issue --domain example.com`
-   (PowerShell: `.\sophon-provision.ps1 certificates issue ...`). It asks for an ACME email and a Cloudflare token
+1. **Connected machine:** `sh sophon-build-isos.sh certificates issue --domain example.com`
+   (PowerShell: `.\sophon-build-isos.ps1 certificates issue ...`). It asks for an ACME email and a Cloudflare token
    (the two Zone permissions above) and writes `artifacts/secrets/sophon-secrets.iso` (label `SOPHON_CERTS`),
    preserving any existing `/sophon-seed.json` while storing your wildcard certificate, chain and private key (no token
    or ACME account). It is a secret: delete it after use. Run it on the same machine each time.
@@ -213,5 +214,5 @@ full deployment). Eject the disk afterwards (`.\sophon-provision.ps1 detach-cert
 ### Upgrading
 
 Rebuild the tools image (`docker build -t sophon-tools -f Containerfile .`, or `podman`), then run
-`bash sophon-provision.sh prepare -e prepare_force=true`. New ISOs only affect **new** VMs; don't swap images under
+`sh sophon-build-isos.sh --os-only --force`. New ISOs only affect **new** VMs; don't swap images under
 existing PostgreSQL or LDAP volumes without migrating ([details](docs/inputs.md#upgrading-from-the-previous-pins)).
