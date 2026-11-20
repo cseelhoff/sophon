@@ -49,7 +49,7 @@ if [[ ! -f /run/user/1000/sophon-ready ]]; then
     exit 1
 fi
 
-install -d -m 0700 /var/lib/sophon/stacks
+install -d -m 0700 /var/lib/sophon/stacks /var/lib/sophon/control
 
 args=(
     --remote=false run --rm --network host --pull never
@@ -94,9 +94,9 @@ for name in \
     SOPHON_KEYCLOAK_REALM \
     SOPHON_KEYCLOAK_REALM_DISPLAY_NAME SOPHON_KEYCLOAK_ADMIN_PASSWORD \
     SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET \
-    SOPHON_GITEA_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
+    SOPHON_GITEA_ADMIN_PASSWORD SOPHON_NEXUS_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
     SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD \
-    SOPHON_ARCANE_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD \
+    SOPHON_ARCANE_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD SOPHON_NEXUS_DB_PASSWORD \
     SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SERVER_USERNAME SOPHON_KOPIA_SERVER_PASSWORD \
     SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PATH \
     SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 \
@@ -112,4 +112,10 @@ done
 if [[ -v SOPHON_PREPARE_RESTORE ]]; then
     args+=(--env SOPHON_PREPARE_RESTORE)
 fi
-exec podman "${args[@]}" sophon:latest python3 src/console.py "$@"
+podman "${args[@]}" sophon:latest python3 src/console.py "$@"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops && ( -f /var/lib/sophon/stacks/nexus/compose.yaml || -f /var/lib/sophon/stacks/nexus/docker-compose.yml ) ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi

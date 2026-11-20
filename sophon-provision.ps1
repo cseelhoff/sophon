@@ -1,12 +1,10 @@
 <#
 .SYNOPSIS
-  Provision or manage Sophon VMs on Proxmox, VMware vCenter, or Microsoft Hyper-V.
+  Provision or manage production Sophon VMs on Proxmox, VMware vCenter, or Microsoft Hyper-V.
 .EXAMPLE
   .\sophon-provision.ps1                 # deploy SFTP Backup VM (if paired) + production InfraVM
-  .\sophon-provision.ps1 --recreate      # replace production InfraVM in place (safe standby until sophon-activate)
-  .\sophon-provision.ps1 dev             # recreate & restore dev/drill InfraVM on SOPHON_DEV_NETWORK_CIDR
+  .\sophon-provision.ps1 --recreate      # replace production InfraVM in place (safe standby until activated)
   .\sophon-provision.ps1 backup          # deploy only the standalone Alpine SFTP Backup Server VM
-  .\sophon-provision.ps1 destroy-vm      # stop and delete a Sophon-managed VM
   .\sophon-provision.ps1 attach-certificates   # local Hyper-V: insert sophon-secrets.iso (detach-certificates ejects it)
 #>
 param([Parameter(ValueFromRemainingArguments)][string[]]$Rest)
@@ -23,14 +21,21 @@ if ($Rest -and $Rest[0] -in '-h', '--help') {
         $sub = if ($Rest[0] -eq 'build-isos') { '' } else { " $($Rest[0])" }
         throw "ISO/secrets commands live in sophon-build-isos.ps1 — run: .\sophon-build-isos.ps1$sub"
     }
+    if ($Rest[0] -in 'dev', 'provision-dev', 'verify-restore') {
+        $tail = if ($Rest.Count -gt 1) { ' ' + (($Rest | Select-Object -Skip 1) -join ' ') } else { '' }
+        throw "Dev/drill provisioning lives in sophon-provision-dev.ps1 — run: .\sophon-provision-dev.ps1$tail"
+    }
+    if ($Rest[0] -eq 'destroy-vm') {
+        $tail = if ($Rest.Count -gt 1) { ' ' + (($Rest | Select-Object -Skip 1) -join ' ') } else { '' }
+        throw "VM deletion lives in sophon-destroy-vm.ps1 — run: .\sophon-destroy-vm.ps1$tail"
+    }
     $command = switch ($Rest[0]) {
-        'dev' { 'provision-dev' }
         'backup' { 'provision-backup' }
         default { $Rest[0] }
     }
-    if ($command -notin 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore',
+    if ($command -notin 'provision', 'provision-backup',
                         'attach-certificates', 'detach-certificates', 'test', 'shell', 'help') {
-        throw "Unknown command '$($Rest[0])' (expected dev, backup, destroy-vm, or --recreate)."
+        throw "Unknown command '$($Rest[0])' (expected backup or --recreate; see also .\sophon-provision-dev.ps1 and .\sophon-destroy-vm.ps1)."
     }
     $more = @($Rest | Select-Object -Skip 1)
 }
@@ -40,7 +45,10 @@ function Load-EnvFile([string]$FilePath) {
     foreach ($line in Get-Content -LiteralPath $FilePath) {
         if ($line -cmatch '^\s*([A-Z][A-Z0-9_]*)=(.*)$') {
             $key = $Matches[1]; $value = $Matches[2].Trim()
-            if ($value -match '^(["''])(.*)\1$') { $value = $Matches[2] }
+            if ($value -match '^(["''])(.*)\1$') {
+                $q = $Matches[1]; $value = $Matches[2]
+                if ($q -eq '"') { $value = $value -replace '\\"', '"' -replace '\\\\', '\' }
+            }
             if (($key -like 'SOPHON_*' -or $key -eq 'CF_DNS_API_TOKEN') -and $value -and
                 -not [Environment]::GetEnvironmentVariable($key)) {
                 [Environment]::SetEnvironmentVariable($key, $value)
@@ -51,7 +59,7 @@ function Load-EnvFile([string]$FilePath) {
 if ($command -notin 'test', 'shell', '--help', 'help') { Load-EnvFile '.env' }
 
 $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
-if ($command -in 'provision', 'provision-dev', 'provision-backup', 'destroy-vm', 'verify-restore' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
+if ($command -in 'provision', 'provision-backup' -and $interactive -and -not $env:SOPHON_HYPERVISOR) {
     Write-Host 'Where should the VM run?'
     Write-Host '  1) Proxmox'
     Write-Host '  2) VMware vCenter'
@@ -79,28 +87,11 @@ if ($command -in 'attach-certificates', 'detach-certificates') {
 $names = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^(SOPHON_|CF_DNS_API_TOKEN$)' } | ForEach-Object Name)
 $engine = @('docker', 'podman') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
 
-if ($localHyperV -and $command -in 'provision', 'provision-dev') {
+if ($localHyperV -and $command -eq 'provision') {
     foreach ($iso in 'artifacts\coreos\sophon-coreos.iso', 'artifacts\bootstrap\sophon-apps.iso') {
         if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $iso) -PathType Leaf)) {
             throw "Missing installation ISO: $iso (run .\sophon-build-isos.ps1 first)."
         }
-    }
-    if ($command -eq 'provision-dev') {
-        if (-not $engine) { throw 'Docker or Podman is required to derive the dev secrets ISO.' }
-        $devName = if ($env:SOPHON_DEV_INFRAVM_NAME) { $env:SOPHON_DEV_INFRAVM_NAME } else { 'sophon-dev-infravm' }
-        $srcIso = if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } else { 'artifacts/secrets/sophon-secrets.iso' }
-        $devIsoRel = 'artifacts/secrets/.tmp-sophon-dev-secrets.iso'
-        $devIsoAbs = Join-Path $PSScriptRoot 'artifacts\secrets\.tmp-sophon-dev-secrets.iso'
-        $drvRun = @('run', '--rm', '-e', 'SOPHON_LOAD_DOTENV=1', '-v', "${PSScriptRoot}:/workspace")
-        foreach ($name in $names) { $drvRun += '-e', $name }
-        & $engine @drvRun sophon-tools secrets --output-iso $srcIso --derive-dev-iso $devIsoRel
-        if ($LASTEXITCODE) { exit $LASTEXITCODE }
-        try {
-            & "$PSScriptRoot\2-provision-hyperv-local.ps1" -Name $devName -Recreate -CertificatesIso $devIsoAbs
-        } finally {
-            Remove-Item -LiteralPath $devIsoAbs -Force -ErrorAction SilentlyContinue
-        }
-        return
     }
     $hvArgs = @()
     if ($more -contains '--recreate') { $hvArgs += '-Recreate' }
@@ -113,14 +104,6 @@ if (-not $engine) {
     if ($names) { $env:WSLENV = (@($env:WSLENV -split ':' | Where-Object { $_ }) + $names | Select-Object -Unique) -join ':' }
     wsl --cd $PSScriptRoot -- sh ./sophon-provision.sh $command @more
     exit $LASTEXITCODE
-}
-
-$extraMounts = @()
-if ($command -in 'provision-dev', 'verify-restore' -and $env:SOPHON_VERIFY_RESTORE_CA_FILE) {
-    $caAbs = (Resolve-Path -LiteralPath $env:SOPHON_VERIFY_RESTORE_CA_FILE).Path
-    $extraMounts += '-v', "${caAbs}:/tmp/sophon-verify-ca.pem:ro"
-    $env:SOPHON_VERIFY_RESTORE_CA_FILE = '/tmp/sophon-verify-ca.pem'
-    if ('SOPHON_VERIFY_RESTORE_CA_FILE' -notin $names) { $names += 'SOPHON_VERIFY_RESTORE_CA_FILE' }
 }
 
 $socket = (& $engine info --format '{{.Host.RemoteSocket.Path}}' 2>$null)
@@ -136,7 +119,6 @@ if ($LASTEXITCODE) { & $engine build -t sophon-tools -f Containerfile .; if ($LA
 $run = @('run', '--rm', '--init', '-e', 'PYTHONUNBUFFERED=1', '-e', 'SOPHON_LOAD_DOTENV=1', '-e', 'SOPHON_ENTRYPOINT=provision')
 if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) { $run += '-it' }
 $run += '-v', "${PSScriptRoot}:/workspace", '-v', "${socket}:/var/run/docker.sock", '-v', 'sophon-state:/state'
-$run += $extraMounts
 foreach ($name in $names) { $run += '-e', $name }
 & $engine @run sophon-tools $command @more
 exit $LASTEXITCODE

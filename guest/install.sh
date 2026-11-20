@@ -32,7 +32,7 @@ verify_bundle() {
     (cd "$media" && sha256sum --strict --check SHA256SUMS) ||
         die "Artifact checksum verification failed; do not install."
     for path in install.sh runner.tar tools/busybox project/src/console.py project/src/activate.py \
-        guest/sophon-deploy guest/sophon-restore guest/sophon-activate \
+        guest/sophon-deploy guest/sophon-restore guest/sophon-activate guest/sophon-reconcile-gitops \
         guest/sophon-seed-early guest/sophon-autodeploy guest/sophon-update-issue \
         guest/host-bootstrap.sh guest/sophon-network guest/sophon-set-password; do
         [[ -v 'listed[$path]' && -f $media/$path ]] || die "Missing required artifact: $path"
@@ -107,6 +107,7 @@ ignition_file() {
 
 render_ignition() {
     local media=$1 unit seed_early_unit autodeploy_unit password_unit serial_password_unit var_mount_unit
+    local ip_probe_path_unit ip_probe_service_unit web_activate_path_unit web_activate_service_unit
     unit='[Unit]
 Description=Sophon offline host bootstrap
 After=network-online.target user@1000.service
@@ -216,6 +217,48 @@ Options=noatime,user_subvol_rm_allowed
 [Install]
 RequiredBy=local-fs.target
 '
+    ip_probe_path_unit='[Unit]
+Description=Watch for Sophon target-IP occupancy probe requests
+After=var.mount sophon-host-bootstrap.service
+
+[Path]
+PathExists=/var/lib/sophon/control/probe.request
+Unit=sophon-ip-probe.service
+
+[Install]
+WantedBy=multi-user.target
+'
+    ip_probe_service_unit='[Unit]
+Description=Run Sophon host target-IP occupancy probe
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/sophon-control-sync --probe
+'
+    web_activate_path_unit='[Unit]
+Description=Watch for Sophon web-triggered production activation requests
+After=var.mount sophon-host-bootstrap.service
+
+[Path]
+PathExists=/var/lib/sophon/control/activate.request
+Unit=sophon-web-activate.service
+
+[Install]
+WantedBy=multi-user.target
+'
+    web_activate_service_unit='[Unit]
+Description=Promote Sophon standby appliance to active production
+After=network-online.target user@1000.service
+Wants=network-online.target
+Requires=user@1000.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/sophon-web-activate
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=0
+'
     printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"filesystems":[{"path":"/var","device":"/dev/disk/by-label/sophon-var","format":"btrfs","label":"sophon-var","wipeFilesystem":false,"mountOptions":["noatime","user_subvol_rm_allowed"]}],"files":['
     ignition_file /etc/hostname 420 sophon-infravm; printf ','
     ignition_file /etc/sysctl.d/99-sophon-lowports.conf 420 $'net.ipv4.ip_unprivileged_port_start=0\n'; printf ','
@@ -227,11 +270,14 @@ RequiredBy=local-fs.target
     ignition_file /usr/local/bin/sophon-deploy 493 "$(cat "$media/guest/sophon-deploy")"; printf ','
     ignition_file /usr/local/bin/sophon-restore 493 "$(cat "$media/guest/sophon-restore")"; printf ','
     ignition_file /usr/local/bin/sophon-activate 493 "$(cat "$media/guest/sophon-activate")"; printf ','
+    ignition_file /usr/local/bin/sophon-reconcile-gitops 493 "$(cat "$media/guest/sophon-reconcile-gitops")"; printf ','
     ignition_file /usr/local/libexec/sophon-host-bootstrap 493 "$(cat "$media/guest/host-bootstrap.sh")"; printf ','
     ignition_file /usr/local/libexec/sophon-network 493 "$(cat "$media/guest/sophon-network")"; printf ','
     ignition_file /usr/local/libexec/sophon-set-password 493 "$(cat "$media/guest/sophon-set-password")"; printf ','
     ignition_file /usr/local/libexec/sophon-seed-early 493 "$(cat "$media/guest/sophon-seed-early")"; printf ','
     ignition_file /usr/local/libexec/sophon-autodeploy 493 "$(cat "$media/guest/sophon-autodeploy")"; printf ','
+    ignition_file /usr/local/libexec/sophon-control-sync 493 "$(cat "$media/guest/sophon-control-sync")"; printf ','
+    ignition_file /usr/local/libexec/sophon-web-activate 493 "$(cat "$media/guest/sophon-web-activate")"; printf ','
     ignition_file /usr/local/libexec/sophon-update-issue 493 "$(cat "$media/guest/sophon-update-issue")"
     printf '],"links":[{"path":"/etc/systemd/user/sockets.target.wants/podman.socket","target":"/usr/lib/systemd/user/podman.socket"},{"path":"/etc/systemd/user/default.target.wants/podman-restart.service","target":"/usr/lib/systemd/user/podman-restart.service"}]},"systemd":{"units":[{"name":"var.mount","enabled":true,"contents":'
     json_string "$var_mount_unit"
@@ -241,6 +287,14 @@ RequiredBy=local-fs.target
     json_string "$unit"
     printf '},{"name":"sophon-autodeploy.service","enabled":true,"contents":'
     json_string "$autodeploy_unit"
+    printf '},{"name":"sophon-ip-probe.path","enabled":true,"contents":'
+    json_string "$ip_probe_path_unit"
+    printf '},{"name":"sophon-ip-probe.service","contents":'
+    json_string "$ip_probe_service_unit"
+    printf '},{"name":"sophon-web-activate.path","enabled":true,"contents":'
+    json_string "$web_activate_path_unit"
+    printf '},{"name":"sophon-web-activate.service","contents":'
+    json_string "$web_activate_service_unit"
     printf '},{"name":"sophon-set-password.service","enabled":true,"contents":'
     json_string "$password_unit"
     printf '},{"name":"sophon-set-password-serial.service","enabled":true,"contents":'

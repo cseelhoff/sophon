@@ -435,3 +435,69 @@
     validate_certs: false
     status_code: [204, 409]
   changed_when: false
+
+# =========================================================================
+# sophon-status OIDC client (PKCE S256 appliance status & DR cutover UI)
+# =========================================================================
+- name: Lookup sophon-status client
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=sophon-status"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_status_client
+  changed_when: false
+
+- name: Create sophon-status client
+  when: _kc_status_client.json | length == 0
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      clientId: sophon-status
+      name: Sophon Appliance Status
+      enabled: true
+      protocol: openid-connect
+      publicClient: true
+      standardFlowEnabled: true
+      implicitFlowEnabled: false
+      directAccessGrantsEnabled: false
+      serviceAccountsEnabled: false
+      frontchannelLogout: true
+      fullScopeAllowed: true
+      redirectUris:
+        - "https://{{ keycloak_domain }}/oauth2/callback"
+        - "https://status.{{ keycloak_domain }}/oauth2/callback"
+      webOrigins:
+        - "https://{{ keycloak_domain }}"
+        - "https://status.{{ keycloak_domain }}"
+      attributes:
+        pkce.code.challenge.method: S256
+        post.logout.redirect.uris: "https://{{ keycloak_domain }}/*##https://status.{{ keycloak_domain }}/*"
+    validate_certs: false
+    status_code: [201, 409]
+
+- name: Refresh sophon-status client lookup
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients?clientId=sophon-status"
+    method: GET
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: 200
+  register: _kc_status_client
+  changed_when: false
+
+- name: Add "groups" scope as default scope on sophon-status client
+  vars:
+    _kc_groups_scope_id: "{{ (_kc_scopes.json | selectattr('name', 'equalto', 'groups') | list | first).id }}"
+    _kc_status_id: "{{ _kc_status_client.json[0].id }}"
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_status_id }}/default-client-scopes/{{ _kc_groups_scope_id }}"
+    method: PUT
+    headers: "{{ _kc_headers }}"
+    validate_certs: false
+    status_code: [204, 409]
+  changed_when: false

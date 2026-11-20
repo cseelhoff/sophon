@@ -52,3 +52,18 @@ snapshot from a disjoint working directory on `/var` and destroys the snapshot w
 used by `kopia`. It strips `Config.Env` from container inspection and executes
 only dump commands declared on the target container's own `sophon.backup.*` labels;
 arbitrary `/exec`, `/stop`, `/start` and `/archive` endpoints are rejected.
+
+**Artifact & container registry (Nexus)**: Core Sonatype Nexus Repository Community Edition (`nexus.<domain>`,
+`registry.<domain>` pull group, `registry-push.<domain>` hosted CI push) backed by PostgreSQL and OpenLDAP RBAC
+(`nexus-admins`, `nexus-developers`), with separated `hosted` (backed up by Kopia) and `proxy-cache` (reconstructible,
+excluded from backups) file blob stores. Gitea's built-in package registry is disabled (`GITEA__packages__ENABLED=false`).
+
+**Pure GitOps workload**: a Stage-2 application stack committed declaratively in Gitea (default `ops/workloads`)
+referencing immutable images in `registry.<domain>` and `sophon.backup.*` labels, reconciled onto InfraVM by Arcane
+inbound webhooks or `sophon-reconcile-gitops` during `standby_restore` drills without giving CI runners host socket
+access or long-lived Arcane admin credentials.
+
+**Appliance Status & Cutover UI (`sophon-status`)**: the LAN-only (`CF_EXCLUDE`), Keycloak PKCE OIDC-authenticated
+(`arcane-admins`) status and disaster-recovery cutover console served at `https://<domain>` and `https://status.<domain>`.
+Reads only non-secret state in `/var/lib/sophon/control`, disables promotion whenever `SOPHON_NETWORK_CIDR` is still
+occupied on the network, and triggers `sophon-activate` via the detached host `sophon-web-activate.path` systemd unit.

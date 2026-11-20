@@ -26,7 +26,7 @@ EOF
     day1|active)
         cat > /etc/issue.d/sophon.issue <<EOF
 Sophon InfraVM — PRODUCTION ACTIVE (${domain}${ip:+ at $ip})
-  Services : https://arcane.${domain} | https://git.${domain} | https://auth.${domain} | https://kopia.${domain}
+  Services : https://${domain} | https://arcane.${domain} | https://git.${domain} | https://nexus.${domain} | https://auth.${domain} | https://kopia.${domain}
   Backups  : Active scheduled snapshots enabled
 
 EOF
@@ -34,9 +34,9 @@ EOF
     standby_restore)
         cat > /etc/issue.d/sophon.issue <<EOF
 Sophon InfraVM — STANDBY RESTORE VERIFIED (${domain}${ip:+ at $ip}${detail:+, snapshot $detail})
-  Services : https://arcane.${domain} | https://git.${domain} | https://auth.${domain} | https://kopia.${domain}
+  Services : https://${domain} | https://arcane.${domain} | https://git.${domain} | https://nexus.${domain} | https://auth.${domain} | https://kopia.${domain}
   Safety   : Cloudflare tunnel POSTPONED; Kopia READ-ONLY; scheduled backups PAUSED
-  Promote  : Log in as core and run 'sophon-activate' ONLY to make this server live production
+  Promote  : Open https://${domain} (or log in as core and run 'sophon-activate') after shutting down old prod
 
 EOF
         ;;

@@ -7,13 +7,33 @@ from pathlib import Path
 import os
 import re
 import sys
+import tempfile
 
 import console
 
 ENV_KEY_RE = re.compile(r'^(?:SOPHON_[A-Z0-9_]*|CF_DNS_API_TOKEN)$')
+PENDING_DOTENV_JSON = '/tmp/sophon-build-dotenv.json'
 HYPERVISOR_COMMANDS = frozenset({
     'provision', 'provision-dev', 'dev', 'provision-backup', 'backup', 'destroy-vm', 'verify-restore',
 })
+
+
+def format_dotenv_value(value: str) -> str:
+    """Serialize a single-line `.env` value so `load_dotenv` and PowerShell `Load-EnvFile` read it back verbatim."""
+    if '\n' in value or '\r' in value:
+        raise ValueError('Refusing to write multi-line value into .env.')
+    if not value:
+        return ''
+    needs_quotes = (
+        value != value.strip()
+        or (len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"))
+    )
+    if not needs_quotes:
+        return value
+    if "'" not in value:
+        return f"'{value}'"
+    escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def load_dotenv(path: Path = Path('.env')) -> dict[str, str]:
@@ -35,11 +55,78 @@ def load_dotenv(path: Path = Path('.env')) -> dict[str, str]:
         if not ENV_KEY_RE.match(key):
             continue
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            quote = value[0]
             value = value[1:-1]
+            if quote == '"':
+                value = value.replace('\\"', '"').replace('\\\\', '\\')
         if value and not os.environ.get(key):
             os.environ[key] = value
             loaded[key] = value
     return loaded
+
+
+def save_dotenv(
+    updates: dict[str, str],
+    path: Path = Path('.env'),
+    template_path: Path | None = Path('.env.example'),
+) -> Path:
+    """Persist SOPHON_* decisions to `.env` atomically with mode 0600 while preserving existing lines/comments."""
+    if path.is_symlink():
+        raise ValueError(f'refusing to write symlinked env file: {path}')
+    remaining = {
+        key: str(val)
+        for key, val in updates.items()
+        if ENV_KEY_RE.match(key) and val is not None
+    }
+    if path.is_file():
+        base_lines = path.read_text(encoding='utf-8').splitlines()
+    elif template_path is not None and not template_path.is_symlink() and template_path.is_file():
+        base_lines = template_path.read_text(encoding='utf-8').splitlines()
+    else:
+        base_lines = []
+
+    out_lines: list[str] = []
+    for raw in base_lines:
+        stripped = raw.strip()
+        if stripped and not stripped.startswith('#') and '=' in stripped:
+            key, _ = stripped.split('=', 1)
+            if key in remaining:
+                out_lines.append(f'{key}={format_dotenv_value(remaining.pop(key))}')
+                continue
+        out_lines.append(raw)
+
+    extra = [(key, val) for key, val in remaining.items() if val != '']
+    if extra:
+        if out_lines and out_lines[-1].strip() != '':
+            out_lines.append('')
+        out_lines.append('# --- Saved interactive settings ------------------------------------------------------------------------------')
+        for key, val in extra:
+            out_lines.append(f'{key}={format_dotenv_value(val)}')
+
+    parent = path.resolve().parent
+    parent.mkdir(parents=True, exist_ok=True)
+    parent_stat = parent.stat()
+    payload = ('\n'.join(out_lines).rstrip('\n') + '\n').encode('utf-8')
+    fd, tmp_name = tempfile.mkstemp(prefix='.dotenv-', dir=parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            if hasattr(os, 'fchown') and hasattr(os, 'geteuid') and os.geteuid() == 0:
+                try:
+                    os.fchown(handle.fileno(), parent_stat.st_uid, parent_stat.st_gid)
+                except OSError:
+                    pass
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
+    return path
 
 
 def _need(name: str, label: str, default: str = '') -> None:
@@ -105,7 +192,13 @@ def _build_isos_command(args: list[str]) -> list[str]:
         return ['ansible-playbook', '1-prepare.yml', *(['-e', 'prepare_force=true'] if force else []), *cleaned]
     if secrets_only:
         return ['python3', 'src/secrets_iso.py', *cleaned]
-    return ['sh', '-eu', '-c', f'python3 src/secrets_iso.py "$@" && ansible-playbook 1-prepare.yml{prep_extra}', 'build-isos', *cleaned]
+    script = (
+        f'trap "rm -f {PENDING_DOTENV_JSON}" EXIT; '
+        f'python3 src/secrets_iso.py --defer-dotenv {PENDING_DOTENV_JSON} "$@" && '
+        f'ansible-playbook 1-prepare.yml{prep_extra} && '
+        f'python3 src/secrets_iso.py --apply-dotenv {PENDING_DOTENV_JSON}'
+    )
+    return ['sh', '-eu', '-c', script, 'build-isos', *cleaned]
 
 
 def _provision_command(args: list[str]) -> list[str]:
@@ -144,18 +237,35 @@ HELP_BUILD = """usage: sh sophon-build-isos.sh [options | command]
 HELP_PROVISION = """usage: sh sophon-provision.sh [options | command]
 
   (default)               deploy the SFTP Backup VM (when sophon-sftp-secrets.iso exists) and production InfraVM
-  --recreate              replace the production InfraVM in place (boots in safe standby until sophon-activate)
-  dev [--wait-https]      recreate and restore the dev/drill InfraVM on SOPHON_DEV_NETWORK_CIDR in safe standby mode
-  backup                  deploy only the standalone Alpine SFTP Backup Server VM
-  destroy-vm [--vm-name]  stop and delete a Sophon-managed VM (default: SOPHON_INFRAVM_NAME)"""
+  --recreate              replace the production InfraVM in place (boots in safe standby until activated)
+  backup                  deploy only the standalone Alpine SFTP Backup Server VM"""
 
-HELP = f'{HELP_BUILD}\n\n{HELP_PROVISION}\n\n  test | shell            development helpers'
+HELP_PROVISION_DEV = """usage: sh sophon-provision-dev.sh [options]
+
+  (default)               recreate and restore the dev/drill InfraVM on SOPHON_DEV_NETWORK_CIDR in safe standby mode
+  --wait-https            wait until restored HTTPS services pass SNI readiness checks from this workstation
+  --secrets-iso <path>    use a specific unattended secrets ISO (default: artifacts/secrets/sophon-secrets.iso)"""
+
+HELP_DESTROY_VM = """usage: sh sophon-destroy-vm.sh [options]
+
+  (default)               stop and delete SOPHON_INFRAVM_NAME (prompts for confirmation on production/backup VMs)
+  --vm-name <name>        override target VM name (for example: sophon-dev-infravm)
+  --yes                   skip interactive confirmation"""
+
+HELP_BY_ENTRYPOINT = {
+    'build-isos': HELP_BUILD,
+    'provision': HELP_PROVISION,
+    'provision-dev': HELP_PROVISION_DEV,
+    'destroy-vm': HELP_DESTROY_VM,
+}
+
+HELP = f'{HELP_BUILD}\n\n{HELP_PROVISION}\n\n{HELP_PROVISION_DEV}\n\n{HELP_DESTROY_VM}\n\n  test | shell            development helpers'
 
 
 def main(argv: list[str]) -> int:
     entry = os.environ.get('SOPHON_ENTRYPOINT', '').strip()
     if not argv or argv[0] in ('help', '-h', '--help'):
-        print(HELP_BUILD if entry == 'build-isos' else HELP_PROVISION if entry == 'provision' else HELP)
+        print(HELP_BY_ENTRYPOINT.get(entry, HELP))
         return 0
     cmd_name = argv[0]
     if os.environ.get('SOPHON_LOAD_DOTENV') == '1' and cmd_name not in ('test', 'shell'):

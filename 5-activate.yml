@@ -35,7 +35,7 @@
         marker: "# {mark} SOPHON SERVICE NAMES"
         unsafe_writes: true
         block: |
-          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia'] %}
+          {% for name in ['', 'status', 'traefik', 'auth', 'ldap', 'git', 'nexus', 'registry', 'registry-push', 'arcane', 'dns', 'kopia'] %}
           {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
           {% endfor %}
       tags: [always]
@@ -49,7 +49,7 @@
         - previous_infravm_ip | length > 0
         - previous_infravm_ip != infravm_ip
       block:
-        - name: Rewrite previous dev IP in Gitea and Arcane extra_hosts
+        - name: Rewrite previous dev IP in Gitea, Nexus, Arcane, and Status extra_hosts
           ansible.builtin.command:
             argv:
               - "{{ ansible_playbook_python }}"
@@ -58,7 +58,7 @@
                 import pathlib, sys
                 old_ip, new_ip, stacks_root = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
                 changed = False
-                for name in ("gitea", "arcane"):
+                for name in ("gitea", "nexus", "arcane", "status"):
                     compose_file = stacks_root / name / "compose.yaml"
                     if not compose_file.is_file():
                         continue
@@ -75,7 +75,7 @@
           register: activate_extra_hosts
           changed_when: "'changed' in (activate_extra_hosts.stdout | default(''))"
 
-        - name: Reconcile Gitea and Arcane stacks with updated extra_hosts
+        - name: Reconcile Gitea, Nexus, Arcane, and Status stacks with updated extra_hosts
           ansible.builtin.command:
             argv:
               - docker
@@ -94,7 +94,9 @@
               - never
           loop:
             - gitea
+            - nexus
             - arcane
+            - status
           when: "'changed' in (activate_extra_hosts.stdout | default(''))"
 
         - name: Refresh DNS resolver on remaining proxy-networked containers
@@ -109,7 +111,7 @@
                     ["docker", "--host", host, "ps", "--filter", "network=proxy", "--format", "{{.Names}}"],
                     text=True,
                 ).splitlines()
-                targets = [n for n in ids if n and n not in ("coredns", "gitea", "arcane", "kopia", "cloudflared")]
+                targets = [n for n in ids if n and n not in ("coredns", "gitea", "nexus", "arcane", "sophon-status", "kopia", "cloudflared")]
                 if targets:
                     subprocess.run(["docker", "--host", host, "container", "restart", *targets], check=True)
                     print("restarted")

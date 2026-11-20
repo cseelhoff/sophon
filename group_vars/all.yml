@@ -35,8 +35,8 @@ vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
 
 infravm_vm_name: "{{ lookup('env', 'SOPHON_INFRAVM_NAME') | default('sophon-infravm', true) }}"
 infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
-infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(8192, true) | int }}"
-infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(100, true) | int }}"
+infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(12288, true) | int }}"
+infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(160, true) | int }}"
 # Written into the VM so a rerun can tell this workflow's VM from anyone else's.
 infravm_marker: "sophon-infravm-two-iso-v1"
 
@@ -67,6 +67,7 @@ keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') }}"
 keycloak_db_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_DB_PASSWORD') }}"
 keycloak_arcane_client_secret: "{{ lookup('env', 'SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET') }}"
 gitea_admin_password: "{{ lookup('env', 'SOPHON_GITEA_ADMIN_PASSWORD') }}"
+nexus_admin_password: "{{ lookup('env', 'SOPHON_NEXUS_ADMIN_PASSWORD') }}"
 openldap_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_ADMIN_PASSWORD') }}"
 openldap_example_user_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD') }}"
 openldap_example_admin_password: "{{ lookup('env', 'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD') }}"
@@ -80,6 +81,7 @@ arcane_admin_password: "{{ lookup('env', 'SOPHON_ARCANE_ADMIN_PASSWORD') }}"
 arcane_encryption_key: "{{ lookup('env', 'SOPHON_ARCANE_ENCRYPTION_KEY') }}"
 # Existing deployments must keep supplying the same database password.
 gitea_db_password: "{{ lookup('env', 'SOPHON_GITEA_DB_PASSWORD') | default(arcane_admin_password, true) }}"
+nexus_db_password: "{{ lookup('env', 'SOPHON_NEXUS_DB_PASSWORD') | default(arcane_admin_password, true) }}"
 
 kopia_version: "0.23.1"
 kopia_image: "localhost/sophon-kopia:{{ kopia_version }}"

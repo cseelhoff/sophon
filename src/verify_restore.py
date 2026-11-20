@@ -82,10 +82,11 @@ def _sni_https_get(ip: str, hostname: str, path: str, ca_file: str = '', timeout
 
 
 def wait_for_https_ready(ip: str, domain: str, *, ca_file: str = '', timeout_sec: int = 1800, poll_sec: float = 10.0) -> None:
-    """Poll Keycloak OIDC discovery, Gitea API version, and Arcane UI over SNI HTTPS until all pass."""
+    """Poll Keycloak OIDC discovery, Gitea API version, Nexus status, and Arcane UI over SNI HTTPS until all pass."""
     checks = (
         (f'auth.{domain}', '/realms/master/.well-known/openid-configuration'),
         (f'git.{domain}', '/api/v1/version'),
+        (f'nexus.{domain}', '/service/rest/v1/status'),
         (f'arcane.{domain}', '/'),
     )
     deadline = time.monotonic() + timeout_sec
@@ -222,7 +223,7 @@ def main(argv=None) -> int:
     if vm_name in forbidden_names and not options.allow_production_name:
         print(
             f"Refusing to run dev/drill deployment against production VM '{vm_name}'. "
-            'Set SOPHON_DEV_INFRAVM_NAME=sophon-dev-infravm (or run `provision --recreate` to replace prod).',
+            'Set SOPHON_DEV_INFRAVM_NAME=sophon-dev-infravm (or run `sh sophon-provision.sh --recreate` to replace prod).',
             file=sys.stderr,
         )
         return 2
@@ -301,7 +302,8 @@ def main(argv=None) -> int:
             f"== Dev/drill VM '{vm_name}' ({meta['ip'] or 'dhcp'}) provisioned on {hypervisor} ==\n"
             'Inside the guest, sophon-autodeploy will install CoreOS, restore the latest snapshot in safe standby mode\n'
             '(Cloudflare tunnel postponed, Kopia read-only, scheduled backups paused), and verify all services locally.\n'
-            'To promote this VM to production (switching from dev IP to prod IP), SSH in as core and run: sophon-activate'
+            f"To promote this VM to active production after shutting down old prod, open https://{meta['domain'] or '<domain>'}\n"
+            'and click Promote to Active Production (or SSH in as core and run: sophon-activate).'
         )
     return 0
 

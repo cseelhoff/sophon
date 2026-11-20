@@ -23,12 +23,17 @@ override_cidr=${SOPHON_NETWORK_CIDR:-}
 override_gw=${SOPHON_NETWORK_GATEWAY:-}
 override_dns=${SOPHON_VNET_DNS:-}
 assume_yes=0
+force_ip=0
 forwarded=()
 while (( $# )); do
     case $1 in
         -y|--yes)
             assume_yes=1
             forwarded+=("$1")
+            shift
+            ;;
+        --force-ip)
+            force_ip=1
             shift
             ;;
         --network-cidr)
@@ -70,6 +75,13 @@ fi
 target_ip=${target_cidr%%/*}
 if [[ -n $target_cidr && -n $target_ip && $target_ip != "$current_ip" ]]; then
     [[ -n $target_gw ]] || { echo "Switching to static production CIDR $target_cidr requires --gateway (or SOPHON_NETWORK_GATEWAY)." >&2; exit 2; }
+    if (( ! force_ip )) && [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+        if ! conflict_reason=$(/usr/local/libexec/sophon-control-sync --check-ip "$target_ip" "$current_ip" 2>&1); then
+            echo "Refusing to switch appliance IP to ${target_ip}: address is still in use on the network (${conflict_reason})." >&2
+            echo "Power off or decommission the active production VM first (sh sophon-destroy-vm.sh), then retry." >&2
+            exit 2
+        fi
+    fi
     if (( ! assume_yes )); then
         if [[ ! -t 0 ]]; then
             echo "Pass --yes for non-interactive production activation." >&2
@@ -133,6 +145,12 @@ export SOPHON_ACTIVATE_KOPIA_ENV_JSON="$kopia_env_json"
 args+=(--env SOPHON_ACTIVATE_KOPIA_ENV_JSON)
 
 podman "${args[@]}" sophon:latest python3 src/activate.py "$@"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi
 if [[ -x /usr/local/libexec/sophon-update-issue ]]; then
     domain=$(jq -r '.domain // empty' /var/lib/sophon/project/deploy-result.json 2>/dev/null || true)
     ip=$(jq -r '.infravm_ip // empty' /var/lib/sophon/project/deploy-result.json 2>/dev/null || true)

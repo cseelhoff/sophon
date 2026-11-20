@@ -105,3 +105,13 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     `BTRFS_IOC_SNAP_DESTROY_V2`. Non-Btrfs or non-subvolume sources fail explicitly with no
     plain-copy fallback. This layer remains last-resort only, never a replacement for daily
     logical exports.
+18. **Sonatype Nexus is the sole Core artifact/container registry, paired with Pure GitOps.**
+    Nexus Repository Community Edition (`sonatype/nexus3:3.98.1` + PostgreSQL 18) runs in Sophon Core with
+    Gitea's built-in package registry disabled (`GITEA__packages__ENABLED=false`), native LDAPS RBAC against
+    OpenLDAP (`nexus-admins`, `nexus-developers`), anonymous access disabled, and three single-label wildcard
+    hosts (`nexus.<domain>`, `registry.<domain>`, `registry-push.<domain>`). Proprietary artifacts use the
+    backed-up `hosted` blob store (`/nexus-data/blobs/hosted`), while internet upstream caches use `proxy-cache`
+    (omitted from `sophon.backup.paths`). Stage-2 CI (`act_runner`) stays isolated from `podman.sock` and
+    pushes immutable images to `registry-push.<domain>`, commits digests to pure GitOps repositories
+    (`ops/workloads` in Gitea), and triggers Arcane pull sync—reconciled locally during `standby_restore`
+    drills by `sophon-reconcile-gitops` without touching production ([nexus-and-gitops-plan.md](nexus-and-gitops-plan.md)).

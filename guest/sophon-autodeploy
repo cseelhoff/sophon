@@ -80,10 +80,14 @@ if [[ $mode == "standby_restore" ]]; then
         /usr/local/bin/sophon-restore --snapshot latest --yes
     restored_snapshot=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
         podman --remote=false exec kopia sh -c 'kopia snapshot list --all --json | jq -r "sort_by(.startTime) | last | .id[0:12] // empty"' 2>/dev/null || true)
+    if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
+        runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+            /usr/local/bin/sophon-reconcile-gitops --standby --restore-data
+    fi
 fi
 
 echo "== Verifying Sophon containers and HTTPS endpoints inside guest =="
-for svc in coredns traefik ldap keycloak gitea arcane kopia; do
+for svc in coredns traefik ldap keycloak gitea nexus arcane kopia sophon-status; do
     ok=0
     for _ in $(seq 1 60); do
         state=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
@@ -128,8 +132,13 @@ verify_url() {
 
 verify_url "auth.${domain}" "/realms/master/.well-known/openid-configuration"
 verify_url "git.${domain}" "/api/v1/version"
+verify_url "nexus.${domain}" "/service/rest/v1/status"
 verify_url "arcane.${domain}" "/"
+verify_url "${domain}" "/healthz"
 
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi
 write_status "verified" "$mode" "$domain" "$ip" "$restored_snapshot"
 /usr/local/libexec/sophon-update-issue "$mode" "$domain" "$ip" "$restored_snapshot" || true
 install -m 0644 /dev/null "$DONE_FILE"

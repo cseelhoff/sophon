@@ -75,8 +75,8 @@ class ConsoleTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(console.main([]), 19)
             run.assert_called_once_with(['--step', 'configure', '--', '4-configure.yml'])
-            # Supplied secrets are not asked again; only the Cloudflare token and Gitea DB password are.
-            self.assertEqual(hidden.call_count, 2)
+            # Supplied secrets are not asked again; only the Cloudflare token, Gitea DB password, and Nexus DB password are.
+            self.assertEqual(hidden.call_count, 3)
             self.assertNotIn('FIXTURE_SECRET_VALUE', output.getvalue())
 
     def test_invalid_run_does_not_launch_or_expose_secret(self):
@@ -153,7 +153,7 @@ class ConsoleTests(unittest.TestCase):
         # Inputs: internet access?, same password?, then DNS, IP, domain, email, tunnel enabled, tunnel, realm, realm name.
         code, prompts, hidden, _ = self.wizard(
             values, ['y', '', '', '', '', 'me@example.test', '', '', '', ''],
-            ['token', 'long-enough-password', ''])
+            ['token', 'long-enough-password', '', ''])
         self.assertEqual(code, 0)
         text = ' '.join(prompts + hidden)
         self.assertIn('SOPHON_ACME_EMAIL', text)
@@ -168,7 +168,7 @@ class ConsoleTests(unittest.TestCase):
         # Inputs: internet access?, then DNS, IP, domain, email, tunnel enabled=false, realm, realm name.
         code, prompts, hidden, _ = self.wizard(
             values, ['y', '', '', '', '', 'false', '', ''],
-            ['token', ''])
+            ['token', '', ''])
         self.assertEqual(code, 0)
         text = ' '.join(prompts + hidden)
         self.assertIn('SOPHON_CF_TUNNEL_ENABLED', text)
@@ -229,7 +229,7 @@ class ConsoleTests(unittest.TestCase):
             # Inputs: internet access?, then DNS, IP, domain, a missing path, the real path, realm, realm name
             # (no email, token or tunnel name).
             code, prompts, hidden, output = self.wizard(
-                values, ['n', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], [''])
+                values, ['n', '', '', '', str(Path(directory) / 'missing.json'), str(bad), '', ''], ['', ''])
         text = ' '.join(prompts + hidden)
         self.assertNotIn('SOPHON_ACME_EMAIL', text)
         self.assertNotIn('SOPHON_CF_TOKEN', text)
@@ -244,7 +244,7 @@ class ConsoleTests(unittest.TestCase):
         values = service_values() | {'SOPHON_ARCANE_ADMIN_PASSWORD': ''}
         code, prompts, hidden, output = self.wizard(
             values, ['y', '', '', '', '', 'me@example.test', '', '', '', ''],
-            ['token', '', 'short', 'long-enough-password', ''])
+            ['token', '', 'short', 'long-enough-password', '', ''])
         self.assertEqual(code, 0)
         self.assertEqual(len([prompt for prompt in hidden if 'SOPHON_ARCANE_ADMIN_PASSWORD' in prompt]), 3)
         self.assertIn('at least 12 characters', output)

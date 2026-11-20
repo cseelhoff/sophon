@@ -27,6 +27,7 @@ services:
       - GITEA__server__HTTP_PORT=3000
       - GITEA__server__LFS_START_SERVER=true
       - GITEA__service__DISABLE_REGISTRATION={{ gitea_disable_registration | lower }}
+      - GITEA__packages__ENABLED=false
       - GITEA__security__INSTALL_LOCK=true
       - GITEA__security__REVERSE_PROXY_LIMIT=1
       - GITEA__security__REVERSE_PROXY_TRUSTED_PROXIES=*

@@ -22,12 +22,14 @@ ROOT = Path(__file__).resolve().parent.parent
 PROJECT = (
     '4-configure.yml', '5-activate.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
     *(f'roles/{role}' for role in ('compose_stack', 'arcane', 'coredns', 'traefik',
-                                   'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea')),
-    'src/console.py', 'src/activate.py', 'src/deployment.py', 'src/certificates.py', 'src/backup_destination.py',
+                                   'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea', 'nexus', 'status')),
+    'src/console.py', 'src/activate.py', 'src/deployment.py', 'src/certificates.py',
+    'src/backup_destination.py', 'src/status_ui.py',
 )
 GUEST = (
-    'host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-activate',
-    'sophon-network', 'sophon-set-password', 'sophon-seed-early', 'sophon-autodeploy', 'sophon-update-issue',
+    'host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-activate', 'sophon-reconcile-gitops',
+    'sophon-network', 'sophon-set-password', 'sophon-seed-early', 'sophon-autodeploy',
+    'sophon-control-sync', 'sophon-web-activate', 'sophon-update-issue',
 )
 EXCLUDED = frozenset((
     'artifacts', 'deployment', 'logs', 'log', 'keys', 'credentials', 'secrets',

@@ -1,0 +1,25 @@
+---
+status_domain: "{{ domain_name }}"
+status_domain_clean: "{{ status_domain | lower | regex_replace('\\.$', '') }}"
+status_port: 8080
+status_image: "localhost/sophon:latest"
+status_oidc_realm: "{{ keycloak_realm | default('sophon') }}"
+status_oidc_client_id: "sophon-status"
+status_admin_group: "arcane-admins"
+status_control_host_dir: "/var/lib/sophon/control"
+status_script_host_path: "/var/lib/sophon/project/src/status_ui.py"
+status_session_secret: "{{ ('sophon-status-session:' ~ status_domain_clean ~ ':' ~ arcane_encryption_key) | hash('sha256') }}"
+
+status_environment:
+  - name: SOPHON_STATUS_DOMAIN
+    value: "{{ status_domain_clean }}"
+  - name: SOPHON_STATUS_PORT
+    value: "{{ status_port | string }}"
+  - name: SOPHON_STATUS_OIDC_REALM
+    value: "{{ status_oidc_realm }}"
+  - name: SOPHON_STATUS_OIDC_CLIENT_ID
+    value: "{{ status_oidc_client_id }}"
+  - name: SOPHON_STATUS_ADMIN_GROUP
+    value: "{{ status_admin_group }}"
+  - name: SOPHON_STATUS_SESSION_SECRET
+    value: "{{ status_session_secret }}"

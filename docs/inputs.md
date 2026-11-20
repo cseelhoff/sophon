@@ -47,11 +47,13 @@ the web UI (noVNC) shows step 3 and the `core` password prompt.
 | `2-provision-hyperv-local.ps1` | same VM on the local machine as the signed-in user (no host or credentials); takes `-Switch` / `SOPHON_HYPERV_SWITCH`, `-Path` / `SOPHON_HYPERV_PATH` and the `SOPHON_INFRAVM_*` sizes |
 
 All providers: `SOPHON_INFRAVM_NAME` (`sophon-infravm`), `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`, targeted by
-`provision-dev` which always deletes any existing dev VM first), `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
-For `provision`, a VM that already exists is only started if this workflow created it (`provision --recreate` replaces it);
+`sophon-provision-dev` which always deletes any existing dev VM first), `_CORES` (8), `_MEMORY` MiB (12288), `_DISK_GB` (160).
+For `sophon-provision`, a VM that already exists is only started if this workflow created it (`sophon-provision --recreate` replaces it;
+`sophon-destroy-vm` stops and deletes a VM);
 anything else is left alone. When building unattended seeds (`secrets`), `SOPHON_NETWORK_CIDR` sets the production
-static IPv4 CIDR and `SOPHON_DEV_NETWORK_CIDR` sets the dev/restore-drill static IPv4 CIDR (`sophon-activate` switches
-the VM's IP and self-pointing DNS from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`).
+static IPv4 CIDR and `SOPHON_DEV_NETWORK_CIDR` sets the dev/restore-drill static IPv4 CIDR (promoting from `https://<domain>` or
+`sophon-activate` verifies `SOPHON_NETWORK_CIDR` is unoccupied and switches the VM's IP and self-pointing DNS from
+`SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`).
 
 ## Automatic install (nothing to type)
 
@@ -89,7 +91,7 @@ service accounts** (default no), then asks for:
 | Publish Cloudflare tunnel (`SOPHON_CF_TUNNEL_ENABLED`) | Default `true`. Set `false` on non-production, lab, or restore-verification instances so `coredns` never creates/updates Cloudflare tunnels or public CNAMEs and `cloudflared` is not deployed, even if a Cloudflare token is supplied for Let's Encrypt DNS-01. |
 | Cloudflare tunnel name | Connected sites with `SOPHON_CF_TUNNEL_ENABLED=true` (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
-| Passwords | Arcane admin (12+ characters), Keycloak admin and database, Arcane OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Arcane password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, existing Kopia repository password and SSH material. Configure generates and reuses Arcane's local SQLite encryption key under `credentials/arcane/` automatically. |
+| Passwords | Arcane admin (12+ characters), Keycloak admin and database, Arcane OIDC client secret, Gitea admin, Nexus admin, LDAP admin and two seed users, and Kopia UI; Gitea and Nexus databases default to the Arcane password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, existing Kopia repository password and SSH material. Configure generates and reuses Arcane's local SQLite encryption key under `credentials/arcane/` and Nexus's datastore encryption key + `sophon-pull` reader credentials under `credentials/nexus/` automatically. |
 | Kopia | External SFTP host/user/path, repository password and backup policy; Configure generates the client key and confirms host fingerprints. |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
@@ -100,7 +102,7 @@ publishing, skips pre-restore certificate requirements since `sophon-restore` re
 read-only standby mode against `sophon-restore` if configured, and defers OIDC client registration until after
 `sophon-restore`).
 
-Service names (`traefik`, `arcane`, `dns`, `kopia`, `ldap`, `auth`, `git` under your domain) must
+Service names (`traefik`, `arcane`, `dns`, `kopia`, `ldap`, `auth`, `git`, `nexus`, `registry`, `registry-push` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.
 
 ### Kopia backup inputs

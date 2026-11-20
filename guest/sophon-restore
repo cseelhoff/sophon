@@ -122,3 +122,9 @@ for grp in "${group_names[@]}"; do
     run_restore cleanup --approve >/dev/null
 done
 printf 'Restore complete (%s).\n' "$joined_groups"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi

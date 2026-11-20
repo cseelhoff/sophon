@@ -1,0 +1,206 @@
+---
+- name: Ensure Nexus local credentials directory exists
+  ansible.builtin.file:
+    path: "{{ nexus_credentials_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Ensure persistent Nexus datastore secrets encryption key exists
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import base64, os, pathlib, sys
+        p = pathlib.Path(sys.argv[1])
+        if not p.exists() or not p.read_text().strip():
+            p.write_text(base64.b64encode(os.urandom(32)).decode("ascii") + "\n")
+            p.chmod(0o600)
+        print(p.read_text().strip())
+      - "{{ nexus_credentials_dir }}/secrets_key"
+  register: nexus_secrets_key_cmd
+  changed_when: false
+  no_log: true
+
+- name: Ensure persistent Nexus pull service account password exists
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import pathlib, secrets, sys
+        p = pathlib.Path(sys.argv[1])
+        if not p.exists() or not p.read_text().strip():
+            p.write_text(secrets.token_urlsafe(32) + "\n")
+            p.chmod(0o600)
+        print(p.read_text().strip())
+      - "{{ nexus_credentials_dir }}/pull_password"
+  register: nexus_pull_password_cmd
+  changed_when: false
+  no_log: true
+
+- name: Set Nexus bootstrap secret facts
+  ansible.builtin.set_fact:
+    nexus_secrets_key: "{{ nexus_secrets_key_cmd.stdout | trim }}"
+    nexus_pull_password: "{{ nexus_pull_password_cmd.stdout | trim }}"
+  no_log: true
+
+- name: Deploy Nexus Compose stack
+  ansible.builtin.include_role:
+    name: compose_stack
+    apply:
+      no_log: true
+  vars:
+    compose_stack_name: "nexus"
+    compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    compose_stack_image_tars: "{{ nexus_image_tars }}"
+    compose_stack_deploy_timeout: 360
+  no_log: true
+
+- name: Wait for Nexus health check
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+      - container
+      - inspect
+      - --format
+      - "{{ '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' }}"
+      - nexus
+  register: nexus_health
+  changed_when: false
+  until: nexus_health.rc == 0 and (nexus_health.stdout | trim) in ['healthy', 'unhealthy']
+  failed_when: nexus_health.rc != 0 or (nexus_health.stdout | trim) != 'healthy'
+  retries: 72
+  delay: 5
+
+- name: Configure Nexus repositories, OpenLDAP, realms, and blob stores
+  when: not (prepare_restore | default(false) | bool)
+  block:
+    - name: Read initial Nexus admin password file if still present
+      ansible.builtin.command:
+        argv:
+          - docker
+          - --host
+          - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+          - exec
+          - nexus
+          - sh
+          - -c
+          - "cat /nexus-data/admin.password 2>/dev/null || true"
+      register: nexus_initial_pw_cmd
+      changed_when: false
+      no_log: true
+
+    - name: Read OpenLDAP TLS certificate bundle mounted inside Nexus
+      ansible.builtin.command:
+        argv:
+          - docker
+          - --host
+          - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+          - exec
+          - nexus
+          - sh
+          - -c
+          - "cat /run/secrets/ldap/certs/{{ nexus_domain | lower | regex_replace('\\.$', '') }}.crt 2>/dev/null || true"
+      register: nexus_ldap_ca_cmd
+      changed_when: false
+
+    - name: Check for existing APT hosted OpenPGP signing keypair
+      ansible.builtin.stat:
+        path: "{{ nexus_credentials_dir }}/apt_signing.key"
+      register: nexus_apt_key_stat
+
+    - name: Read existing APT hosted OpenPGP signing keypair
+      ansible.builtin.slurp:
+        src: "{{ nexus_credentials_dir }}/apt_signing.key"
+      register: nexus_apt_key_slurp
+      when: nexus_apt_key_stat.stat.exists
+      no_log: true
+
+    - name: Run idempotent Nexus REST API configurator
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ role_path }}/files/configure_nexus.py"
+        stdin: "{{ nexus_configure_payload | to_json }}"
+      vars:
+        nexus_configure_payload:
+          base_url: "https://{{ nexus_fqdn }}"
+          verify_tls: false
+          admin_user: "{{ nexus_admin_user }}"
+          admin_password: "{{ nexus_admin_password }}"
+          initial_admin_password: "{{ nexus_initial_pw_cmd.stdout | trim }}"
+          anonymous_enabled: "{{ nexus_anonymous_enabled | bool }}"
+          ldap_ca_pem: "{{ nexus_ldap_ca_cmd.stdout }}"
+          ldap:
+            name: "{{ nexus_ldap_name }}"
+            protocol: "{{ nexus_ldap_protocol }}"
+            use_trust_store: "{{ nexus_ldap_use_trust_store | bool }}"
+            host: "{{ nexus_ldap_host }}"
+            port: "{{ nexus_ldap_port | int }}"
+            search_base: "{{ nexus_ldap_base_dn }}"
+            bind_dn: "{{ nexus_ldap_bind_dn }}"
+            bind_password: "{{ nexus_ldap_bind_password }}"
+          pull_user: "{{ nexus_pull_user }}"
+          pull_password: "{{ nexus_pull_password }}"
+          domain: "{{ nexus_domain }}"
+          docker_group_port: "{{ nexus_port_docker_group | int }}"
+          docker_hosted_port: "{{ nexus_port_docker_hosted | int }}"
+          apt_signing_keypair: "{{ (nexus_apt_key_slurp.content | b64decode) if nexus_apt_key_stat.stat.exists else '' }}"
+      register: nexus_configure_run
+      changed_when: >-
+        ((nexus_configure_run.stdout | from_json).rotated_admin | default(false)) or
+        ((nexus_configure_run.stdout | from_json).accepted_eula | default(false)) or
+        ((nexus_configure_run.stdout | from_json).changed_anonymous | default(false)) or
+        (((nexus_configure_run.stdout | from_json).imported_certs | default(0)) > 0) or
+        ((nexus_configure_run.stdout | from_json).created_ldap | default(false)) or
+        ((nexus_configure_run.stdout | from_json).changed_realms | default(false)) or
+        ((nexus_configure_run.stdout | from_json).generated_apt_key | default(false)) or
+        ('created' in ((nexus_configure_run.stdout | from_json).repositories | default({})).values())
+      no_log: true
+
+    - name: Parse Nexus configurator result
+      ansible.builtin.set_fact:
+        nexus_configure_result: "{{ nexus_configure_run.stdout | from_json }}"
+      no_log: true
+
+    - name: Persist generated APT OpenPGP private signing key
+      ansible.builtin.copy:
+        dest: "{{ nexus_credentials_dir }}/apt_signing.key"
+        content: "{{ nexus_configure_result.apt_signing_keypair }}"
+        mode: "0600"
+      when: nexus_configure_result.generated_apt_key | default(false) | bool
+      no_log: true
+
+    - name: Persist generated APT OpenPGP public key
+      ansible.builtin.copy:
+        dest: "{{ nexus_credentials_dir }}/apt_signing.pub"
+        content: "{{ nexus_configure_result.apt_signing_public_key }}"
+        mode: "0644"
+      when: nexus_configure_result.generated_apt_key | default(false) | bool
+
+    - name: Remove one-time /nexus-data/admin.password file after rotation
+      ansible.builtin.command:
+        argv:
+          - docker
+          - --host
+          - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+          - exec
+          - nexus
+          - rm
+          - -f
+          - /nexus-data/admin.password
+      changed_when: (nexus_initial_pw_cmd.stdout | trim) != ''
+
+- name: Display Nexus status
+  ansible.builtin.debug:
+    msg: |
+      Nexus Repository deployed at https://{{ nexus_fqdn }}
+      Container pull group:  https://{{ nexus_registry_fqdn }} (user: {{ nexus_pull_user }})
+      Container CI push:     https://{{ nexus_registry_push_fqdn }}
+      Local fallback admin:  {{ nexus_admin_user }}
+      Admin password:        {{ nexus_admin_password }}
+      OpenLDAP RBAC:         enabled (groups nexus-admins, nexus-developers)
+      Anonymous access:      {{ 'enabled' if (nexus_anonymous_enabled | bool) else 'disabled' }}

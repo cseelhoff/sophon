@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Syncs non-secret appliance/standby status and live target-IP occupancy into /var/lib/sophon/control
+# so the unprivileged sophon-status web UI never mounts /var/lib/sophon/project or secret tokens/keys.
+set -euo pipefail
+
+CONTROL_DIR=${SOPHON_CONTROL_DIR:-/var/lib/sophon/control}
+PROJECT_DIR=${SOPHON_PROJECT_DIR:-/var/lib/sophon/project}
+STATE_FILE=$CONTROL_DIR/appliance-state.json
+PROBE_REQ=$CONTROL_DIR/probe.request
+
+probe_ip_on_host() {
+    local target_ip=$1 current_ip=${2:-}
+    probe_occupied=false
+    probe_method=none
+    probe_reason=""
+
+    if [[ -z $target_ip || ! $target_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    fi
+    if [[ -n $current_ip && $target_ip == "$current_ip" ]]; then
+        return 0
+    fi
+
+    local route_out dev on_link=0
+    route_out=$(ip -4 route get "$target_ip" 2>/dev/null || true)
+    dev=$(awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}' <<< "$route_out")
+    if [[ -n $dev && $route_out != *" via "* ]]; then
+        on_link=1
+    fi
+
+    # Flush any cached ARP entry first so a recently powered-off production VM never causes a stale false positive.
+    if (( on_link )); then
+        if [[ $(id -u) -eq 0 ]]; then
+            ip -4 neigh flush to "$target_ip" dev "$dev" 2>/dev/null || true
+        else
+            sudo ip -4 neigh flush to "$target_ip" dev "$dev" 2>/dev/null || true
+        fi
+        if command -v arping >/dev/null 2>&1; then
+            if arping -f -c 2 -w 1 -I "$dev" "$target_ip" >/dev/null 2>&1; then
+                probe_occupied=true
+                probe_method=arp
+                probe_reason="Another host on ${dev} answered ARP for ${target_ip}."
+                return 0
+            fi
+        fi
+    fi
+
+    if ping -c 1 -W 1 "$target_ip" >/dev/null 2>&1; then
+        probe_occupied=true
+        probe_method=icmp
+        probe_reason="Host ${target_ip} responded to ICMP ping."
+        return 0
+    fi
+
+    if (( on_link )); then
+        local neigh_out
+        neigh_out=$(ip -4 neigh show to "$target_ip" dev "$dev" 2>/dev/null || true)
+        if [[ $neigh_out == *"lladdr "* && $neigh_out != *"FAILED"* && $neigh_out != *"INCOMPLETE"* ]]; then
+            probe_occupied=true
+            probe_method=arp
+            probe_reason="Another host on ${dev} holds an active ARP neighbor entry for ${target_ip}."
+            return 0
+        fi
+    fi
+
+    # Also check HTTPS/SSH listener reachability for routed (off-link) subnets where ICMP may be filtered.
+    if curl -ksS --connect-timeout 1 --max-time 2 "https://${target_ip}:443/" -o /dev/null 2>/dev/null; then
+        probe_occupied=true
+        probe_method=https
+        probe_reason="An HTTPS service is still answering at ${target_ip}:443."
+        return 0
+    fi
+}
+
+if [[ ${1:-} == "--check-ip" ]]; then
+    target_ip=${2:?Usage: sophon-control-sync --check-ip <target_ip> [current_ip]}
+    current_ip=${3:-}
+    probe_ip_on_host "$target_ip" "$current_ip"
+    if [[ $probe_occupied == true ]]; then
+        printf '%s\n' "$probe_reason" >&2
+        exit 1
+    fi
+    exit 0
+fi
+
+do_probe=0
+if [[ ${1:-} == "--probe" || -f $PROBE_REQ ]]; then
+    do_probe=1
+fi
+
+if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+    install -d -o core -g core -m 0700 "$CONTROL_DIR"
+else
+    install -d -m 0700 "$CONTROL_DIR"
+fi
+rm -f "$PROBE_REQ"
+
+site_file=$PROJECT_DIR/site.json
+deploy_file=$PROJECT_DIR/deploy-result.json
+standby_file=$PROJECT_DIR/standby.json
+autodeploy_file=${SOPHON_AUTODEPLOY_STATUS_FILE:-/var/lib/sophon/autodeploy-status.json}
+
+current_ip=$(jq -r '.SOPHON_INFRAVM_IP // empty' "$site_file" 2>/dev/null || true)
+if [[ -z $current_ip ]]; then
+    current_ip=$(jq -r '.infravm_ip // empty' "$deploy_file" 2>/dev/null || true)
+fi
+domain=$(jq -r '.domain // empty' "$deploy_file" 2>/dev/null || true)
+if [[ -z $domain ]]; then
+    domain=$(jq -r '.domain // empty' "$standby_file" 2>/dev/null || true)
+fi
+mode=$(jq -r '.mode // "unknown"' "$deploy_file" 2>/dev/null || echo "unknown")
+restored_snapshot=$(jq -r '.snapshot // empty' "$autodeploy_file" 2>/dev/null || true)
+
+standby=false
+target_cidr=""
+target_ip=""
+target_gw=""
+can_promote_sftp=true
+desired_cf_tunnel_enabled=false
+has_cf_token=false
+desired_cf_tunnel_name="sophon"
+desired_snapshot_interval="6h"
+
+if [[ -f $standby_file ]]; then
+    standby=true
+    if [[ $(jq -r '.prod_network.mode // empty' "$standby_file" 2>/dev/null || true) == "static" ]]; then
+        target_cidr=$(jq -r '.prod_network.cidr // empty' "$standby_file" 2>/dev/null || true)
+        target_gw=$(jq -r '.prod_network.gateway // empty' "$standby_file" 2>/dev/null || true)
+        target_ip=${target_cidr%%/*}
+    fi
+    sftp_user=$(jq -r '.sftp_username // empty' "$standby_file" 2>/dev/null || true)
+    has_rw_key=$(jq -r 'if (.desired_sftp_private_key_b64 // "") != "" then "true" else "false" end' "$standby_file" 2>/dev/null || echo "false")
+    if [[ $sftp_user == "sophon-restore" && $has_rw_key != "true" ]]; then
+        can_promote_sftp=false
+    fi
+    desired_cf_tunnel_enabled=$(jq -r 'if .desired_cf_tunnel_enabled == true then "true" else "false" end' "$standby_file" 2>/dev/null || echo "false")
+    has_cf_token=$(jq -r 'if (.desired_cf_token // "") != "" then "true" else "false" end' "$standby_file" 2>/dev/null || echo "false")
+    desired_cf_tunnel_name=$(jq -r '.desired_cf_tunnel_name // "sophon"' "$standby_file" 2>/dev/null || echo "sophon")
+    desired_snapshot_interval=$(jq -r '.desired_snapshot_interval // "6h"' "$standby_file" 2>/dev/null || echo "6h")
+fi
+
+applicable=false
+probe_occupied=false
+probe_method=none
+probe_reason=""
+checked_at=""
+
+if [[ $standby == true && -n $target_ip && $target_ip != "$current_ip" ]]; then
+    applicable=true
+    if (( do_probe )) || [[ ! -f $STATE_FILE ]]; then
+        probe_ip_on_host "$target_ip" "$current_ip"
+        checked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    else
+        probe_occupied=$(jq -r 'if .target_ip_check.occupied == true then "true" else "false" end' "$STATE_FILE" 2>/dev/null || echo "false")
+        probe_method=$(jq -r '.target_ip_check.method // "none"' "$STATE_FILE" 2>/dev/null || echo "none")
+        probe_reason=$(jq -r '.target_ip_check.reason // ""' "$STATE_FILE" 2>/dev/null || true)
+        checked_at=$(jq -r '.target_ip_check.checked_at // ""' "$STATE_FILE" 2>/dev/null || true)
+    fi
+fi
+
+tmp_file="${STATE_FILE}.tmp.$$"
+jq -n \
+    --arg mode "$mode" \
+    --arg domain "$domain" \
+    --arg current_ip "$current_ip" \
+    --arg target_cidr "$target_cidr" \
+    --arg target_ip "$target_ip" \
+    --arg target_gw "$target_gw" \
+    --arg desired_cf_tunnel_name "$desired_cf_tunnel_name" \
+    --arg desired_snapshot_interval "$desired_snapshot_interval" \
+    --arg restored_snapshot "$restored_snapshot" \
+    --arg probe_method "$probe_method" \
+    --arg probe_reason "$probe_reason" \
+    --arg checked_at "$checked_at" \
+    --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson standby "$standby" \
+    --argjson can_promote_sftp "$can_promote_sftp" \
+    --argjson desired_cf_tunnel_enabled "$desired_cf_tunnel_enabled" \
+    --argjson has_cf_token "$has_cf_token" \
+    --argjson applicable "$applicable" \
+    --argjson occupied "$probe_occupied" \
+    '{
+        standby: $standby,
+        mode: $mode,
+        domain: $domain,
+        current_ip: $current_ip,
+        target_cidr: $target_cidr,
+        target_ip: $target_ip,
+        target_gateway: $target_gw,
+        can_promote_sftp: $can_promote_sftp,
+        desired_cf_tunnel_enabled: $desired_cf_tunnel_enabled,
+        has_cf_token: $has_cf_token,
+        desired_cf_tunnel_name: $desired_cf_tunnel_name,
+        desired_snapshot_interval: $desired_snapshot_interval,
+        restored_snapshot: $restored_snapshot,
+        target_ip_check: {
+            applicable: $applicable,
+            occupied: $occupied,
+            method: $probe_method,
+            reason: $probe_reason,
+            checked_at: $checked_at
+        },
+        updated_at: $updated_at
+    }' > "$tmp_file"
+chmod 0600 "$tmp_file"
+if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+    chown core:core "$tmp_file"
+fi
+mv -f "$tmp_file" "$STATE_FILE"

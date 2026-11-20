@@ -10,8 +10,13 @@ services:
     networks:
       - proxy
 {% if infravm_ip | default('', true) != '' %}
+{% set arcane_clean_domain = (keycloak_domain | default(domain_name)) | lower | regex_replace('\\.$', '') %}
     extra_hosts:
-      - "{{ keycloak_hostname | default('auth') }}.{{ keycloak_domain | default(domain_name) | lower | regex_replace('\\.$', '') }}:{{ infravm_ip }}"
+      - "{{ keycloak_hostname | default('auth') }}.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "git.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "nexus.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "registry.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "registry-push.{{ arcane_clean_domain }}:{{ infravm_ip }}"
 {% endif %}
     volumes:
       - /run/user/1000/podman/podman.sock:/var/run/docker.sock

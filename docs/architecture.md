@@ -72,7 +72,8 @@ which snapshots record alongside the workload image references and immutable IDs
 ```text
 CoreDNS resolves *.<domain> ─▶ Traefik routes by Host and gets certificates
    ─▶ LDAPS at ldap.<domain> verifies ─▶ Keycloak federates OpenLDAP
-   ─▶ Gitea and Arcane trust Keycloak (OIDC)
+   ─▶ Gitea (Git/LFS) and Nexus (OpenLDAP RBAC + hosted/proxy registries) start
+   ─▶ Arcane and the LAN-only Status & Cutover UI (https://<domain>) trust Keycloak (OIDC)
    ─▶ Kopia connects with native actions enabled and triggers the initial hot snapshot
 ```
 
@@ -143,9 +144,9 @@ names the files after the certificate's main domain (`<domain>.crt`, `<domain>.k
 
 ## State
 
-Reconstructible state (the Keycloak realm, seeded users, routing) is rebuilt by a rerun. Irreplaceable
-state (Gitea repositories and Git LFS objects, user-created LDAP entries, `acme.json`, the ACME account) is not;
-back it up ([decisions.md](decisions.md)). Concise `sophon.backup.*` labels declare
+Reconstructible state (the Keycloak realm, seeded users, routing, Nexus upstream `proxy-cache` blob store) is rebuilt by a rerun. Irreplaceable
+state (Gitea repositories and Git LFS objects, Nexus `hosted` blob store + keystores + datastore encryption key + PostgreSQL metadata, user-created LDAP entries, `acme.json`, the ACME account) is not;
+back it up ([decisions.md](decisions.md), [nexus-and-gitops-plan.md](nexus-and-gitops-plan.md)). Concise `sophon.backup.*` labels declare
 whole volumes (with `.kopiaignore` exclusions), selective paths, INI identity keys,
 and hot native stdout dumps (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`)—all
 captured online with zero container downtime. Raw database directories are never

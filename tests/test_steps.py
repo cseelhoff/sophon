@@ -239,7 +239,7 @@ def test_service_resolution_follows_entered_domain():
             canonical = domain.lower().rstrip('.')
             entries = [line for line in content.splitlines() if line.startswith(ip + ' ')]
             assert entries == [f'{ip} {name + "." if name else ""}{canonical}'
-                               for name in ('', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia')]
+                               for name in ('', 'status', 'traefik', 'auth', 'ldap', 'git', 'nexus', 'registry', 'registry-push', 'arcane', 'dns', 'kopia')]
             if canonical == 'second.example':
                 assert 'first.example' not in content and '192.0.2.3' not in content
         unchanged = hosts.read_text()
@@ -508,7 +508,10 @@ def test_wildcard_certificate_labels_cover_every_certresolver_router():
             seen.add(router)
             assert f'traefik.http.routers.{router}.tls.domains[0].main={{{{' in text, (template.name, router)
             assert f'traefik.http.routers.{router}.tls.domains[0].sans=*.{{{{' in text, (template.name, router)
-    assert seen == {'dashboard', 'arcane', 'keycloak', 'gitea', 'coredns', 'ldap-certs'}, seen
+    assert seen == {
+        'dashboard', 'arcane', 'keycloak', 'gitea', 'nexus', 'nexus-registry', 'nexus-registry-push',
+        'coredns', 'ldap-certs', 'sophon-status',
+    }, seen
 
 
 def test_ldaps_reads_the_wildcard_certificate_by_its_main_domain():

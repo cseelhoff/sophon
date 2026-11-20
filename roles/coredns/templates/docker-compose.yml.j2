@@ -32,6 +32,7 @@ services:
       - CF_TUNNEL_ID={{ coredns_cf_tunnel_id if (coredns_cf_tunnel_enabled | default(true) | bool) else '' }}
       - CF_ZONE_ID={{ coredns_cf_zone_id if (coredns_cf_tunnel_enabled | default(true) | bool) else '' }}
       - CF_ZONE_DOMAIN={{ coredns_domain_name }}
+      - CF_EXCLUDE={{ coredns_domain_name | lower | regex_replace('\.$', '') }},status.{{ coredns_domain_name | lower | regex_replace('\.$', '') }}
       - CF_TUNNEL_TARGET=https://traefik.{{ coredns_domain_name }}
       - INVENTORY_ADDR=:8081
       - FORWARD_DNS={{ coredns_forward_dns }}

@@ -1,0 +1,48 @@
+---
+# Sonatype Nexus Repository Community Edition role defaults
+
+# Image
+nexus_image_name: "sonatype/nexus3"
+nexus_image_tag: "3.98.1"
+nexus_image: "docker.io/{{ nexus_image_name }}:{{ nexus_image_tag }}"
+
+# Bundled PostgreSQL datastore (supported natively in Nexus 3.77+ Community Edition)
+nexus_postgres_image: "docker.io/library/postgres:18.6-alpine3.24"
+nexus_db_host: "nexus-db"
+nexus_db_port: 5432
+nexus_db_name: "nexus"
+nexus_db_user: "nexus"
+
+# Prestaged image archives (<vendor>-<image>_<tag>.tar)
+nexus_image_tars:
+  - "{{ sophon_containers_dir }}/sonatype-nexus3_{{ nexus_image_tag }}.tar"
+  - "{{ sophon_containers_dir }}/library-postgres_{{ nexus_postgres_image.split(':')[-1] }}.tar"
+
+# Container ports (all behind Traefik on external network `proxy`)
+nexus_port_http: 8081
+nexus_port_docker_group: 5000
+nexus_port_docker_hosted: 5001
+
+# Single-label wildcard subdomains under *.{{ domain_name }}
+nexus_hostname: "nexus"
+nexus_registry_hostname: "registry"
+nexus_registry_push_hostname: "registry-push"
+nexus_domain: "{{ domain_name | lower | regex_replace('\\.$', '') }}"
+
+# Bounded JVM memory so InfraVM runs Keycloak + Nexus + Gitea + Arcane comfortably in 12+ GiB RAM
+nexus_jvm_params: "-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=1536m -Djava.util.prefs.userRoot=/nexus-data/javaprefs"
+
+# Security & accounts
+nexus_admin_user: "admin"
+nexus_pull_user: "sophon-pull"
+nexus_anonymous_enabled: false
+nexus_credentials_dir: "{{ playbook_dir }}/credentials/nexus"
+
+# Native OpenLDAP integration (requires openldap role deployed first)
+openldap_domain: "{{ domain_name }}"
+openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
+nexus_ldap_host: "ldap.{{ openldap_domain | lower | regex_replace('\\.$', '') }}"
+nexus_ldap_port: 636
+nexus_ldap_bind_dn: "cn=keycloak-bind,ou=services,{{ openldap_base_dn }}"
+nexus_ldap_bind_password: "{{ openldap_admin_password }}"
+nexus_ldap_certs_volume: "openldap_ldap_certs"

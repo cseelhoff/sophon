@@ -1,9 +1,10 @@
 # Sophon
 
-Offline-capable deployment of DNS, reverse proxy, encrypted backups, directory, SSO, Git and container-management
-services onto one Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft Hyper-V. Services run as
-declarative rootless Podman Compose stacks with Arcane as the OIDC-authenticated management GUI; the Ansible runner is
-a container on InfraVM itself.
+Offline-capable deployment of DNS, reverse proxy, encrypted backups, directory, SSO, Git, artifact/container registry,
+and container-management services onto one Fedora CoreOS VM (**InfraVM**), on Proxmox, VMware vCenter or Microsoft
+Hyper-V. Services run as declarative rootless Podman Compose stacks with Arcane as the OIDC-authenticated management GUI
+and Sonatype Nexus Repository as the unified hosted + caching proxy artifact/container registry; the Ansible runner is
+a container on InfraVM itself. See the [Nexus & Pure GitOps Architecture Plan](docs/nexus-and-gitops-plan.md).
 
 ## Install
 
@@ -16,23 +17,26 @@ filesystem (`~/sophon`, not `/mnt/c/...`): building the ISOs is several times fa
 
 ### Option A: Zero-prompt unattended install & unified auto-restore (Proxmox, vCenter, Hyper-V)
 
-Copy [`.env.example`](.env.example) to `.env`, configure your hypervisor, domain, and IP settings, and run two commands:
+Run two commands (optionally copying [`.env.example`](.env.example) to `.env` first if you want to pre-fill hypervisor, domain, or IP settings—otherwise `sophon-build-isos.sh` prompts interactively and offers to save your decisions to a mode-`0600` `.env` file at the end):
 
 ```sh
-# 1. Build all ISOs (prompts for any unset passwords and writes mode-0600 secrets ISOs + offline OS/app ISOs)
+# 1. Build all ISOs (prompts for any unset values, writes mode-0600 secrets ISOs + offline OS/app ISOs, and offers to save .env)
 sh sophon-build-isos.sh           # Windows: .\sophon-build-isos.ps1
 
 # 2. Provision Sophon (deploys SFTP Backup Server VM when sophon-sftp-secrets.iso exists, then production InfraVM)
 sh sophon-provision.sh            # Windows: .\sophon-provision.ps1
 
 # Optional: deploy or refresh the isolated dev / restore-drill VM (`SOPHON_DEV_INFRAVM_NAME` on `SOPHON_DEV_NETWORK_CIDR`)
-sh sophon-provision.sh dev        # Windows: .\sophon-provision.ps1 dev
+sh sophon-provision-dev.sh        # Windows: .\sophon-provision-dev.ps1
+
+# Optional: stop and delete a Sophon VM (`SOPHON_INFRAVM_NAME` by default, or `--vm-name sophon-dev-infravm`)
+sh sophon-destroy-vm.sh           # Windows: .\sophon-destroy-vm.ps1
 ```
 
 One `sophon-secrets.iso` handles **both Day-1 builds and automated restores** safely:
 - **Empty SFTP repository → Day-1 build:** InfraVM ingests `sophon-seed.json` into RAM (`tmpfs`), ejects the CD-ROM, sets the `core` password and static IPv4, initializes the encrypted Kopia repository, deploys all stacks, runs the first verified backup, and enables the `6h` schedule.
 - **Existing snapshots found → Safe Standby Auto-Restore:** InfraVM automatically postpones Cloudflare tunnel creation/DNS repointing, connects Kopia in `--readonly` mode with scheduled backups disabled, deploys the stacks, runs `sophon-restore --snapshot latest --yes`, verifies all containers and SNI TLS endpoints locally inside the guest, and reports `STANDBY RESTORE COMPLETE` on the VM login banner (`/etc/issue`).
-- **Optional production promotion (`sophon-activate`):** Standby/dev restores run on `SOPHON_DEV_NETWORK_CIDR` (default VM `sophon-dev-infravm`) and never touch live DNS or write to the backup repository. Only when replacing a lost production server, log in as `core` and run `sophon-activate` to switch its static IP and self-pointing DNS from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`, promote SFTP to `sophon-backup`, and enable Cloudflare tunnel publishing + scheduled Kopia backups.
+- **Optional production promotion (`https://<domain>` or `sophon-activate`):** Standby/dev restores run on `SOPHON_DEV_NETWORK_CIDR` (default VM `sophon-dev-infravm`) and never touch live DNS or write to the backup repository. Only when replacing a lost production server, first shut down/delete the old production VM (`sh sophon-destroy-vm.sh`) and then open **`https://<domain>`** (Keycloak SSO, `arcane-admins`) to click **Promote to Active Production**—the button remains disabled/grayed out whenever `SOPHON_NETWORK_CIDR` is still active on the network—or run `sophon-activate` as `core`. Promotion switches the static IP and self-pointing DNS from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`, promotes SFTP to `sophon-backup`, and enables Cloudflare tunnel publishing + scheduled Kopia backups.
 
 ### Option B: Interactive console install (no secrets ISO needed)
 
@@ -53,7 +57,7 @@ install media, then creates and starts a blank VM with the media attached.
 3. Run `sophon-deploy`. It first asks for the network (the VM starts on a DHCP lease; address, prefix and gateway
    default to it, so Enter keeps them as a static address, and DNS defaults to `1.1.1.1`). Then answer **Y** (the
    default) to "Does this site have internet access?" unless the site is offline, and enter your domain and credentials.
-   It deploys CoreDNS, Traefik, OpenLDAP, Keycloak, Gitea, Arcane and Kopia.
+   It deploys CoreDNS, Traefik, OpenLDAP, Keycloak, Gitea, Nexus, Arcane and Kopia.
 
 **No internet at the VM's site?** Also follow [Air-gapped sites](#air-gapped-sites).
 
@@ -100,8 +104,8 @@ Run `sh sophon-build-isos.sh --os-only`, then do the VM part by hand:
 
 1. Copy `artifacts/coreos/sophon-coreos.iso` and `artifacts/bootstrap/sophon-apps.iso` to the hypervisor.
    At an [air-gapped site](#air-gapped-sites) (or when using unattended seeding) also copy `artifacts/secrets/sophon-secrets.iso`.
-2. Create a blank VM: 64-bit Linux, UEFI or BIOS (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 8 GiB RAM,
-   one 40+ GiB disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
+2. Create a blank VM: 64-bit Linux, UEFI or BIOS (Hyper-V: generation 2, Secure Boot off), 8 vCPU, 12 GiB RAM,
+   one 160+ GiB disk, one NIC that can reach your network (Workstation: bridged) with DHCP.
 3. Attach **both** ISOs as two CD/DVD drives, connected at power-on, disk first in the boot order.
    The certificate disk can be attached now as a third drive, or any time before you run `sophon-deploy`.
 4. Power on and continue with part 2 above. If the VM boots the installer again after install, nothing is reinstalled
@@ -117,8 +121,11 @@ Later, `sophon-deploy --network` asks for the network again. Detach both ISOs on
 
 ### Using the services
 
-Arcane is at `https://arcane.<domain>` (also `traefik`, `dns`, `kopia`, `ldap`, `auth`, `git`). Sign in with Keycloak
-SSO (`john.doe.admin` or any member of `arcane-admins` receives `role_admin`).
+The Appliance Status & Cutover UI is at `https://<domain>` (`https://status.<domain>`, LAN-only and excluded from Cloudflare Tunnel publishing), and Arcane is at `https://arcane.<domain>` (also `traefik`, `dns`, `kopia`, `ldap`, `auth`, `git`, `nexus`, `registry`, `registry-push`).
+Sign in to Arcane, Gitea, and Keycloak SSO (`john.doe.admin` or any member of `arcane-admins` receives `role_admin`),
+and sign in to Nexus (`https://nexus.<domain>`) with OpenLDAP credentials (`nexus-admins` -> administrator,
+`nexus-developers` -> publish/read across hosted, proxy, and group repositories). Pull container images through
+`https://registry.<domain>` (`docker-group`) and push internal CI images to `https://registry-push.<domain>` (`docker-hosted`).
 
 Point clients at CoreDNS on the VM for your domain only. On Windows, in an elevated PowerShell:
 
@@ -174,13 +181,15 @@ podman exec kopia cat /source/last-run.json
 
 Arcane is reconstructible: nothing may exist only in its UI. Rebuild means
 redeploy from code and restore state via `sophon-restore`—either automatically
-in **Safe Standby Mode** via `sh sophon-provision.sh dev` (promoting
+in **Safe Standby Mode** via `sh sophon-provision-dev.sh` (promoting
 to live production and switching from `SOPHON_DEV_NETWORK_CIDR` to
-`SOPHON_NETWORK_CIDR` only if you explicitly run `sophon-activate`), or
+`SOPHON_NETWORK_CIDR` only if you explicitly click **Promote to Active Production**
+at `https://<domain>` after decommissioning the old prod VM with `sh sophon-destroy-vm.sh`,
+or run `sophon-activate`), or
 interactively via `sophon-deploy --prepare-restore` followed by `sophon-restore`
 (see [Manual Installation & Recovery](docs/manual-installation.md)). Across
-**Proxmox, VMware vCenter, and Microsoft Hyper-V**, `sh sophon-provision.sh dev`
-(PowerShell: `.\sophon-provision.ps1 dev`, plus optional weekly
+**Proxmox, VMware vCenter, and Microsoft Hyper-V**, `sh sophon-provision-dev.sh`
+(PowerShell: `.\sophon-provision-dev.ps1`, plus optional weekly
 `systemd --user` timer units in [contrib/systemd/](contrib/systemd)) always
 deletes any existing `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`) first and
 boots a clean standby VM on `SOPHON_DEV_NETWORK_CIDR` with the confined

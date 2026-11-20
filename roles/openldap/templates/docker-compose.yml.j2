@@ -212,6 +212,19 @@ services:
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
         member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
 
+        dn: cn=nexus-admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        cn: nexus-admins
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+
+        dn: cn=nexus-developers,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        cn: nexus-developers
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+
         dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}
         objectClass: posixGroup
         cn: posix-users

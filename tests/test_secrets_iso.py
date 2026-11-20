@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -252,6 +253,112 @@ class SecretsIsoTests(unittest.TestCase):
             self.assertEqual(seed['env']['SOPHON_CF_TUNNEL_ENABLED'], 'true')
             self.assertEqual(seed['env']['SOPHON_ACME_EMAIL'], 'ops@sophon.example.com')
             self.assertTrue((extracted / 'acme.json').is_file())
+
+    def test_interactive_build_without_dotenv_defers_and_saves_mode_0600_dotenv_default_yes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            acme_bytes, ca_pem = make_test_acme('sophon.example.com')
+            ca_file = tmp_dir / 'ca.pem'
+            ca_file.write_bytes(ca_pem)
+            state_dir = tmp_dir / 'state'
+            cert_dir = state_dir / 'certificates' / 'sophon.example.com'
+            cert_dir.mkdir(parents=True)
+            (cert_dir / 'acme.json').write_bytes(acme_bytes)
+
+            sophon_iso = tmp_dir / 'sophon-secrets.iso'
+            backup_iso = tmp_dir / 'sophon-sftp-secrets.iso'
+            dotenv_path = tmp_dir / '.env'
+            pending_json = tmp_dir / 'pending-dotenv.json'
+
+            # Interactive answers when .env does not exist at all:
+            # 1) shared password Y (default '')
+            # 2) static IP Y (default '')
+            # 3) SOPHON_NETWORK_CIDR
+            # 4) SOPHON_NETWORK_GATEWAY
+            # 5) SOPHON_DEV_NETWORK_CIDR
+            # 6) SOPHON_VNET_DNS (default '')
+            # 7) SOPHON_DOMAIN
+            # 8) paired backup ISO Y (default '')
+            # 9) SOPHON_BACKUP_NETWORK_CIDR
+            # 10) internet access -> n (air-gapped with cached acme.json)
+            inputs = iter([
+                '',
+                '',
+                '10.0.60.101/24',
+                '10.0.60.1',
+                '10.0.60.107/24',
+                '',
+                'sophon.example.com',
+                '',
+                '10.0.60.100/24',
+                'n',
+            ])
+            secrets_inputs = iter([
+                'InteractivePass!123',
+                'InteractivePass!123',
+                'KopiaSecretPass!123',
+                'KopiaSecretPass!123',
+            ])
+
+            old_env = os.environ.copy()
+            try:
+                for key in list(os.environ):
+                    if key.startswith('SOPHON_') or key == 'CF_DNS_API_TOKEN':
+                        os.environ.pop(key, None)
+                os.environ['SSL_CERT_FILE'] = str(ca_file)
+
+                with mock.patch.object(sys.stdin, 'isatty', return_value=True), \
+                     mock.patch('builtins.input', side_effect=lambda _prompt='': next(inputs)), \
+                     mock.patch('console.read_secret', side_effect=lambda _prompt='': next(secrets_inputs)):
+                    rc = secrets_iso.main([
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                        '--dotenv-path', str(dotenv_path),
+                        '--defer-dotenv', str(pending_json),
+                    ])
+                self.assertEqual(rc, 0)
+                self.assertFalse(dotenv_path.exists())
+                self.assertTrue(pending_json.is_file())
+
+                # End-of-build prompt defaults to Yes when user presses Enter ('')
+                with mock.patch.object(sys.stdin, 'isatty', return_value=True), \
+                     mock.patch('builtins.input', return_value=''):
+                    rc_apply = secrets_iso.main(['--apply-dotenv', str(pending_json)])
+                self.assertEqual(rc_apply, 0)
+                self.assertFalse(pending_json.exists())
+                self.assertTrue(dotenv_path.is_file())
+                self.assertEqual(stat.S_IMODE(dotenv_path.stat().st_mode), 0o600)
+
+                # Subsequent build using saved .env requires zero prompts even without a TTY!
+                secrets_iso.cli.load_dotenv(dotenv_path)
+                with mock.patch.object(sys.stdin, 'isatty', return_value=False):
+                    rc_repeat = secrets_iso.main([
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                        '--dotenv-path', str(dotenv_path),
+                    ])
+                self.assertEqual(rc_repeat, 0)
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
+
+    def test_apply_dotenv_respects_no_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            dotenv_path = tmp_dir / '.env'
+            pending_json = tmp_dir / 'pending.json'
+            pending_json.write_text(
+                json.dumps({'dotenv_path': str(dotenv_path), 'updates': {'SOPHON_DOMAIN': 'sophon.example.com'}}),
+                encoding='utf-8',
+            )
+            with mock.patch.object(sys.stdin, 'isatty', return_value=True), \
+                 mock.patch('builtins.input', return_value='n'):
+                rc = secrets_iso.main(['--apply-dotenv', str(pending_json)])
+            self.assertEqual(rc, 0)
+            self.assertFalse(pending_json.exists())
+            self.assertFalse(dotenv_path.exists())
 
 
 if __name__ == '__main__':
