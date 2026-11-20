@@ -15,7 +15,7 @@ Integrating Nexus directly into Sophon Core (`4-configure.yml` and `sophon-apps.
 4. **Automated Day-1 governance in Ansible (`roles/nexus`):** Nexus requires post-boot API initialization (rotating the random initial admin password, accepting the Nexus 3.77+ Community Edition EULA, disabling anonymous public access, binding OpenLDAP, separating `hosted` vs. `proxy-cache` blob stores, and creating repositories). Keeping this idempotent bootstrap in `roles/nexus` makes every Sophon install ready for builds and pulls on Day 1.
 
 **Accepted resource trade-offs:**
-- Default InfraVM sizing increases from `8192` MiB RAM / `100` GiB disk to **`12288` MiB RAM** and **`160` GiB disk** (`SOPHON_INFRAVM_MEMORY` / `SOPHON_INFRAVM_DISK_GB`), with Nexus's JVM explicitly bounded (`-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=1536m`). Lower validation minimums (`1024` MiB / `40` GiB) remain unchanged for constrained lab overrides.
+- Default thin-provisioned VM sizing uses **`12288` MiB RAM** and **`1024` GiB thin virtual disk** (`SOPHON_INFRAVM_MEMORY` / `SOPHON_INFRAVM_DISK_GB`) on InfraVM and **`1536` GiB thin virtual disk** (`SOPHON_BACKUP_VM_DISK_GB`) on the paired SFTP Backup VM, with hypervisor `discard=on` + guest `discard=async` / `fstrim` reclaiming deleted blocks automatically and Nexus's JVM explicitly bounded (`-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=1536m`). Lower validation minimums (`1024` MiB / `40` GiB on InfraVM, `16` GiB on Backup VM) remain unchanged for constrained lab overrides.
 - `sophon-apps.iso` grows by the `sonatype/nexus3` image archive (~800 MB) and Step 4 cold boot adds ~60–90 seconds for Nexus initialization.
 
 ---
@@ -43,7 +43,7 @@ Key runtime settings on `nexus`:
 - `NEXUS_DATASTORE_ENABLED=true` with JDBC `jdbc:postgresql://nexus-db:5432/nexus`.
 - `NEXUS_SECURITY_RANDOMPASSWORD=true` so first boot writes a one-time `/nexus-data/admin.password` rotated immediately by `roles/nexus`.
 - `NEXUS_SECRETS_KEY_FILE=/nexus-data/etc/nexus.secrets.json`: a persistent 32-byte AES secret key generated once before first start so secrets stored inside PostgreSQL (such as the OpenLDAP bind password and upstream proxy credentials) remain decryptable after `sophon-restore` on a replacement VM.
-- Pre-created volume subdirectories (`/nexus-data/blobs/hosted`, `/nexus-data/blobs/proxy-cache`, `/nexus-data/keystores`, `/nexus-data/etc`) owned by UID/GID `200:200` before `nexus` starts so `sophon-restore`'s `bounded_target()` check always finds valid parent directories even when `SOPHON_PREPARE_RESTORE=true`.
+- Pre-created volume subdirectories (`/nexus-data/blobs/hosted`, `/nexus-data/blobs/scratch`, `/nexus-data/blobs/proxy-cache`, `/nexus-data/keystores`, `/nexus-data/etc`) owned by UID/GID `200:200` before `nexus` starts so `sophon-restore`'s `bounded_target()` check always finds valid parent directories even when `SOPHON_PREPARE_RESTORE=true`, and Traefik sets `--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0` so multi-GB ISO and multi-hundred-GB forensics HTTP `PUT` streams never time out after 60 seconds.
 
 ### 2.2 Single-Label Wildcard Endpoints (`*.<domain>`)
 Sophon's Let's Encrypt DNS-01 certificate covers `<domain>` and single-label `*.<domain>`. Traefik routes three dedicated hostnames to `nexus` over TLS:
@@ -79,12 +79,13 @@ Because `nexus.<domain>` and `registry.<domain>` may be reachable via Cloudflare
 
 ## 3. Blob Store Separation & Kopia v3 Hot Backup/Restore
 
-### 3.1 `hosted` vs. `proxy-cache` Blob Stores
-Nexus separates irreplaceable first-party artifacts from disposable internet caches at the blob-store boundary:
+### 3.1 `hosted`, `scratch`, and `proxy-cache` Blob Stores
+Nexus separates irreplaceable first-party/vault artifacts from re-obtainable local files and disposable internet caches at the blob-store boundary:
 
 | Blob Store | Container Path | Contents | Kopia Backup Policy |
 | :--- | :--- | :--- | :--- |
-| `hosted` | `/nexus-data/blobs/hosted` | First-party OCI images, wheels, `.deb`s, npm packages, JARs, crates, raw releases | **Backed up** (`sophon.backup.paths`) |
+| `hosted` | `/nexus-data/blobs/hosted` | First-party OCI images, wheels, `.deb`s, npm packages, JARs, crates, general `raw-hosted` files, and write-once `raw-vault` forensics/archive captures | **Backed up** (`sophon.backup.paths`) |
+| `scratch` | `/nexus-data/blobs/scratch` | Large re-obtainable local artifacts in `raw-scratch` (OS ISOs, RSAT, vendor installers) | **Excluded** (re-obtainable; zero backup bloat) |
 | `proxy-cache` | `/nexus-data/blobs/proxy-cache` | Pull-through upstream caches (Docker Hub, GHCR, Quay, PyPI, npmjs, Debian APT, Maven Central, crates.io) | **Excluded** (re-populated on demand) |
 
 Default sample repositories shipped by Nexus (`maven-releases`, `maven-snapshots`, `maven-central`, `maven-public`, `nuget-*`) that reference the unbacked-up `default` blob store are deleted during Day-1 bootstrap and replaced with Sophon's explicit `hosted` / `proxy-cache` repositories so **zero hosted artifacts can accidentally land in `default`**.
@@ -126,7 +127,7 @@ When `prepare_restore` is `false` (Day-1 initialization or idempotent `sophon-de
 | **Debian APT** | `apt-hosted` (dist `sophon`, auto-generated OpenPGP RSA signing keypair) | `apt-debian-proxy` (`deb.debian.org/debian`), `apt-debian-security-proxy` (`security.debian.org/debian-security`) | `/repository/apt-hosted/`, `/repository/apt-debian-proxy/`, `/repository/apt-debian-security-proxy/` *(NXRM3 APT has no group format)* |
 | **Maven** | `maven-releases`, `maven-snapshots` | `maven-central` (`https://repo1.maven.org/maven2/`) | `maven-public` (`https://nexus.<domain>/repository/maven-public/`) |
 | **Rust (Cargo)** | `cargo-hosted` | `crates-io-proxy` (`https://index.crates.io/`) | `cargo-group` (`https://nexus.<domain>/repository/cargo-group/`) *(best-effort if enabled in runtime edition)* |
-| **Generic / Raw** | `raw-hosted` | — | `raw-group` (`https://nexus.<domain>/repository/raw-group/`) |
+| **Generic / Raw** | `raw-vault` (`ALLOW_ONCE` write-once), `raw-hosted` (`ALLOW`); plus unbacked-up `raw-scratch` (`scratch` blob store, `ALLOW`) | — | `raw-group` (`https://nexus.<domain>/repository/raw-group/` unifying `raw-vault`, `raw-hosted`, `raw-scratch`) |
 
 ---
 
@@ -170,7 +171,7 @@ Because `arcane` is a reconstructible management stack (`sophon.backup.enable=fa
 4. **[`roles/arcane/templates/docker-compose.yml.j2`](../roles/arcane/templates/docker-compose.yml.j2)** — Add `git.<domain>`, `nexus.<domain>`, `registry.<domain>`, and `registry-push.<domain>` to `extra_hosts`.
 5. **Core Playbooks, Bundle & Sizing** —
    - [`roles/prepare/defaults/main.yml`](../roles/prepare/defaults/main.yml) & [`src/bundle.py`](../src/bundle.py): Bundle `docker.io/sonatype/nexus3:3.98.1` and include `roles/nexus` in `sophon-apps.iso`.
-   - [`group_vars/all.yml`](../group_vars/all.yml), [`src/deployment.py`](../src/deployment.py), [`.env.example`](../.env.example): Add `SOPHON_NEXUS_ADMIN_PASSWORD` and optional `SOPHON_NEXUS_DB_PASSWORD` (defaulting to `arcane_admin_password`, matching `SOPHON_GITEA_DB_PASSWORD`), plus bump InfraVM defaults to `12288` MiB RAM and `160` GiB disk.
+   - [`group_vars/all.yml`](../group_vars/all.yml), [`src/deployment.py`](../src/deployment.py), [`.env.example`](../.env.example): Add `SOPHON_NEXUS_ADMIN_PASSWORD` and optional `SOPHON_NEXUS_DB_PASSWORD` (defaulting to `arcane_admin_password`, matching `SOPHON_GITEA_DB_PASSWORD`), plus bump InfraVM defaults to `12288` MiB RAM and `1024` GiB thin disk (`1536` GiB thin disk on Backup VM).
    - [`4-configure.yml`](../4-configure.yml) & [`5-activate.yml`](../5-activate.yml): Deploy `nexus` after `openldap`/`gitea`, include `nexus`, `registry`, and `registry-push` in `/etc/hosts`, and rewrite `nexus` `extra_hosts` during `sophon-activate` IP promotion.
    - [`guest/sophon-autodeploy`](../guest/sophon-autodeploy), [`guest/sophon-reconcile-gitops`](../guest/sophon-reconcile-gitops), & [`src/verify_restore.py`](../src/verify_restore.py): Verify `nexus` container health and `https://nexus.<domain>/service/rest/v1/status`, write `registry.<domain>` pull auth after restore, and reconcile pure GitOps workloads when `ops/workloads` is present.
 6. **Documentation & Tests** —

@@ -1,6 +1,6 @@
 # Sophon Operations Guide
 
-This guide covers the standard end-to-end workflow for deploying Sophon, verifying services, managing backups, and running disaster-recovery drills or production cutovers across Proxmox, VMware vCenter, and Microsoft Hyper-V.
+This guide covers the standard end-to-end workflow for deploying Sophon, verifying services, managing backups, running disaster-recovery drills or production cutovers, and performing monthly certificate renewals across Proxmox, VMware vCenter, and Microsoft Hyper-V.
 
 - Need to set up the SFTP backup server manually or use an existing NAS/Linux host? See **[Manual & Custom SFTP Backup Server Setup](./manual-backup-server.md)**.
 - Deploying without hypervisor API access or without an unattended secrets ISO? See **[Manual & Interactive InfraVM Installation and Recovery](./manual-installation.md)**.
@@ -13,8 +13,8 @@ Sophon runs on one **Fedora CoreOS** virtual machine (**InfraVM**) alongside an 
 
 - **Immutable OS + persistent Btrfs storage:** Fedora CoreOS keeps the OS root read-only while storing container volumes on a persistent `/var` Btrfs partition so snapshots and restores can use fast copy-on-write reflinks.
 - **Declarative rootless Podman stacks:** CoreDNS, Traefik, OpenLDAP, Keycloak, Gitea (with local file-backed Git LFS; built-in package registry disabled), Sonatype Nexus Repository (hosted + upstream proxy/group registries), Arcane, the LAN-only Appliance Status & Cutover UI (`https://<domain>` / `https://status.<domain>`), and Kopia run from Compose files in `/var/lib/sophon/stacks/`.
-- **Sonatype Nexus Repository (`https://nexus.<domain>`, `https://registry.<domain>`, `https://registry-push.<domain>`):** Unified OCI container, PyPI, npm, APT, Maven, Cargo, and Raw artifact registry integrated natively with OpenLDAP (`nexus-admins`, `nexus-developers`). Proprietary `hosted` artifacts and PostgreSQL metadata are backed up by Kopia while internet `proxy-cache` blobs are excluded.
-- **Arcane (`https://arcane.<domain>`) & Appliance Status UI (`https://<domain>`):** OIDC-authenticated UIs integrated with Keycloak (`arcane-admins` grants admin access). Arcane manages Compose stacks and Pure GitOps pull reconciliation ([`docs/nexus-and-gitops-plan.md`](./nexus-and-gitops-plan.md)), while `https://<domain>` (excluded from Cloudflare Tunnel publishing) shows appliance mode and provides one-click standby-to-production cutover once the production IP is free.
+- **Sonatype Nexus Repository (`https://nexus.<domain>`, `https://registry.<domain>`, `https://registry-push.<domain>`):** Unified OCI container, PyPI, npm, APT, Maven, Cargo, and Raw artifact registry integrated natively with OpenLDAP (`nexus-admins`, `nexus-developers`). Proprietary `hosted` artifacts (including immutable `raw-vault` forensics/archive uploads and `raw-hosted` files) and PostgreSQL metadata are backed up by Kopia, while internet `proxy-cache` blobs and large re-obtainable `raw-scratch` blobs (`scratch` blob store) are excluded.
+- **Arcane (`https://arcane.<domain>`) & Appliance Status UI (`https://<domain>`):** OIDC-authenticated UIs integrated with Keycloak (`arcane-admins` grants admin access). Arcane manages Compose stacks and Pure GitOps pull reconciliation ([`docs/nexus-and-gitops-plan.md`](./nexus-and-gitops-plan.md)), while `https://<domain>` (excluded from Cloudflare Tunnel publishing) shows appliance mode and provides one-click standby-to-production cutover and monthly TLS certificate updates.
 - **Zero-downtime encrypted Kopia backups:**
   - **Primary backups (`/sophon-state`, default every `6h`):** Kopia's native scheduler and before/after snapshot actions capture hot database dumps (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`) via a restricted dump proxy and stage volume files (including Gitea Git + LFS data and TLS certificates) without stopping containers. Any container deployed via Gitea Actions can opt in with `sophon.backup.*` labels (see [`roles/kopia/README.md`](../roles/kopia/README.md)).
   - **Optional weekly Btrfs volume snapshots (`/sophon-coarse`, latest 4 kept):** Atomic read-only Btrfs subvolume snapshots uploaded weekly as a last-resort fallback.
@@ -39,7 +39,7 @@ install -m 600 .env.example .env  # Windows PowerShell: Copy-Item .env.example .
 <summary>Notes: Optional hypervisor overrides, air-gapped sites, and <code>.env</code> reference</summary>
 
 - `sh sophon-provision.sh` interactively prompts for core hypervisor connection details (Proxmox / vCenter / Hyper-V, host/URL, node/cluster/datastore/switch, and password), while optional hypervisor overrides—such as Proxmox API tokens (`SOPHON_PROXMOX_TOKEN_*`), non-default Proxmox storage pools (`SOPHON_PROXMOX_ISO_STORAGE` / `SOPHON_PROXMOX_DISK_STORAGE`), custom bridges, or VLAN tags (`SOPHON_VNET_VLAN`)—are configured via `.env` (or exported in your shell).
-- Leave any password blank in `.env` if you prefer to enter it interactively; for air-gapped sites without internet on the VM network, leave `SOPHON_CF_TOKEN` blank.
+- Leave any password blank in `.env` if you prefer to enter it interactively; for air-gapped sites without internet on the VM network, leave `SOPHON_CF_TOKEN` blank (and see [Section 7](#7-monthly-certificate-renewal) for monthly certificate rotation).
 - See [`.env.example`](../.env.example) and [`docs/inputs.md`](./inputs.md) for all hypervisor-specific fields, and [README — Cloudflare API token](../README.md#cloudflare-api-token) for creating `SOPHON_CF_TOKEN`.
 
 </details>
@@ -200,5 +200,51 @@ When recovering from an actual production outage:
 - **Recovering without `sophon-secrets.iso`:** Follow [Interactive Disaster Recovery in Manual Installation](./manual-installation.md#3-interactive-disaster-recovery-without-sophon-secretsiso).
 
 </details>
+
+---
+
+## 7. Monthly Certificate Renewal
+
+Sophon uses a single Let's Encrypt ECDSA P-256 wildcard certificate (`<domain>` and `*.<domain>`, valid for **90 days**) stored in Traefik's `acme.json` and shared automatically with LDAPS and Nexus registry trust.
+
+<details>
+<summary>Notes: Connected vs. air-gapped InfraVMs, 65-day renewal window, &amp; forcing early renewal</summary>
+
+- **Connected InfraVMs (`SOPHON_CF_TOKEN` configured on InfraVM):** Traefik automatically renews the wildcard certificate via Cloudflare DNS-01 ~30 days before expiry, `certs-dumper` updates `ldap_certs`, and Kopia backs up `/data/acme.json` every `6h`—no monthly InfraVM maintenance is required. *(You only need Step 7.1 if you keep an offline `sophon-secrets.iso` on an encrypted workstation and want its embedded certificate refreshed.)*
+- **Air-gapped / offline InfraVMs (no `SOPHON_CF_TOKEN` or internet on the VM network):** InfraVM cannot contact Let's Encrypt on its own. Run the workflow below **every month** so the live certificate and your recovery ISO never approach their 90-day expiry.
+- **Automatic 65-day reuse window:** On the workstation, `sophon-build-isos.sh` inspects `/state/certificates/<domain>/acme.json` inside the `sophon-state` container volume. When **65 days or fewer** remain (any monthly run ~25+ days after the previous issue), it automatically runs a temporary local Traefik DNS-01 challenge and issues a fresh 90-day wildcard certificate; when **more than 65 days** remain, it reuses the cached certificate so repeated runs within the same week never hit Let's Encrypt's 5-per-week duplicate certificate limit.
+- **Forcing an early 90-day renewal (`--renew-certs`):** Append `--renew-certs` (`sh sophon-build-isos.sh --renew-certs` / `.\sophon-build-isos.ps1 --renew-certs`) if you ever want to issue a brand-new 90-day certificate when more than 65 days still remain (for example right before an extended offline window).
+- **Back up `sophon-state`:** Back up the workstation's `sophon-state` volume (`docker run --rm -v sophon-state:/state -v "$(pwd):/workspace" sophon-tools tar -czf sophon-state.tgz -C /state .`) to preserve your ACME account key across workstation rebuilds.
+
+</details>
+
+### 7.1 Renew the wildcard certificate & rebuild `sophon-secrets.iso`
+
+From the **same connected workstation** each month, run:
+
+```sh
+sh sophon-build-isos.sh           # PowerShell: .\sophon-build-isos.ps1
+```
+
+*(Uses your saved `.env` settings, prompts privately for a Cloudflare DNS API token with `Zone:Read` + `DNS:Edit` if not set in your environment, issues a fresh 90-day wildcard certificate when ≤65 days remain, and rebuilds `artifacts/secrets/sophon-secrets.iso` with both `/acme.json` and `/sophon-seed.json` while skipping unchanged OS/app ISOs.)*
+
+### 7.2 Mount `sophon-secrets.iso` & apply in `https://<domain>`
+
+1. Hot-attach the renewed `sophon-secrets.iso` to `sophon-infravm` (and automatically delete the local workstation ISO copy once uploaded; pass `--keep-local` / `-KeepLocal` if you also keep `sophon-secrets.iso` on an encrypted workstation for `sophon-provision-dev.sh` restore drills):
+   ```sh
+   sh sophon-mount-secrets.sh     # PowerShell: .\sophon-mount-secrets.ps1
+   ```
+2. Open **`https://<domain>`** (or `https://status.<domain>`), sign in with Keycloak SSO (`arcane-admins`), and click **Update Certificates** in the **TLS Certificate Management** card.
+   - **Automatic validation & cleanup:** **Update Certificates** remains disabled until a valid `SOPHON_CERTS` disk is attached (click **Scan Certificate Disk** if needed). Clicking it validates the new certificate chain and key, updates Traefik, reloads `certs-dumper`, OpenLDAP (LDAPS), and host Podman registry trust, triggers an immediate Kopia backup snapshot, and automatically ejects `sophon-secrets.iso` from the VM's CD/DVD drive.
+
+<details>
+<summary>Notes: How one-click certificate rotation works &amp; CLI fallback (<code>sophon-refresh-certs</code>)</summary>
+
+- **Cross-hypervisor hot-mount & storage hygiene (`sophon-mount-secrets.sh`):** Verifies `/acme.json` locally before touching the hypervisor, uploads `sophon-secrets-<sha8>.iso` to Proxmox, VMware vCenter, or Microsoft Hyper-V, inserts it into `sophon-infravm`'s virtual CD/DVD drive without rebooting the VM, prunes superseded `sophon-secrets-*.iso` uploads from hypervisor storage, and removes the local `artifacts/secrets/sophon-secrets.iso` file unless `--keep-local` is passed. (Target another Sophon VM such as `sophon-dev-infravm` with `--vm-name sophon-dev-infravm`.)
+- **Zero-password detached host rotation:** Clicking **Update Certificates** triggers a detached host `systemd` unit (`sophon-web-refresh-certs.service` -> `/usr/local/bin/sophon-refresh-certs`) outside Podman containers so restarting Traefik never interrupts the rotation or requires re-entering service passwords. If Traefik fails to start with the new store, Sophon automatically restores the previous `acme.json`.
+- **CLI / expired-certificate console fallback (`sophon-refresh-certs`):** If an air-gapped certificate was allowed to expire completely before renewal (preventing browser HTTPS or Keycloak LDAPS sign-in), run `sh sophon-mount-secrets.sh`, log in to the InfraVM console as `core`, and run `sophon-refresh-certs` directly (do **not** use `sudo`). It performs the exact same validation, Traefik + OpenLDAP reload, Kopia snapshot, and CD-ROM eject with zero password prompts. For additional background on the wildcard store format, see [`docs/certificates.md`](./certificates.md).
+
+</details>
+
 
 

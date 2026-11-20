@@ -36,14 +36,14 @@ vnet_vlan: "{{ lookup('env', 'SOPHON_VNET_VLAN') | default('', true) }}"
 infravm_vm_name: "{{ lookup('env', 'SOPHON_INFRAVM_NAME') | default('sophon-infravm', true) }}"
 infravm_cores: "{{ lookup('env', 'SOPHON_INFRAVM_CORES') | default(8, true) | int }}"
 infravm_memory: "{{ lookup('env', 'SOPHON_INFRAVM_MEMORY') | default(12288, true) | int }}"
-infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(160, true) | int }}"
+infravm_disk_gb: "{{ lookup('env', 'SOPHON_INFRAVM_DISK_GB') | default(1024, true) | int }}"
 # Written into the VM so a rerun can tell this workflow's VM from anyone else's.
 infravm_marker: "sophon-infravm-two-iso-v1"
 
 backup_vm_name: "{{ lookup('env', 'SOPHON_BACKUP_VM_NAME') | default('sophon-backup', true) }}"
 backup_vm_cores: "{{ lookup('env', 'SOPHON_BACKUP_VM_CORES') | default(2, true) | int }}"
 backup_vm_memory: "{{ lookup('env', 'SOPHON_BACKUP_VM_MEMORY') | default(2048, true) | int }}"
-backup_vm_disk_gb: "{{ lookup('env', 'SOPHON_BACKUP_VM_DISK_GB') | default(100, true) | int }}"
+backup_vm_disk_gb: "{{ lookup('env', 'SOPHON_BACKUP_VM_DISK_GB') | default(1536, true) | int }}"
 backup_vm_marker: "sophon-backup-vm-v1"
 
 attach_secrets_iso: "{{ (lookup('env', 'SOPHON_ATTACH_SECRETS_ISO') | default('true', true) | lower) not in ['0', 'false', 'no', 'off'] }}"

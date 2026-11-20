@@ -22,7 +22,7 @@ import certificates
 import secrets_iso
 
 
-def make_test_acme(domain: str) -> tuple[bytes, bytes]:
+def make_test_acme(domain: str, days: int = 89) -> tuple[bytes, bytes]:
     """Create a valid RFC-5280 CA + wildcard leaf Traefik acme.json for tests."""
     now = dt.datetime.now(dt.timezone.utc)
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -34,7 +34,7 @@ def make_test_acme(domain: str) -> tuple[bytes, bytes]:
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=60))
+        .not_valid_after(now + dt.timedelta(days=max(days + 30, 120)))
         .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
         .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), critical=True)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
@@ -48,7 +48,7 @@ def make_test_acme(domain: str) -> tuple[bytes, bytes]:
         .public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=60))
+        .not_valid_after(now + dt.timedelta(days=days))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName([x509.DNSName(domain), x509.DNSName(f'*.{domain}')]),
@@ -277,10 +277,12 @@ class SecretsIsoTests(unittest.TestCase):
             # 4) SOPHON_NETWORK_GATEWAY
             # 5) SOPHON_DEV_NETWORK_CIDR
             # 6) SOPHON_VNET_DNS (default '')
-            # 7) SOPHON_DOMAIN
-            # 8) paired backup ISO Y (default '')
-            # 9) SOPHON_BACKUP_NETWORK_CIDR
-            # 10) internet access -> n (air-gapped with cached acme.json)
+            # 7) SOPHON_INFRAVM_DISK_GB (default '' -> 1024)
+            # 8) SOPHON_DOMAIN
+            # 9) paired backup ISO Y (default '')
+            # 10) SOPHON_BACKUP_NETWORK_CIDR
+            # 11) SOPHON_BACKUP_VM_DISK_GB (default '' -> 1536)
+            # 12) internet access -> n (air-gapped with cached acme.json)
             inputs = iter([
                 '',
                 '',
@@ -288,9 +290,11 @@ class SecretsIsoTests(unittest.TestCase):
                 '10.0.60.1',
                 '10.0.60.107/24',
                 '',
+                '',
                 'sophon.example.com',
                 '',
                 '10.0.60.100/24',
+                '',
                 'n',
             ])
             secrets_inputs = iter([
@@ -331,7 +335,9 @@ class SecretsIsoTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(dotenv_path.stat().st_mode), 0o600)
 
                 # Subsequent build using saved .env requires zero prompts even without a TTY!
-                secrets_iso.cli.load_dotenv(dotenv_path)
+                loaded_saved = secrets_iso.cli.load_dotenv(dotenv_path)
+                self.assertEqual(loaded_saved['SOPHON_INFRAVM_DISK_GB'], '1024')
+                self.assertEqual(loaded_saved['SOPHON_BACKUP_VM_DISK_GB'], '1536')
                 with mock.patch.object(sys.stdin, 'isatty', return_value=False):
                     rc_repeat = secrets_iso.main([
                         '--state-dir', str(state_dir),
@@ -359,6 +365,93 @@ class SecretsIsoTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertFalse(pending_json.exists())
             self.assertFalse(dotenv_path.exists())
+
+    def test_monthly_build_renews_stale_cached_certificate_and_renew_certs_forces_fresh_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            stale_bytes, ca_pem = make_test_acme('sophon.example.com', days=45)
+            fresh_bytes, fresh_ca_pem = make_test_acme('sophon.example.com', days=89)
+            ca_file = tmp_dir / 'ca.pem'
+            ca_file.write_bytes(ca_pem + fresh_ca_pem)
+
+            state_dir = tmp_dir / 'state'
+            cert_dir = state_dir / 'certificates' / 'sophon.example.com'
+            cert_dir.mkdir(parents=True)
+            cached_acme = cert_dir / 'acme.json'
+            cached_acme.write_bytes(stale_bytes)
+
+            sophon_iso = tmp_dir / 'sophon-secrets.iso'
+            backup_iso = tmp_dir / 'sophon-sftp-secrets.iso'
+            dotenv_path = tmp_dir / '.env'
+            secrets_iso.cli.save_dotenv(
+                {
+                    'SOPHON_DOMAIN': 'sophon.example.com',
+                    'SOPHON_ACME_EMAIL': 'ops@sophon.example.com',
+                    'SOPHON_AIRGAPPED': 'true',
+                    'SOPHON_SHARED_PASSWORD': 'SharedTestPassword!123',
+                    'SOPHON_KOPIA_PASSWORD': 'KopiaRepoPassword!123',
+                    'SOPHON_NETWORK_CIDR': '10.0.60.101/24',
+                    'SOPHON_NETWORK_GATEWAY': '10.0.60.1',
+                    'SOPHON_BACKUP_NETWORK_CIDR': '10.0.60.100/24',
+                },
+                path=dotenv_path,
+                template_path=ROOT / '.env.example',
+            )
+
+            issued_calls: list[list[str]] = []
+
+            def fake_issue_main(args: list[str]) -> int:
+                issued_calls.append(list(args))
+                cached_acme.write_bytes(fresh_bytes)
+                return 0
+
+            old_env = os.environ.copy()
+            try:
+                for key in list(os.environ):
+                    if key.startswith('SOPHON_') or key == 'CF_DNS_API_TOKEN':
+                        os.environ.pop(key, None)
+                secrets_iso.cli.load_dotenv(dotenv_path)
+                os.environ['SSL_CERT_FILE'] = str(ca_file)
+
+                # 45 days remaining (< 65d) automatically renews without --renew-certs
+                with mock.patch('certificates.main', side_effect=fake_issue_main):
+                    rc = secrets_iso.main([
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                        '--dotenv-path', str(dotenv_path),
+                    ])
+                self.assertEqual(rc, 0)
+                self.assertEqual(len(issued_calls), 1)
+                self.assertNotIn('--force', issued_calls[0])
+
+                # Now 89 days remain (> 65d): default build reuses without calling certificates.main
+                issued_calls.clear()
+                with mock.patch('certificates.main', side_effect=fake_issue_main):
+                    rc2 = secrets_iso.main([
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                        '--dotenv-path', str(dotenv_path),
+                    ])
+                self.assertEqual(rc2, 0)
+                self.assertEqual(issued_calls, [])
+
+                # Passing --renew-certs forces renewal with --force even at 89 days remaining
+                with mock.patch('certificates.main', side_effect=fake_issue_main):
+                    rc3 = secrets_iso.main([
+                        '--renew-certs',
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                        '--dotenv-path', str(dotenv_path),
+                    ])
+                self.assertEqual(rc3, 0)
+                self.assertEqual(len(issued_calls), 1)
+                self.assertIn('--force', issued_calls[0])
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
 
 
 if __name__ == '__main__':

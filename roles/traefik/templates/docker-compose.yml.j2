@@ -42,6 +42,7 @@ services:
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls=true
       - --entrypoints.websecure.http.tls.certResolver=letsencrypt
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
       - --certificatesresolvers.letsencrypt.acme.email={{ traefik_acme_email }}
       - --certificatesresolvers.letsencrypt.acme.storage=/data/acme.json
       - --certificatesresolvers.letsencrypt.acme.keyType=EC256

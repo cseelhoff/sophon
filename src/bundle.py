@@ -27,9 +27,10 @@ PROJECT = (
     'src/backup_destination.py', 'src/status_ui.py',
 )
 GUEST = (
-    'host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-activate', 'sophon-reconcile-gitops',
-    'sophon-network', 'sophon-set-password', 'sophon-seed-early', 'sophon-autodeploy',
-    'sophon-control-sync', 'sophon-web-activate', 'sophon-update-issue',
+    'host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-activate', 'sophon-refresh-certs',
+    'sophon-reconcile-gitops', 'sophon-network', 'sophon-set-password', 'sophon-seed-early',
+    'sophon-autodeploy', 'sophon-control-sync', 'sophon-web-activate', 'sophon-web-refresh-certs',
+    'sophon-update-issue',
 )
 EXCLUDED = frozenset((
     'artifacts', 'deployment', 'logs', 'log', 'keys', 'credentials', 'secrets',

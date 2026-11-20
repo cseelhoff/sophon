@@ -21,9 +21,9 @@ description:
   - Unmarked, ambiguous and incomplete VMs are never adopted.
 options:
   action:
-    description: Authenticate without changes, or provision and start InfraVM.
+    description: Authenticate without changes, provision and start InfraVM, remove a managed VM, or hot-insert a secrets ISO.
     type: str
-    choices: [authenticate, provision]
+    choices: [authenticate, provision, absent, mount_secrets]
     default: provision
   host:
     description: Hyper-V host name or address reachable over WinRM.
@@ -72,6 +72,18 @@ options:
   bundle_iso:
     description: Path of the Sophon deployment ISO on this machine.
     type: path
+  secrets_iso:
+    description: Optional mode-0600 Sophon secrets/certificate ISO (`SOPHON_CERTS`) on this machine.
+    type: path
+    default: ''
+  min_disk_gb:
+    description: Minimum allowed disk size in GiB.
+    type: int
+    default: 40
+  marker:
+    description: Ownership Notes marker required on managed VMs.
+    type: str
+    default: sophon-infravm-two-iso-v1
 '''
 
 MARKER = 'sophon-infravm-two-iso-v1'
@@ -136,6 +148,8 @@ if ($p.bundle_name) {
 if ($p.secrets_name) {
     $secrets = [IO.Path]::Combine($p.iso_dir, $p.secrets_name)
     $null = Add-VMDvdDrive -VM $vm -Path $secrets
+} elseif ($p.bundle_name) {
+    $null = Add-VMDvdDrive -VM $vm
 }
 $disk = Get-VMHardDiskDrive -VM $vm
 $installer = Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $coreos }
@@ -159,6 +173,32 @@ if ($vm) {
 START = r'''
 $vm = Get-VM | Where-Object { $_.Name -eq $p.name }
 Start-VM -VM $vm
+'''
+
+HOST_INFO = r'''
+$h = Get-VMHost
+[pscustomobject]@{ host = $h.Name; vm_path = $h.VirtualMachinePath } | ConvertTo-Json -Compress
+'''
+
+MOUNT_SECRETS = r'''
+$vm = Get-VM | Where-Object { $_.Name -eq $p.name } | Select-Object -First 1
+$secrets = [IO.Path]::Combine($p.iso_dir, $p.secrets_name)
+$drives = @(Get-VMDvdDrive -VM $vm)
+$target = $drives | Where-Object { $_.Path -and ([IO.Path]::GetFileName($_.Path) -like 'sophon-secrets-*.iso') } | Select-Object -First 1
+if (-not $target) {
+    $target = $drives | Where-Object { [string]::IsNullOrEmpty($_.Path) } | Select-Object -First 1
+}
+if (-not $target) {
+    $target = $drives | Where-Object { $_.Path -and ([IO.Path]::GetFileName($_.Path) -notlike 'sophon-apps-*.iso') } | Select-Object -First 1
+}
+if ($target) {
+    Set-VMDvdDrive -VMDvdDrive $target -Path $secrets
+} else {
+    $null = Add-VMDvdDrive -VM $vm -Path $secrets
+}
+Get-ChildItem -LiteralPath $p.iso_dir -Filter 'sophon-secrets-*.iso' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne $p.secrets_name } |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 '''
 
 
@@ -244,6 +284,44 @@ def destroy(params, host, info):
     return {'changed': True, 'vm_path': f"{info['host']}/{name}", 'destroyed': True}
 
 
+def mount_secrets(params, host, info):
+    name = params['name']
+    marker = params.get('marker') or MARKER
+    if not NAME.fullmatch(name):
+        raise ValueError('VM name must contain 1-80 letters, digits, dots, underscores or hyphens.')
+    path = (params['path'] or info['vm_path']).rstrip('\\/')
+    if not WINDOWS_PATH.fullmatch(path):
+        raise ValueError('The Hyper-V VM folder must be an absolute Windows path such as D:\\Hyper-V.')
+    source = Path(params.get('secrets_iso') or '')
+    if not source.is_file() or source.is_symlink():
+        raise ValueError(f'Missing secrets ISO: {source}')
+
+    found = host.run(script(FIND, name=name))
+    if found['count'] > 1:
+        raise ValueError('Multiple VMs use this name. No VMs have been changed.')
+    if found['count'] == 0:
+        raise ValueError(f"No managed Hyper-V VM named '{name}' was found.")
+    if found['notes'] != marker:
+        raise ValueError('Existing VM is unmanaged or an incomplete bootstrap. It has not been changed.')
+
+    with source.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    filename = f'sophon-secrets-{digest[:8]}.iso'
+    size = source.stat().st_size
+    iso_dir = ntpath.join(path, 'sophon-isos')
+
+    existing = {item['name']: item['size']
+                for item in host.run(script(STAT_ISOS, iso_dir=iso_dir, names=[filename]))}
+    if existing[filename] != size:
+        if existing[filename] != -1:
+            raise ValueError('A hash-named secrets ISO has an unexpected size on the host; refusing to overwrite it.')
+        host.upload(str(source), ntpath.join(iso_dir, filename + '.part'))
+        host.run(script(FINALIZE_ISO, iso_dir=iso_dir, name=filename, sha256=digest))
+
+    host.run(script(MOUNT_SECRETS, name=name, iso_dir=iso_dir, secrets_name=filename))
+    return {'changed': True, 'vm_path': f"{info['host']}/{name}", 'filename': filename}
+
+
 class WinRMHost:
     def __init__(self, params):
         from pypsrp.client import Client
@@ -276,29 +354,38 @@ class WinRMHost:
 
 def main():
     module = AnsibleModule(argument_spec={
-        'action': {'choices': ['authenticate', 'provision', 'absent'], 'default': 'provision'},
+        'action': {'choices': ['authenticate', 'provision', 'absent', 'mount_secrets'], 'default': 'provision'},
         'host': {'required': True}, 'port': {'type': 'int', 'default': 5985},
         'username': {'required': True}, 'password': {'required': True, 'no_log': True},
-        'ca_file': {'type': 'path', 'default': ''}, 'switch': {'required': True}, 'path': {'default': ''},
+        'ca_file': {'type': 'path', 'default': ''}, 'switch': {'default': ''}, 'path': {'default': ''},
         'name': {'default': 'sophon-infravm'}, 'cores': {'type': 'int', 'default': 8},
-        'memory': {'type': 'int', 'default': 8192}, 'disk_gb': {'type': 'int', 'default': 100},
+        'memory': {'type': 'int', 'default': 12288}, 'disk_gb': {'type': 'int', 'default': 1024},
         'min_disk_gb': {'type': 'int', 'default': 40}, 'marker': {'default': MARKER},
         'coreos_iso': {'type': 'path'}, 'bundle_iso': {'type': 'path', 'default': ''},
         'secrets_iso': {'type': 'path', 'default': ''},
-    }, required_if=[('action', 'provision', ['coreos_iso'])])
+    }, required_if=[
+        ('action', 'authenticate', ['switch']),
+        ('action', 'provision', ['switch', 'coreos_iso']),
+        ('action', 'mount_secrets', ['secrets_iso']),
+    ])
     params = module.params
     try:
-        if not SWITCH.fullmatch(params['switch']):
+        if params['switch'] and not SWITCH.fullmatch(params['switch']):
             raise ValueError('The virtual switch name contains unsupported characters.')
         try:
             host = WinRMHost(params)
         except ImportError:
             raise ValueError('pypsrp is missing; run this through the sophon-tools container.')
-        info = host.run(script(AUTHENTICATE, switch=params['switch']))
+        if params['switch']:
+            info = host.run(script(AUTHENTICATE, switch=params['switch']))
+        else:
+            info = host.run(script(HOST_INFO))
         if params['action'] == 'authenticate':
             result = {'changed': False, 'server': info['host']}
         elif params['action'] == 'absent':
             result = destroy(params, host, info)
+        elif params['action'] == 'mount_secrets':
+            result = mount_secrets(params, host, info)
         else:
             result = provision(params, host, info)
     except (OSError, ValueError, KeyError) as error:

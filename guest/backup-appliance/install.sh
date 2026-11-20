@@ -135,9 +135,10 @@ partx -u "$target" 2>/dev/null || true
 ensure_part_nodes
 
 # Syslinux extlinux 6.04 requires ext4 without 64bit/metadata_csum_seed on the OS partition; data partition uses full 64-bit ext4.
+# Lower root block reservation to 1% (-m 1) and use 64 KiB/inode (-i 65536) for Kopia pack files on large thin-provisioned disks.
 mkfs.ext4 -q -F -O ^64bit,^metadata_csum_seed -L SOPHON_BK_OS "$os_part"
 ensure_part_nodes
-mkfs.ext4 -q -F -L SOPHON_BK_DATA "$data_part"
+mkfs.ext4 -q -F -m 1 -i 65536 -L SOPHON_BK_DATA "$data_part"
 ensure_part_nodes
 
 mkdir -p /mnt/target

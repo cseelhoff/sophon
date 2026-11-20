@@ -25,7 +25,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        mkdir -p /nexus-data/blobs/hosted /nexus-data/blobs/proxy-cache /nexus-data/keystores /nexus-data/etc /nexus-data/javaprefs
+        mkdir -p /nexus-data/blobs/hosted /nexus-data/blobs/scratch /nexus-data/blobs/proxy-cache /nexus-data/keystores /nexus-data/etc /nexus-data/javaprefs
         umask 077
         if [ ! -s /nexus-data/etc/nexus.secrets.json ]; then
           printf '{"active":"sophon-1","keys":[{"id":"sophon-1","key":"%s"}]}\n' "$$SOPHON_NEXUS_SECRETS_KEY" > /nexus-data/etc/nexus.secrets.json

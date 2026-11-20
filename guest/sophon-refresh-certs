@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Zero-password wildcard TLS certificate rotation on InfraVM.
+# Reads acme.json from the attached SOPHON_CERTS ISO (or /var/lib/sophon/project/imports/acme.json),
+# validates chain + keypair + expiry, swaps Traefik's live acme.json with rollback safety,
+# reloads certs-dumper + OpenLDAP + host registry trust, triggers a Kopia snapshot (in active prod),
+# and ejects the SOPHON_CERTS virtual CD-ROM drive.
+set -euo pipefail
+umask 077
+
+if [[ ${SOPHON_ALLOW_NON_CORE:-0} != 1 ]] && [[ $(id -u) != 1000 || $(id -un) != core ]]; then
+    echo "Run sophon-refresh-certs as core (do not use sudo)." >&2
+    exit 1
+fi
+export HOME=${HOME:-/var/home/core}
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/1000}
+unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+
+PROJECT_DIR=${SOPHON_PROJECT_DIR:-/var/lib/sophon/project}
+CERTS_DEVICE=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
+PODMAN_BIN=${SOPHON_PODMAN_BIN:-podman}
+SUDO_BIN=${SOPHON_SUDO_BIN:-sudo}
+EJECT_BIN=${SOPHON_EJECT_BIN:-eject}
+
+explicit_source=""
+no_eject=0
+while (( $# )); do
+    case $1 in
+        --source)
+            (( $# >= 2 )) || { echo "--source requires a path to acme.json." >&2; exit 2; }
+            explicit_source=$2; shift 2 ;;
+        --no-eject)
+            no_eject=1; shift ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: sophon-refresh-certs [--source <acme.json>] [--no-eject]
+
+Validates and installs a renewed wildcard TLS certificate from the attached SOPHON_CERTS
+ISO (or --source), reloads Traefik, certs-dumper, OpenLDAP, and host registry trust,
+creates a Kopia backup snapshot (when in active production), and ejects the ISO.
+EOF
+            exit 0 ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 2 ;;
+    esac
+done
+
+domain=$(jq -r '.domain // empty' "$PROJECT_DIR/deploy-result.json" 2>/dev/null || true)
+if [[ -z $domain ]]; then
+    domain=$(jq -r '.domain // empty' "$PROJECT_DIR/standby.json" 2>/dev/null || true)
+fi
+if [[ -z $domain ]]; then
+    domain=$(jq -r '.SOPHON_DOMAIN // empty' "$PROJECT_DIR/site.json" 2>/dev/null || true)
+fi
+domain=${domain%.}
+domain=${domain,,}
+if [[ -z $domain ]]; then
+    echo "Cannot determine appliance domain from $PROJECT_DIR/deploy-result.json." >&2
+    exit 1
+fi
+
+stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/sophon-refresh-certs.XXXXXX")
+mount_point=""
+cleanup() {
+    if [[ -n $mount_point ]]; then
+        $SUDO_BIN umount "$mount_point" 2>/dev/null || true
+        rmdir "$mount_point" 2>/dev/null || true
+    fi
+    rm -rf "$stage_dir"
+}
+trap cleanup EXIT
+
+eject_target=""
+if [[ -n $explicit_source ]]; then
+    [[ -f $explicit_source && ! -L $explicit_source ]] || {
+        echo "Certificate file not found: $explicit_source" >&2
+        exit 1
+    }
+    install -m 0600 "$explicit_source" "$stage_dir/acme.json"
+elif [[ -e $CERTS_DEVICE ]]; then
+    eject_target=$(readlink -f "$CERTS_DEVICE" 2>/dev/null || printf '%s' "$CERTS_DEVICE")
+    mount_point=$(mktemp -d "${TMPDIR:-/tmp}/sophon-certs-mnt.XXXXXX")
+    if ! $SUDO_BIN mount -o ro "$CERTS_DEVICE" "$mount_point" 2>/dev/null; then
+        echo "Certificate disk ($CERTS_DEVICE) could not be mounted." >&2
+        exit 1
+    fi
+    if [[ ! -f $mount_point/acme.json || -L $mount_point/acme.json ]]; then
+        echo "Attached certificate disk ($CERTS_DEVICE) does not contain acme.json." >&2
+        exit 1
+    fi
+    install -m 0600 "$mount_point/acme.json" "$stage_dir/acme.json"
+    $SUDO_BIN umount "$mount_point" || true
+    rmdir "$mount_point" 2>/dev/null || true
+    mount_point=""
+elif [[ -f $PROJECT_DIR/imports/acme.json && ! -L $PROJECT_DIR/imports/acme.json ]]; then
+    install -m 0600 "$PROJECT_DIR/imports/acme.json" "$stage_dir/acme.json"
+else
+    echo "No certificate disk (SOPHON_CERTS) is attached. Run 'sh sophon-mount-secrets.sh' first." >&2
+    exit 1
+fi
+
+echo "[1/5] Validating wildcard certificate for ${domain} and *.${domain}..."
+if [[ -n ${SOPHON_CERT_CHECK_CMD:-} ]]; then
+    check_out=$($SOPHON_CERT_CHECK_CMD "$stage_dir/acme.json" "$domain")
+else
+    check_out=$(
+        "$PODMAN_BIN" --remote=false run --rm --network=none --pull=never \
+            --security-opt label=disable \
+            -v "$PROJECT_DIR/src:/src:ro" \
+            -v "$stage_dir/acme.json:/acme.json:ro" \
+            sophon:latest \
+            python3 /src/certificates.py check --source /acme.json --domain "$domain"
+    )
+fi
+expires_at=$(jq -r '(.certificate_expiries // {}) | to_entries[0].value // empty' <<< "$check_out" 2>/dev/null || true)
+echo "  Verified wildcard certificate for ${domain} (valid until ${expires_at:-unknown})."
+
+echo "[2/5] Updating Traefik TLS store..."
+had_prev=0
+if "$PODMAN_BIN" --remote=false cp traefik:/data/acme.json "$stage_dir/previous-acme.json" 2>/dev/null; then
+    chmod 0600 "$stage_dir/previous-acme.json"
+    had_prev=1
+fi
+
+"$PODMAN_BIN" --remote=false stop -t 30 traefik >/dev/null
+if ! "$PODMAN_BIN" --remote=false cp "$stage_dir/acme.json" traefik:/data/acme.json ||
+   ! "$PODMAN_BIN" --remote=false start traefik >/dev/null; then
+    echo "Failed to start Traefik with new acme.json; restoring previous certificate store..." >&2
+    if (( had_prev )); then
+        "$PODMAN_BIN" --remote=false cp "$stage_dir/previous-acme.json" traefik:/data/acme.json 2>/dev/null || true
+    fi
+    "$PODMAN_BIN" --remote=false start traefik >/dev/null 2>&1 || true
+    exit 1
+fi
+
+install -d -m 0700 "$PROJECT_DIR/artifacts/traefik"
+install -m 0600 "$stage_dir/acme.json" "$PROJECT_DIR/artifacts/traefik/acme.json"
+
+echo "[3/5] Reloading certs-dumper, OpenLDAP (LDAPS), and host registry TLS trust..."
+if "$PODMAN_BIN" --remote=false container exists certs-dumper; then
+    "$PODMAN_BIN" --remote=false restart certs-dumper >/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if "$PODMAN_BIN" --remote=false exec certs-dumper sh -c "test -s '/output/certs/${domain}.crt' && test -s '/output/private/${domain}.key'" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+fi
+
+if "$PODMAN_BIN" --remote=false container exists ldap; then
+    "$PODMAN_BIN" --remote=false restart ldap >/dev/null
+fi
+
+if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+
+echo "[4/5] Persisting updated certificate state to Kopia..."
+if [[ -f $PROJECT_DIR/standby.json ]]; then
+    echo "Safe Standby mode: skipping Kopia write snapshot (read-only drill repository)."
+elif "$PODMAN_BIN" --remote=false container exists kopia; then
+    "$PODMAN_BIN" --remote=false exec kopia python3 /app/backup.py run
+else
+    echo "Kopia container not present; skipping immediate backup snapshot."
+fi
+
+echo "[5/5] Cleaning up staged certificate files and ejecting SOPHON_CERTS disk..."
+rm -f "$PROJECT_DIR/imports/acme.json"
+if (( ! no_eject )) && [[ -n $eject_target ]]; then
+    $SUDO_BIN "$EJECT_BIN" "$eject_target" 2>/dev/null || $SUDO_BIN "$EJECT_BIN" "$CERTS_DEVICE" 2>/dev/null || true
+fi
+
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi
+
+echo "Certificate update complete: wildcard TLS certificate for ${domain} valid until ${expires_at:-updated}."

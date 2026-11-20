@@ -132,11 +132,14 @@ RUN set -eu; \
       '    unset _ip _pub' \
       'fi' > /rootfs/etc/profile.d/sophon-banner.sh; \
     chmod 0644 /rootfs/etc/profile.d/sophon-banner.sh; \
+    install -d -m 0755 /rootfs/etc/periodic/weekly; \
+    printf '%s\n' '#!/bin/sh' '/sbin/fstrim -av >/dev/null 2>&1 || true' > /rootfs/etc/periodic/weekly/sophon-fstrim; \
+    chmod 0755 /rootfs/etc/periodic/weekly/sophon-fstrim; \
     for lvl_svc in \
       sysinit:devfs sysinit:dmesg sysinit:mdev sysinit:hwdrivers \
       boot:modules boot:hwclock boot:swap boot:seedrng boot:fsck boot:root \
       boot:localmount boot:sysctl boot:hostname boot:loopback boot:bootmisc boot:syslog \
-      default:acpid default:dhcpcd default:chronyd default:sshd default:local \
+      default:acpid default:crond default:dhcpcd default:chronyd default:sshd default:local \
       shutdown:mount-ro shutdown:killprocs shutdown:savecache; do \
         lvl=${lvl_svc%%:*}; svc=${lvl_svc#*:}; \
         mkdir -p "/rootfs/etc/runlevels/$lvl"; \

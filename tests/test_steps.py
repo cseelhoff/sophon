@@ -168,7 +168,7 @@ def test_domain_deferred_until_services():
             }},
             {'ansible.builtin.set_fact': {'devices': {key: config[key] for key in ('virtio', 'ide', 'boot', 'net', 'serial')}}},
             {'ansible.builtin.assert': {'that': [
-                "devices.virtio.virtio0 == 'disks:100'",
+                "devices.virtio.virtio0 == 'disks:100,discard=on'",
                 "devices.ide.ide2 == 'isos:iso/sophon-coreos-12345678.iso,media=cdrom'",
                 "devices.ide.ide3 == 'isos:iso/sophon-apps-abcdef01.iso,media=cdrom'",
                 "'ide0' not in devices.ide",

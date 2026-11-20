@@ -26,6 +26,8 @@ from cryptography.x509.verification import PolicyBuilder, Store, VerificationErr
 SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git', 'kopia')
 MAX_FILE = 2 * 1024 * 1024
 KEY_TYPE = 'EC256'
+MIN_REMAINING_DAYS = 65
+MIN_REMAINING_SECONDS = MIN_REMAINING_DAYS * 86400
 BOOTSTRAP_CN = 'SOPHON PRE-RESTORE BOOTSTRAP'
 # The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (and optional sophon-seed.json).
 CERTIFICATE_LABEL = 'SOPHON_CERTS'
@@ -177,19 +179,63 @@ def write_certificate_iso(data, output):
     return output
 
 
-def ready_to_export(source, domain):
-    if not source.exists():
-        return False
+def ready_to_export_data(data, domain):
     try:
-        expiries = validate(source, domain)
+        expiries = validate_data(data, domain)
     except (ValueError, KeyError, TypeError, UnicodeError):
         return False
     now = datetime.now(timezone.utc)
-    return all((datetime.fromisoformat(value) - now).total_seconds() > 30 * 86400 for value in expiries.values())
+    return all((datetime.fromisoformat(value) - now).total_seconds() > MIN_REMAINING_SECONDS for value in expiries.values())
+
+
+def ready_to_export(source, domain):
+    source = Path(source)
+    if not source.exists() or source.is_symlink():
+        return False
+    try:
+        return ready_to_export_data(source.read_bytes(), domain)
+    except OSError:
+        return False
+
+
+def _strip_domain_certificate(data, domain):
+    """Remove `domain`'s cached certificate while preserving `.letsencrypt.Account` so Traefik issues a fresh 90-day cert."""
+    target = normalize_domain(domain)
+    payload = json.loads(data)
+    le = payload.get('letsencrypt')
+    if isinstance(le, dict) and isinstance(le.get('Certificates'), list):
+        le['Certificates'] = [
+            entry for entry in le['Certificates']
+            if not (isinstance(entry, dict)
+                    and isinstance(entry.get('domain'), dict)
+                    and isinstance(entry['domain'].get('main'), str)
+                    and normalize_domain(entry['domain']['main']) == target)
+        ]
+    return json.dumps(payload, separators=(',', ':')).encode()
+
+
+def _write_private_bytes(path, data):
+    descriptor, temporary = tempfile.mkstemp(prefix='.acme-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'wb') as output:
+            os.fchmod(output.fileno(), 0o600)
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def issue(source, domain, email, token, timeout):
     directory = source.parent
+    previous_bytes = source.read_bytes() if source.exists() else None
+    if previous_bytes is not None:
+        try:
+            stripped = _strip_domain_certificate(previous_bytes, domain)
+            _write_private_bytes(source, stripped)
+        except (ValueError, KeyError, TypeError, UnicodeError):
+            pass
     dynamic = directory / 'routers.json'
     # One wildcard certificate (the domain and *.domain) covers every service name.
     dynamic.write_text(json.dumps({'http': {'routers': {'wildcard': {
@@ -215,26 +261,34 @@ def issue(source, domain, email, token, timeout):
     ]
     log_path = directory / 'issuer.log'
     descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, 'w') as log:
-        os.fchmod(log.fileno(), 0o600)
-        process = subprocess.Popen(arguments, env=environment, stdout=log, stderr=subprocess.STDOUT)
-        try:
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise ValueError(f'Certificate issuer exited. Inspect the private log: {log_path}')
-                if ready_to_export(source, domain):
-                    return
-                time.sleep(2)
-            raise ValueError(f'Certificate issuance timed out. Inspect the private log: {log_path}')
-        finally:
-            if process.poll() is None:
-                process.terminate()
+    try:
+        with os.fdopen(descriptor, 'w') as log:
+            os.fchmod(log.fileno(), 0o600)
+            process = subprocess.Popen(arguments, env=environment, stdout=log, stderr=subprocess.STDOUT)
             try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        raise ValueError(f'Certificate issuer exited. Inspect the private log: {log_path}')
+                    if ready_to_export(source, domain):
+                        return
+                    time.sleep(2)
+                raise ValueError(f'Certificate issuance timed out. Inspect the private log: {log_path}')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+    except Exception:
+        if previous_bytes is not None:
+            try:
+                _write_private_bytes(source, previous_bytes)
+            except OSError:
+                pass
+        raise
 
 
 def issue_main(argv):
@@ -248,6 +302,8 @@ def issue_main(argv):
     parser.add_argument('--output-iso', type=Path, default=CERTIFICATE_ISO,
                         help=f'secret ISO to write (label {CERTIFICATE_LABEL}; default: %(default)s)')
     parser.add_argument('--output-file', type=Path, help='also write the acme.json itself to this file')
+    parser.add_argument('--force', action='store_true',
+                        help=f'issue a fresh 90-day certificate even when more than {MIN_REMAINING_DAYS} days remain')
     options = parser.parse_args(argv)
 
     def prompt(label):
@@ -274,7 +330,7 @@ def issue_main(argv):
             raise ValueError('The private ACME store must not be a symlink.')
         if source.exists():
             source.chmod(0o600)
-        if not ready_to_export(source, domain):
+        if options.force or not ready_to_export(source, domain):
             email = options.email or os.environ.get('SOPHON_ACME_EMAIL') or prompt('ACME contact email: ')
             if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
                 raise ValueError('Supply a valid ACME contact email.')

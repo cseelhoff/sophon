@@ -158,6 +158,118 @@ if [[ $standby == true && -n $target_ip && $target_ip != "$current_ip" ]]; then
     fi
 fi
 
+run_cert_check() {
+    local acme_file=$1 target_domain=$2
+    if [[ -n ${SOPHON_CERT_CHECK_CMD:-} ]]; then
+        $SOPHON_CERT_CHECK_CMD "$acme_file" "$target_domain"
+        return $?
+    fi
+    if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+        chown core:core "$acme_file" 2>/dev/null || true
+        runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+            podman --remote=false run --rm --network=none --pull=never --security-opt label=disable \
+            -v "$PROJECT_DIR/src:/src:ro" -v "$acme_file:/acme.json:ro" \
+            sophon:latest python3 /src/certificates.py check --source /acme.json --domain "$target_domain"
+    else
+        podman --remote=false run --rm --network=none --pull=never --security-opt label=disable \
+            -v "$PROJECT_DIR/src:/src:ro" -v "$acme_file:/acme.json:ro" \
+            sophon:latest python3 /src/certificates.py check --source /acme.json --domain "$target_domain"
+    fi
+}
+
+parse_valid_until() {
+    jq -r '(.certificate_expiries // {}) | to_entries[0].value // empty' <<< "$1" 2>/dev/null || true
+}
+
+live_cert_expires_at=""
+if [[ -n $domain ]]; then
+    if [[ -f $PROJECT_DIR/artifacts/traefik/acme.json && ! -L $PROJECT_DIR/artifacts/traefik/acme.json ]]; then
+        live_tmp=$(mktemp "${TMPDIR:-/tmp}/sophon-live-acme.XXXXXX")
+        cp "$PROJECT_DIR/artifacts/traefik/acme.json" "$live_tmp"
+        chmod 0600 "$live_tmp"
+        if live_out=$(run_cert_check "$live_tmp" "$domain" 2>/dev/null); then
+            live_cert_expires_at=$(parse_valid_until "$live_out")
+        fi
+        rm -f "$live_tmp"
+    fi
+    if [[ -z $live_cert_expires_at ]] && command -v openssl >/dev/null 2>&1; then
+        end_raw=$(openssl s_client -connect "${current_ip:-127.0.0.1}:443" -servername "$domain" </dev/null 2>/dev/null \
+            | openssl x509 -noout -enddate 2>/dev/null | sed -n 's/^notAfter=//p' || true)
+        if [[ -n $end_raw ]]; then
+            live_cert_expires_at=$(date -u -d "$end_raw" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+        fi
+    fi
+fi
+
+certs_device=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
+cert_disk_present=false
+cert_disk_valid=false
+cert_disk_expires_at=""
+cert_disk_error=""
+cert_disk_id=""
+cert_disk_checked_at=""
+
+if [[ -e $certs_device || -f $PROJECT_DIR/imports/acme.json ]]; then
+    cert_disk_present=true
+    if [[ -e $certs_device ]]; then
+        cert_disk_id=$(lsblk -dnro UUID,SIZE "$certs_device" 2>/dev/null | tr ' ' ':' || stat -c '%i:%s:%Y' "$certs_device" 2>/dev/null || echo "device")
+    else
+        cert_disk_id="staged:$(stat -c '%s:%Y' "$PROJECT_DIR/imports/acme.json" 2>/dev/null || echo 'imports')"
+    fi
+    prev_disk_id=$(jq -r '.cert_disk.device_id // ""' "$STATE_FILE" 2>/dev/null || true)
+    if (( do_probe )) || [[ ! -f $STATE_FILE || $cert_disk_id != "$prev_disk_id" ]]; then
+        cert_disk_checked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        probe_tmp=$(mktemp "${TMPDIR:-/tmp}/sophon-disk-acme.XXXXXX")
+        chmod 0600 "$probe_tmp"
+        have_acme=0
+        if [[ -e $certs_device ]]; then
+            mnt_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sophon-probe-mnt.XXXXXX")
+            mount_ok=0
+            if [[ $(id -u) -eq 0 ]]; then
+                mount -o ro "$certs_device" "$mnt_tmp" 2>/dev/null && mount_ok=1 || true
+            else
+                sudo mount -o ro "$certs_device" "$mnt_tmp" 2>/dev/null && mount_ok=1 || true
+            fi
+            if (( mount_ok )); then
+                if [[ -f $mnt_tmp/acme.json && ! -L $mnt_tmp/acme.json ]]; then
+                    cp "$mnt_tmp/acme.json" "$probe_tmp"
+                    chmod 0600 "$probe_tmp"
+                    have_acme=1
+                else
+                    cert_disk_error="Attached SOPHON_CERTS disk does not contain acme.json."
+                fi
+                if [[ $(id -u) -eq 0 ]]; then
+                    umount "$mnt_tmp" 2>/dev/null || true
+                else
+                    sudo umount "$mnt_tmp" 2>/dev/null || true
+                fi
+            else
+                cert_disk_error="Attached SOPHON_CERTS disk could not be mounted."
+            fi
+            rmdir "$mnt_tmp" 2>/dev/null || true
+        elif [[ -f $PROJECT_DIR/imports/acme.json && ! -L $PROJECT_DIR/imports/acme.json ]]; then
+            cp "$PROJECT_DIR/imports/acme.json" "$probe_tmp"
+            chmod 0600 "$probe_tmp"
+            have_acme=1
+        fi
+        if (( have_acme )) && [[ -n $domain ]]; then
+            if disk_out=$(run_cert_check "$probe_tmp" "$domain" 2>&1); then
+                cert_disk_valid=true
+                cert_disk_expires_at=$(parse_valid_until "$disk_out")
+            else
+                cert_disk_valid=false
+                cert_disk_error=$(tr '\n' ' ' <<< "$disk_out" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+            fi
+        fi
+        rm -f "$probe_tmp"
+    else
+        cert_disk_valid=$(jq -r 'if .cert_disk.valid == true then "true" else "false" end' "$STATE_FILE" 2>/dev/null || echo "false")
+        cert_disk_expires_at=$(jq -r '.cert_disk.expires_at // ""' "$STATE_FILE" 2>/dev/null || true)
+        cert_disk_error=$(jq -r '.cert_disk.error // ""' "$STATE_FILE" 2>/dev/null || true)
+        cert_disk_checked_at=$(jq -r '.cert_disk.checked_at // ""' "$STATE_FILE" 2>/dev/null || true)
+    fi
+fi
+
 tmp_file="${STATE_FILE}.tmp.$$"
 jq -n \
     --arg mode "$mode" \
@@ -169,6 +281,11 @@ jq -n \
     --arg desired_cf_tunnel_name "$desired_cf_tunnel_name" \
     --arg desired_snapshot_interval "$desired_snapshot_interval" \
     --arg restored_snapshot "$restored_snapshot" \
+    --arg live_cert_expires_at "$live_cert_expires_at" \
+    --arg cert_disk_expires_at "$cert_disk_expires_at" \
+    --arg cert_disk_error "$cert_disk_error" \
+    --arg cert_disk_id "$cert_disk_id" \
+    --arg cert_disk_checked_at "$cert_disk_checked_at" \
     --arg probe_method "$probe_method" \
     --arg probe_reason "$probe_reason" \
     --arg checked_at "$checked_at" \
@@ -179,6 +296,8 @@ jq -n \
     --argjson has_cf_token "$has_cf_token" \
     --argjson applicable "$applicable" \
     --argjson occupied "$probe_occupied" \
+    --argjson cert_disk_present "$cert_disk_present" \
+    --argjson cert_disk_valid "$cert_disk_valid" \
     '{
         standby: $standby,
         mode: $mode,
@@ -193,6 +312,15 @@ jq -n \
         desired_cf_tunnel_name: $desired_cf_tunnel_name,
         desired_snapshot_interval: $desired_snapshot_interval,
         restored_snapshot: $restored_snapshot,
+        live_cert_expires_at: $live_cert_expires_at,
+        cert_disk: {
+            present: $cert_disk_present,
+            valid: $cert_disk_valid,
+            expires_at: $cert_disk_expires_at,
+            error: $cert_disk_error,
+            device_id: $cert_disk_id,
+            checked_at: $cert_disk_checked_at
+        },
         target_ip_check: {
             applicable: $applicable,
             occupied: $occupied,

@@ -212,11 +212,13 @@ def probe_tcp_ip_occupied(
 def evaluate_cutover_readiness(
     appliance_state: dict,
     activate_status: dict | None = None,
+    refresh_certs_status: dict | None = None,
     *,
     tcp_probe_fn=probe_tcp_ip_occupied,
 ) -> dict:
-    """Compute standby/production status and whether the Promote button must be disabled/grayed out."""
+    """Compute standby/production status and whether Promote / Update Certificates buttons are enabled."""
     activate_status = activate_status or {}
+    refresh_certs_status = refresh_certs_status or {}
     standby = bool(appliance_state.get('standby', False))
     mode = str(appliance_state.get('mode') or ('standby_restore' if standby else 'production_active'))
     domain = str(appliance_state.get('domain') or '')
@@ -261,6 +263,32 @@ def evaluate_cutover_readiness(
         )
 
     promote_enabled = bool(standby and not disabled_reason)
+
+    cert_disk_raw = appliance_state.get('cert_disk') or {}
+    cert_disk_present = bool(cert_disk_raw.get('present', False))
+    cert_disk_valid = bool(cert_disk_raw.get('valid', False))
+    cert_disk_expires_at = str(cert_disk_raw.get('expires_at') or '')
+    cert_disk_error = str(cert_disk_raw.get('error') or '')
+    cert_disk_checked_at = str(cert_disk_raw.get('checked_at') or '')
+
+    ref_state = str(refresh_certs_status.get('state') or 'idle')
+    refresh_running = ref_state == 'running'
+
+    refresh_disabled_reason = ''
+    if activation_running:
+        refresh_disabled_reason = 'Production cutover is currently in progress.'
+    elif refresh_running:
+        refresh_disabled_reason = 'Certificate update is currently in progress.'
+    elif not cert_disk_present:
+        refresh_disabled_reason = (
+            'No certificate disk (SOPHON_CERTS) is attached. '
+            "Run 'sh sophon-mount-secrets.sh' on your workstation first."
+        )
+    elif not cert_disk_valid:
+        refresh_disabled_reason = cert_disk_error or 'Attached certificate disk failed validation.'
+
+    refresh_certs_enabled = not bool(refresh_disabled_reason)
+
     return {
         'standby': standby,
         'mode': mode,
@@ -278,6 +306,23 @@ def evaluate_cutover_readiness(
         'desired_cf_tunnel_name': str(appliance_state.get('desired_cf_tunnel_name') or 'sophon'),
         'desired_snapshot_interval': str(appliance_state.get('desired_snapshot_interval') or '6h'),
         'restored_snapshot': str(appliance_state.get('restored_snapshot') or ''),
+        'live_cert_expires_at': str(appliance_state.get('live_cert_expires_at') or ''),
+        'cert_disk': {
+            'present': cert_disk_present,
+            'valid': cert_disk_valid,
+            'expires_at': cert_disk_expires_at,
+            'error': cert_disk_error,
+            'checked_at': cert_disk_checked_at,
+        },
+        'cert_refresh': {
+            'state': ref_state,
+            'message': str(refresh_certs_status.get('message') or ''),
+            'requested_by': str(refresh_certs_status.get('requested_by') or ''),
+            'updated_at': str(refresh_certs_status.get('updated_at') or ''),
+            'exit_code': int(refresh_certs_status.get('exit_code') or 0),
+        },
+        'refresh_certs_enabled': refresh_certs_enabled,
+        'refresh_certs_disabled_reason': refresh_disabled_reason,
         'activation': {
             'state': act_state,
             'message': str(activate_status.get('message') or ''),
@@ -389,16 +434,36 @@ class StatusConfig:
         except OSError:
             return ''
 
+    def read_refresh_certs_status(self) -> dict:
+        status_path = self.control_dir / 'refresh-certs-status.json'
+        if not status_path.is_file():
+            return {'state': 'idle'}
+        try:
+            return json.loads(status_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {'state': 'idle'}
+
+    def read_refresh_certs_log_tail(self, max_lines: int = 40) -> str:
+        log_path = self.control_dir / 'refresh-certs.log'
+        if not log_path.is_file():
+            return ''
+        try:
+            lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+            return '\n'.join(lines[-max_lines:])
+        except OSError:
+            return ''
+
     def request_host_probe(self, *, force: bool = False, wait_sec: float = 1.5) -> dict:
         state = self.read_appliance_state()
-        standby = bool(state.get('standby'))
-        target_ip = str(state.get('target_ip') or '')
-        current_ip = str(state.get('current_ip') or '')
-        if not (standby and target_ip and target_ip != current_ip):
-            return state
-        checked_at = str((state.get('target_ip_check') or {}).get('checked_at') or '')
-        if not force and _parse_iso_age_seconds(checked_at) < 4.0:
-            return state
+        if not force:
+            standby = bool(state.get('standby'))
+            target_ip = str(state.get('target_ip') or '')
+            current_ip = str(state.get('current_ip') or '')
+            if not (standby and target_ip and target_ip != current_ip):
+                return state
+            checked_at = str((state.get('target_ip_check') or {}).get('checked_at') or '')
+            if _parse_iso_age_seconds(checked_at) < 4.0:
+                return state
         state_path = self.control_dir / 'appliance-state.json'
         probe_req = self.control_dir / 'probe.request'
         before_mtime = state_path.stat().st_mtime_ns if state_path.is_file() else 0
@@ -425,6 +490,18 @@ class StatusConfig:
         payload = {
             'requested_by': requested_by,
             'tunnel_mode': tunnel_mode,
+            'requested_at': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        }
+        tmp_path.write_text(json.dumps(payload), encoding='utf-8')
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, req_path)
+
+    def queue_refresh_certs(self, *, requested_by: str) -> None:
+        self.control_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        req_path = self.control_dir / 'refresh-certs.request'
+        tmp_path = self.control_dir / f'refresh-certs.request.tmp.{os.getpid()}'
+        payload = {
+            'requested_by': requested_by,
             'requested_at': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         }
         tmp_path.write_text(json.dumps(payload), encoding='utf-8')
@@ -470,6 +547,14 @@ def render_dashboard_html(*, domain: str, username: str, csrf_token: str, initia
     init_banner_cls = 'banner ready' if init_enabled else 'banner warn'
     init_banner_txt = html.escape(str(initial_status.get('promote_disabled_reason') or ''))
     cutover_style = '' if initial_status.get('standby') else ' style="display:none;"'
+    cert_enabled = bool(initial_status.get('refresh_certs_enabled'))
+    cert_btn_attrs = 'aria-disabled="false"' if cert_enabled else 'disabled aria-disabled="true"'
+    cert_banner_cls = 'banner ready' if cert_enabled else 'banner info'
+    cert_banner_txt = html.escape(
+        'Renewed certificate disk detected and validated — ready to install, snapshot to Kopia, and eject.'
+        if cert_enabled
+        else str(initial_status.get('refresh_certs_disabled_reason') or '')
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -623,6 +708,27 @@ def render_dashboard_html(*, domain: str, username: str, csrf_token: str, initia
       <pre id="activate-log" class="log" style="display:none;"></pre>
     </section>
 
+    <section id="cert-card" class="card">
+      <h2>TLS Certificate Management</h2>
+      <div class="kv-grid">
+        <div class="kv"><div class="label">Live Wildcard Certificate</div><div class="val" id="kv-live-cert">—</div></div>
+        <div class="kv"><div class="label">Certificate Disk (SOPHON_CERTS)</div><div class="val" id="kv-cert-disk">—</div></div>
+      </div>
+
+      <div id="cert-banner" class="{cert_banner_cls}">{cert_banner_txt}</div>
+
+      <div class="actions">
+        <button id="refresh-certs-btn" class="primary" type="button" {cert_btn_attrs}>
+          Update Certificates
+        </button>
+        <button id="recheck-certs-btn" class="secondary" type="button">
+          Scan Certificate Disk
+        </button>
+      </div>
+
+      <pre id="refresh-certs-log" class="log" style="display:none;"></pre>
+    </section>
+
     <section class="card">
       <h2>Core Services</h2>
       <div class="services">
@@ -649,6 +755,65 @@ def render_dashboard_html(*, domain: str, username: str, csrf_token: str, initia
     const CSRF_TOKEN = {csrf_json};
     let currentState = {initial_json};
     let switchingNetwork = false;
+    let refreshingCerts = false;
+
+    function renderCertCard(data) {{
+      const liveCertEl = document.getElementById('kv-live-cert');
+      liveCertEl.textContent = data.live_cert_expires_at
+        ? `Valid until ${{data.live_cert_expires_at}}`
+        : 'Active (Traefik managed)';
+
+      const disk = data.cert_disk || {{}};
+      const diskEl = document.getElementById('kv-cert-disk');
+      if (!disk.present) {{
+        diskEl.textContent = 'Not attached';
+      }} else if (disk.valid) {{
+        diskEl.innerHTML = `<span class="badge active">Ready — Valid until ${{disk.expires_at || 'verified'}}</span>`;
+      }} else {{
+        diskEl.innerHTML = '<span class="badge conflict">Invalid Certificate Disk</span>';
+      }}
+
+      const ref = data.cert_refresh || {{}};
+      if (ref.state !== 'running') {{
+        refreshingCerts = false;
+      }}
+      const certBanner = document.getElementById('cert-banner');
+      if (ref.state === 'running' || refreshingCerts) {{
+        certBanner.className = 'banner info';
+        certBanner.textContent = ref.message || 'Updating Traefik & OpenLDAP certificates, snapshotting Kopia, and ejecting ISO…';
+      }} else if (ref.state === 'failed') {{
+        certBanner.className = 'banner warn';
+        certBanner.textContent = `Last certificate update failed: ${{ref.message || 'inspect log below.'}}`;
+      }} else if (data.refresh_certs_enabled) {{
+        certBanner.className = 'banner ready';
+        const copyNote = data.standby
+          ? 'install the renewed certificate into Traefik & OpenLDAP, update host registry trust, and eject SOPHON_CERTS.'
+          : 'install the renewed certificate into Traefik & OpenLDAP, snapshot to Kopia, and eject SOPHON_CERTS.';
+        certBanner.textContent = `Certificate disk validated (expires ${{disk.expires_at || 'soon'}}). Clicking Update Certificates will ${{copyNote}}`;
+      }} else if (ref.state === 'succeeded' && !disk.present) {{
+        certBanner.className = 'banner ready';
+        certBanner.textContent = ref.message || 'Wildcard TLS certificate updated, backed up to Kopia, and certificate ISO ejected.';
+      }} else if (disk.present && !disk.valid) {{
+        certBanner.className = 'banner warn';
+        certBanner.textContent = data.refresh_certs_disabled_reason || 'Attached certificate disk failed validation.';
+      }} else {{
+        certBanner.className = 'banner info';
+        certBanner.textContent = data.refresh_certs_disabled_reason || "Attach sophon-secrets.iso with 'sh sophon-mount-secrets.sh' to update certificates.";
+      }}
+
+      const certBtn = document.getElementById('refresh-certs-btn');
+      const certEnabled = Boolean(data.refresh_certs_enabled) && !refreshingCerts && !switchingNetwork;
+      certBtn.disabled = !certEnabled;
+      certBtn.setAttribute('aria-disabled', certEnabled ? 'false' : 'true');
+
+      const certLog = document.getElementById('refresh-certs-log');
+      if (data.refresh_certs_log) {{
+        certLog.style.display = 'block';
+        certLog.textContent = data.refresh_certs_log;
+      }} else {{
+        certLog.style.display = 'none';
+      }}
+    }}
 
     function render(data) {{
       currentState = data;
@@ -667,6 +832,8 @@ def render_dashboard_html(*, domain: str, username: str, csrf_token: str, initia
         ? 'Read-Only Standby (scheduled backups paused)'
         : `Active Scheduled (${{data.desired_snapshot_interval || '6h'}})`;
       document.getElementById('kv-snapshot').textContent = data.restored_snapshot || (data.standby ? 'Latest' : 'Live');
+
+      renderCertCard(data);
 
       const cutoverCard = document.getElementById('cutover-card');
       const act = data.activation || {{}};
@@ -749,11 +916,51 @@ def render_dashboard_html(*, domain: str, username: str, csrf_token: str, initia
           const banner = document.getElementById('cutover-banner');
           banner.className = 'banner info';
           banner.textContent = `Appliance NIC is transitioning to production IP ${{currentState.target_ip || ''}} and running 5-activate.yml. Ensure your client resolves ${{currentState.domain}} to ${{currentState.target_ip || 'the production IP'}} — waiting to reconnect…`;
+        }} else if (refreshingCerts) {{
+          const certBanner = document.getElementById('cert-banner');
+          certBanner.className = 'banner info';
+          certBanner.textContent = 'Traefik is reloading the new wildcard TLS certificate — reconnecting automatically…';
         }}
       }}
     }}
 
     document.getElementById('recheck-btn').addEventListener('click', () => pollStatus(true));
+    document.getElementById('recheck-certs-btn').addEventListener('click', () => pollStatus(true));
+
+    document.getElementById('refresh-certs-btn').addEventListener('click', async () => {{
+      if (!currentState.refresh_certs_enabled) return;
+      const disk = currentState.cert_disk || {{}};
+      const ok = window.confirm(
+        `Update wildcard TLS certificates for ${{currentState.domain}} now?\\n\\nThis will install the certificate valid until ${{disk.expires_at || 'verified'}}, reload Traefik and OpenLDAP, snapshot Kopia, and eject the SOPHON_CERTS disk.`
+      );
+      if (!ok) return;
+
+      const btn = document.getElementById('refresh-certs-btn');
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
+      refreshingCerts = true;
+      try {{
+        const res = await fetch('/api/refresh-certs', {{
+          method: 'POST',
+          headers: {{
+            'Content-Type': 'application/json',
+            'X-Sophon-CSRF': CSRF_TOKEN
+          }},
+          credentials: 'same-origin',
+          body: JSON.stringify({{}})
+        }});
+        const payload = await res.json();
+        if (!res.ok) {{
+          refreshingCerts = false;
+          if (payload.readiness) render(payload.readiness);
+          window.alert(payload.error || 'Certificate refresh preflight rejected the request.');
+          return;
+        }}
+        if (payload.readiness) render(payload.readiness);
+      }} catch (_err) {{
+        // Traefik may reload within milliseconds of queueing refresh-certs; next poll reconnects cleanly.
+      }}
+    }});
 
     document.getElementById('promote-btn').addEventListener('click', async () => {{
       if (!currentState.promote_enabled) return;
@@ -876,8 +1083,15 @@ def make_handler(config: StatusConfig):
         def _build_status_payload(self, *, force_probe: bool = False) -> dict:
             app_state = config.request_host_probe(force=force_probe)
             act_status = config.read_activate_status()
-            readiness = evaluate_cutover_readiness(app_state, act_status, tcp_probe_fn=config.tcp_probe_fn)
+            ref_status = config.read_refresh_certs_status()
+            readiness = evaluate_cutover_readiness(
+                app_state,
+                act_status,
+                ref_status,
+                tcp_probe_fn=config.tcp_probe_fn,
+            )
             readiness['activate_log'] = config.read_activate_log_tail()
+            readiness['refresh_certs_log'] = config.read_refresh_certs_log_tail()
             return readiness
 
         def _verify_csrf(self, session: dict) -> bool:
@@ -1038,8 +1252,33 @@ def make_handler(config: StatusConfig):
                 self._send_json(403, {'error': 'Invalid CSRF token.'})
                 return
 
-            if path == '/api/recheck-ip':
+            if path in ('/api/recheck-ip', '/api/recheck-certs'):
                 self._send_json(200, self._build_status_payload(force_probe=True))
+                return
+
+            if path == '/api/refresh-certs':
+                readiness = self._build_status_payload(force_probe=True)
+                if not readiness['refresh_certs_enabled']:
+                    self._send_json(
+                        409,
+                        {
+                            'error': readiness['refresh_certs_disabled_reason'] or 'Certificate disk is not ready.',
+                            'readiness': readiness,
+                        },
+                    )
+                    return
+                requested_by = str(session.get('user') or 'admin')
+                config.queue_refresh_certs(requested_by=requested_by)
+                readiness['cert_refresh'] = {
+                    'state': 'running',
+                    'message': 'Certificate update queued on CoreOS host…',
+                    'requested_by': requested_by,
+                    'updated_at': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                    'exit_code': 0,
+                }
+                readiness['refresh_certs_enabled'] = False
+                readiness['refresh_certs_disabled_reason'] = 'Certificate update is currently in progress.'
+                self._send_json(202, {'ok': True, 'readiness': readiness})
                 return
 
             if path == '/api/promote':

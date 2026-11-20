@@ -143,6 +143,15 @@ class BackupIsoTests(unittest.TestCase):
         self.assertIn('Match User sophon-restore', containerfile)
         self.assertIn('AuthorizedKeysFile /etc/ssh/authorized_keys/sophon-restore', containerfile)
         self.assertIn('ForceCommand internal-sftp -R', containerfile)
+        self.assertIn('/etc/periodic/weekly/sophon-fstrim', containerfile)
+        self.assertIn('/sbin/fstrim -av', containerfile)
+        self.assertIn('default:crond', containerfile)
+
+        installer_sh = (ROOT / 'guest/backup-appliance/install.sh').read_text()
+        self.assertIn('mkfs.ext4 -q -F -m 1 -i 65536 -L SOPHON_BK_DATA "$data_part"', installer_sh)
+
+        proxmox_bk = (ROOT / 'roles/proxmox/tasks/backup_vm.yml').read_text()
+        self.assertIn('virtio0: "{{ proxmox_disk_storage_id }}:{{ backup_vm_disk_gb }},discard=on"', proxmox_bk)
 
 
 if __name__ == '__main__':

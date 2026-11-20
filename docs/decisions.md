@@ -94,7 +94,8 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     its redacted structured failure is surfaced by the deployment role.
 17. **The optional coarse layer uses zero-downtime Btrfs read-only subvolume snapshots.**
     Step 3 allocates an 8 GiB XFS immutable OS root and formats the remaining disk as a
-    persistent Btrfs `/var` (`LABEL=sophon-var`, mounted `noatime,user_subvol_rm_allowed`),
+    persistent Btrfs `/var` (`LABEL=sophon-var`, mounted `noatime,discard=async,user_subvol_rm_allowed`
+    with `fstrim.timer` enabled),
     and host bootstrap creates `/var/home/core/.local/share/containers/storage/volumes` as
     a Btrfs subvolume before Podman starts. The opt-in weekly `coarse` service mounts that
     subvolume read-only alongside `/var/home/core/sophon-coarse`, mounts no Podman socket
@@ -109,9 +110,10 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     Nexus Repository Community Edition (`sonatype/nexus3:3.98.1` + PostgreSQL 18) runs in Sophon Core with
     Gitea's built-in package registry disabled (`GITEA__packages__ENABLED=false`), native LDAPS RBAC against
     OpenLDAP (`nexus-admins`, `nexus-developers`), anonymous access disabled, and three single-label wildcard
-    hosts (`nexus.<domain>`, `registry.<domain>`, `registry-push.<domain>`). Proprietary artifacts use the
-    backed-up `hosted` blob store (`/nexus-data/blobs/hosted`), while internet upstream caches use `proxy-cache`
-    (omitted from `sophon.backup.paths`). Stage-2 CI (`act_runner`) stays isolated from `podman.sock` and
+    hosts (`nexus.<domain>`, `registry.<domain>`, `registry-push.<domain>`). Proprietary and irreplaceable
+    artifacts use the backed-up `hosted` blob store (`/nexus-data/blobs/hosted`, including write-once `raw-vault`),
+    while internet upstream caches (`proxy-cache`) and large re-obtainable local files (`scratch` / `raw-scratch`)
+    are omitted from `sophon.backup.paths`. Stage-2 CI (`act_runner`) stays isolated from `podman.sock` and
     pushes immutable images to `registry-push.<domain>`, commits digests to pure GitOps repositories
     (`ops/workloads` in Gitea), and triggers Arcane pull sync—reconciled locally during `standby_restore`
     drills by `sophon-reconcile-gitops` without touching production ([nexus-and-gitops-plan.md](nexus-and-gitops-plan.md)).

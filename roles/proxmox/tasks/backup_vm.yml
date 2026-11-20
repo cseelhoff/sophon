@@ -136,7 +136,7 @@
         net:
           net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
         virtio:
-          virtio0: "{{ proxmox_disk_storage_id }}:{{ backup_vm_disk_gb }}"
+          virtio0: "{{ proxmox_disk_storage_id }}:{{ backup_vm_disk_gb }},discard=on"
         ide: "{{ backup_ide_drives }}"
         boot: "order=virtio0;ide2"
         serial:

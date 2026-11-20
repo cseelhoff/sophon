@@ -296,7 +296,13 @@ def extract_acme_from_iso(iso_path: Path) -> bytes | None:
     return None
 
 
-def find_existing_acme_bytes(domain: str, state_dir: Path, explicit_acme: str = '') -> bytes | None:
+def find_existing_acme_bytes(
+    domain: str,
+    state_dir: Path,
+    explicit_acme: str = '',
+    *,
+    force_renew: bool = False,
+) -> bytes | None:
     """Locate pre-issued `acme.json` from explicit path, certificate state dir, or existing secret ISO."""
     domain = certificates.normalize_domain(domain)
     if explicit_acme:
@@ -306,18 +312,16 @@ def find_existing_acme_bytes(domain: str, state_dir: Path, explicit_acme: str = 
         data = p.read_bytes()
         certificates.validate_data(data, domain)
         return certificates.minimal_store(data, domain)
+    if force_renew:
+        return None
 
     state_acme = state_dir.expanduser().resolve() / 'certificates' / domain / 'acme.json'
     if state_acme.is_file() and not state_acme.is_symlink() and certificates.ready_to_export(state_acme, domain):
         return certificates.minimal_store(state_acme.read_bytes(), domain)
 
     extracted = extract_acme_from_iso(SECRETS_ISO)
-    if extracted:
-        try:
-            certificates.validate_data(extracted, domain)
-            return certificates.minimal_store(extracted, domain)
-        except (ValueError, KeyError, TypeError, UnicodeError):
-            pass
+    if extracted and certificates.ready_to_export_data(extracted, domain):
+        return certificates.minimal_store(extracted, domain)
     return None
 
 
@@ -542,6 +546,25 @@ def _apply_shared_service_password(env: dict[str, str], shared_password: str) ->
             env[name] = shared_password
 
 
+def _validate_disk_gb(name: str, raw: str, minimum: int, maximum: int = 1048576) -> str:
+    text = raw.strip()
+    if not text.isdigit():
+        raise ValueError(f'{name} must be a whole number between {minimum} and {maximum} GiB.')
+    val = int(text)
+    if not minimum <= val <= maximum:
+        raise ValueError(f'{name} must be between {minimum} and {maximum} GiB.')
+    return str(val)
+
+
+def _prompt_disk_gb(name: str, label: str, current: str, minimum: int) -> str:
+    while True:
+        candidate = console.prompt_field(name, label, 'number', current, True)
+        try:
+            return _validate_disk_gb(name, candidate, minimum)
+        except ValueError as err:
+            print(err)
+
+
 def _prompt_and_persist_dotenv(updates: dict[str, str], dotenv_path: Path) -> None:
     if not updates or not sys.stdin.isatty():
         return
@@ -586,6 +609,8 @@ def main(argv=None) -> int:
                         help='Also build artifacts/secrets/sophon-sftp-secrets.iso and pre-pair SSH host/client keys')
     parser.add_argument('--readonly-sftp', action='store_true',
                         help='Use the confined read-only `sophon-restore` SFTP key in `sophon-secrets.iso`')
+    parser.add_argument('--renew-certs', action='store_true',
+                        help=f'Force issuing a fresh 90-day wildcard certificate even when >{certificates.MIN_REMAINING_DAYS} days remain')
     parser.add_argument('--acme-file', default=os.environ.get('SOPHON_ACME_FILE', ''),
                         help='Optional path to pre-issued Traefik acme.json for air-gapped sites')
     parser.add_argument('--output-iso', type=Path, default=SECRETS_ISO,
@@ -658,6 +683,11 @@ def main(argv=None) -> int:
         dev_cidr = env.get('SOPHON_DEV_NETWORK_CIDR', '').strip()
         dev_gw = env.get('SOPHON_DEV_NETWORK_GATEWAY', '').strip()
         dev_dns = env.get('SOPHON_DEV_VNET_DNS', '').strip()
+        raw_infravm_disk_gb = env.get('SOPHON_INFRAVM_DISK_GB', '').strip()
+        infravm_disk_gb = raw_infravm_disk_gb or '1024'
+        raw_bk_cidr = env.get('SOPHON_BACKUP_NETWORK_CIDR', '').strip()
+        raw_backup_disk_gb = env.get('SOPHON_BACKUP_VM_DISK_GB', '').strip()
+        backup_disk_gb = raw_backup_disk_gb or '1536'
 
         if not options.run:
             if not core_hash and not core_plain:
@@ -696,6 +726,14 @@ def main(argv=None) -> int:
             if not raw_net_dns and not raw_net_cidr and sys.stdin.isatty():
                 prompted = True
                 net_dns = console.prompt_field('SOPHON_VNET_DNS', 'Upstream DNS server IPv4', 'ipv4', net_dns, True)
+            if not raw_infravm_disk_gb and not raw_net_cidr and sys.stdin.isatty():
+                prompted = True
+                infravm_disk_gb = _prompt_disk_gb(
+                    'SOPHON_INFRAVM_DISK_GB',
+                    'InfraVM thin virtual disk size in GiB (min 40)',
+                    infravm_disk_gb,
+                    40,
+                )
             env['SOPHON_DOMAIN'] = need_field('SOPHON_DOMAIN', 'Sophon domain', 'host', env.get('SOPHON_DOMAIN', ''), True)
 
             if not with_backup and not explicit_without_backup and not env.get('SOPHON_KOPIA_SFTP_HOST', '').strip():
@@ -713,6 +751,14 @@ def main(argv=None) -> int:
                         'SOPHON_BACKUP_NETWORK_GATEWAY', 'Backup VM IPv4 gateway', 'ipv4', '', True)
                 env['SOPHON_BACKUP_NETWORK_DNS'] = env.get('SOPHON_BACKUP_NETWORK_DNS', '').strip() or net_dns
                 env.setdefault('SOPHON_KOPIA_SFTP_HOST', bk_cidr.split('/')[0])
+                if not raw_backup_disk_gb and not raw_bk_cidr and sys.stdin.isatty():
+                    prompted = True
+                    backup_disk_gb = _prompt_disk_gb(
+                        'SOPHON_BACKUP_VM_DISK_GB',
+                        'Backup VM thin virtual disk size in GiB (min 16)',
+                        backup_disk_gb,
+                        16,
+                    )
                 if not backup_admin_hash and not backup_admin_plain:
                     backup_admin_plain = core_plain
             else:
@@ -736,28 +782,31 @@ def main(argv=None) -> int:
             fields = deployment.step_fields('configure')
             has_cf_token = bool(env.get('SOPHON_CF_TOKEN', '').strip())
             is_airgapped = env.get('SOPHON_AIRGAPPED', '').strip().lower() in ('1', 'true', 'yes')
-            has_acme = find_existing_acme_bytes(env['SOPHON_DOMAIN'], options.state_dir, options.acme_file) is not None
+            has_any_acme = find_existing_acme_bytes(env['SOPHON_DOMAIN'], options.state_dir, options.acme_file) is not None
+            has_acme = False if options.renew_certs else has_any_acme
             if has_cf_token:
                 has_internet = True
-            elif options.acme_file or is_airgapped:
+            elif options.acme_file or is_airgapped or options.renew_certs:
                 has_internet = False
             else:
                 require_tty('SOPHON_CF_TOKEN')
                 prompted = True
-                has_internet = console.ask_yes_no('Does InfraVM have outbound internet access?', default=not has_acme)
+                has_internet = console.ask_yes_no('Does InfraVM have outbound internet access?', default=not has_any_acme)
             if not has_internet:
                 env['SOPHON_CF_TOKEN'] = ''
                 env['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
                 if not has_acme:
+                    env['SOPHON_ACME_EMAIL'] = need_field(
+                        'SOPHON_ACME_EMAIL', 'ACME email', 'email', env.get('SOPHON_ACME_EMAIL', ''), True, 'admin@example.com')
                     print('Issuing wildcard certificate on this connected workstation for air-gapped InfraVM...')
                     issue_args = [
                         'issue',
                         '--domain', env['SOPHON_DOMAIN'],
+                        '--email', env['SOPHON_ACME_EMAIL'],
                         '--state-dir', str(options.state_dir.expanduser().resolve() / 'certificates'),
                         '--output-iso', str(options.output_iso),
+                        *(['--force'] if options.renew_certs else []),
                     ]
-                    if env.get('SOPHON_ACME_EMAIL', '').strip():
-                        issue_args.extend(['--email', env['SOPHON_ACME_EMAIL'].strip()])
                     if certificates.main(issue_args) != 0:
                         return 1
             else:
@@ -767,6 +816,17 @@ def main(argv=None) -> int:
                     env['SOPHON_CF_TOKEN'] = console.read_secret('Cloudflare API token (SOPHON_CF_TOKEN): ')
                 env['SOPHON_ACME_EMAIL'] = need_field(
                     'SOPHON_ACME_EMAIL', 'ACME email', 'email', env.get('SOPHON_ACME_EMAIL', ''), True, 'admin@example.com')
+                if options.renew_certs:
+                    print('Issuing/renewing wildcard certificate on this workstation for sophon-secrets.iso...')
+                    if certificates.main([
+                        'issue',
+                        '--domain', env['SOPHON_DOMAIN'],
+                        '--email', env['SOPHON_ACME_EMAIL'],
+                        '--state-dir', str(options.state_dir.expanduser().resolve() / 'certificates'),
+                        '--output-iso', str(options.output_iso),
+                        '--force',
+                    ]) != 0:
+                        return 1
                 if not env.get('SOPHON_CF_TUNNEL_ENABLED', '').strip():
                     if has_cf_token:
                         env['SOPHON_CF_TUNNEL_ENABLED'] = 'true'
@@ -786,6 +846,10 @@ def main(argv=None) -> int:
             if not core_plain:
                 raise ValueError('Supply SOPHON_CORE_PASSWORD, SOPHON_SHARED_PASSWORD, or SOPHON_CORE_PASSWORD_HASH.')
             core_hash = sha512_crypt(core_plain)
+
+        infravm_disk_gb = _validate_disk_gb('SOPHON_INFRAVM_DISK_GB', infravm_disk_gb, 40)
+        if with_backup or raw_backup_disk_gb:
+            backup_disk_gb = _validate_disk_gb('SOPHON_BACKUP_VM_DISK_GB', backup_disk_gb, 16)
 
         if not net_mode:
             net_mode = 'static' if net_cidr else 'dhcp'
@@ -919,9 +983,11 @@ def main(argv=None) -> int:
                 if dev_dns:
                     dotenv_updates['SOPHON_DEV_VNET_DNS'] = dev_dns
             dotenv_updates['SOPHON_VNET_DNS'] = net_dns
+            dotenv_updates['SOPHON_INFRAVM_DISK_GB'] = infravm_disk_gb
             dotenv_updates['SOPHON_DOMAIN'] = domain
             dotenv_updates['SOPHON_WITH_BACKUP_SECRETS'] = 'true' if with_backup else 'false'
             if with_backup:
+                dotenv_updates['SOPHON_BACKUP_VM_DISK_GB'] = backup_disk_gb
                 dotenv_updates['SOPHON_BACKUP_NETWORK_MODE'] = bk_mode
                 if bk_mode == 'static':
                     dotenv_updates['SOPHON_BACKUP_NETWORK_CIDR'] = env['SOPHON_BACKUP_NETWORK_CIDR'].strip()
@@ -929,6 +995,8 @@ def main(argv=None) -> int:
                     dotenv_updates['SOPHON_BACKUP_NETWORK_DNS'] = env['SOPHON_BACKUP_NETWORK_DNS'].strip()
                 else:
                     dotenv_updates['SOPHON_BACKUP_NETWORK_DNS'] = bk_net['dns']
+            elif raw_backup_disk_gb:
+                dotenv_updates['SOPHON_BACKUP_VM_DISK_GB'] = backup_disk_gb
             dotenv_updates['SOPHON_KOPIA_SFTP_HOST'] = sftp_host
             if str(sftp_port) != '22':
                 dotenv_updates['SOPHON_KOPIA_SFTP_PORT'] = str(sftp_port)

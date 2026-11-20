@@ -94,7 +94,7 @@ backup timer or unit is created.
 
 An opt-in `coarse` service uses the same image and requires no Podman socket or
 proxy container. Step 3 formats `/var` as Btrfs (`sophon-var`, mounted with
-`noatime,user_subvol_rm_allowed`) and host bootstrap creates Podman's `volumes`
+`noatime,discard=async,user_subvol_rm_allowed`) and host bootstrap creates Podman's `volumes`
 directory as a Btrfs subvolume. The `coarse` service mounts that subvolume
 read-only alongside a disjoint `/var/home/core/sophon-coarse` working bind, with
 only `DAC_OVERRIDE`. Once a week it takes an atomic read-only Btrfs subvolume

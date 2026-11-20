@@ -10,7 +10,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 
 from deployment import new_control, validate_settings
 from library import hyperv_vm
-from library.hyperv_vm import MARKER, provision, script
+from library.hyperv_vm import MARKER, mount_secrets, provision, script
 
 
 def arguments_of(source):
@@ -171,6 +171,22 @@ class HyperVTests(unittest.TestCase):
             self.assertTrue(hyperv_vm.SWITCH.fullmatch(good), good)
         for bad in ('*', 'a?b', 'x[1]', '', 'tab\there'):
             self.assertFalse(hyperv_vm.SWITCH.fullmatch(bad), bad)
+
+    def test_mount_secrets_uploads_hash_named_iso_and_hot_inserts_into_managed_vm(self):
+        secrets = Path(self.temporary.name) / 'sophon-secrets.iso'
+        secrets.write_bytes(b'fresh monthly certificate iso')
+        host = FakeHost(found={'count': 1, 'state': 'Running', 'notes': MARKER})
+        result = mount_secrets({**self.params, 'secrets_iso': str(secrets)}, host, self.info)
+        self.assertTrue(result['changed'])
+        self.assertEqual(result['vm_path'], 'HV1/sophon-test')
+        self.assertTrue(result['filename'].startswith('sophon-secrets-'))
+        self.assertEqual(len(host.uploads), 1)
+        self.assertEqual(host.uploads[0][0], str(secrets))
+        mount_script = host.scripts[-1]
+        self.assertIn('Set-VMDvdDrive', mount_script)
+        self.assertIn('sophon-secrets-*.iso', mount_script)
+        self.assertEqual(arguments_of(mount_script)['secrets_name'], result['filename'])
+
 
 
 class HyperVSettingsTests(unittest.TestCase):

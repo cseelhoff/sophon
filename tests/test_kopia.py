@@ -112,6 +112,7 @@ class KopiaRoleTests(unittest.TestCase):
                             "/nexus-data/blobs/hosted,/nexus-data/keystores,/nexus-data/etc",
                         )
                         self.assertNotIn("proxy-cache", labels["sophon.backup.paths"])
+                        self.assertNotIn("scratch", labels["sophon.backup.paths"])
                     if name == "gitea":
                         self.assertEqual(labels["sophon.backup.volumes"], "/data")
                         self.assertIn("git/lfs/tmp/", labels["sophon.backup.exclude"])

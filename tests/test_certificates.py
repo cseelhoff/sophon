@@ -328,6 +328,77 @@ class CertificateTests(unittest.TestCase):
         self.assertNotIn('FAKE_PRIVATE_ISSUER_DETAIL', error.getvalue())
         self.assertEqual(stat.S_IMODE((self.directory / 'failed/fixture.example/issuer.log').stat().st_mode), 0o600)
 
+    def test_monthly_renewal_threshold_strips_domain_and_rolls_back_on_issuer_failure(self):
+        self.assertEqual(certificates.MIN_REMAINING_DAYS, 65)
+        leaf_45d = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'fixture.example')]))
+            .issuer_name(self.ca_name)
+            .public_key(self.key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(self.now - timedelta(days=45))
+            .not_valid_after(self.now + timedelta(days=45))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName('fixture.example'), x509.DNSName('*.fixture.example')]),
+                critical=False,
+            )
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.key.public_key()), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(self.key, hashes.SHA256())
+        )
+        key_pem = self.key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+        stale_store = {
+            'letsencrypt': {
+                'Account': {'Email': 'admin@fixture.example'},
+                'Certificates': [
+                    {
+                        'domain': {'main': 'fixture.example', 'sans': ['*.fixture.example']},
+                        'certificate': base64.b64encode(leaf_45d.public_bytes(serialization.Encoding.PEM)).decode(),
+                        'key': base64.b64encode(key_pem).decode(),
+                        'Store': 'default',
+                    },
+                    self.entry('other.example', ['*.other.example']),
+                ],
+            }
+        }
+        stale_bytes = json.dumps(stale_store).encode()
+        self.assertTrue(certificates.validate_data(stale_bytes, 'fixture.example'))
+        self.assertFalse(certificates.ready_to_export_data(stale_bytes, 'fixture.example'))
+        self.assertTrue(certificates.ready_to_export_data(self.source.read_bytes(), 'fixture.example'))
+
+        stripped = json.loads(certificates._strip_domain_certificate(stale_bytes, 'fixture.example'))
+        self.assertEqual(stripped['letsencrypt']['Account'], {'Email': 'admin@fixture.example'})
+        self.assertEqual([c['domain']['main'] for c in stripped['letsencrypt']['Certificates']], ['other.example'])
+
+        # If Traefik fails mid-renewal, the previous 45-day acme.json is restored intact.
+        state = self.directory / 'rollback-state' / 'fixture.example'
+        state.mkdir(parents=True, mode=0o700)
+        acme_path = state / 'acme.json'
+        acme_path.write_bytes(stale_bytes)
+        acme_path.chmod(0o600)
+        executable = self.directory / 'traefik'
+        executable.write_text(f'#!{sys.executable}\nraise SystemExit(19)\n')
+        executable.chmod(0o700)
+        environment = dict(
+            os.environ,
+            PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
+            SOPHON_DOMAIN='fixture.example',
+            SOPHON_ACME_EMAIL='admin@fixture.example',
+            SOPHON_CF_TOKEN='FAKE_TOKEN',
+        )
+        with patch.dict(os.environ, environment, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                patch('certificates.write_certificate_iso') as write, \
+                self.assertRaises(SystemExit):
+            certificates.main(['issue', '--state-dir', str(self.directory / 'rollback-state')])
+        write.assert_not_called()
+        self.assertEqual(json.loads(acme_path.read_bytes()), stale_store)
+
+
     def test_service_file_is_staged_and_its_imported_copy_removed_but_never_forwarded(self):
         import deployment
         from test_console import service_values

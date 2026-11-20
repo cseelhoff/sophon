@@ -133,16 +133,15 @@
         net:
           net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
         virtio:
-          virtio0: "{{ proxmox_disk_storage_id }}:{{ infravm_disk_gb }}"
+          virtio0: "{{ proxmox_disk_storage_id }}:{{ infravm_disk_gb }},discard=on"
         ide: >-
           {{
             {
               'ide2': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[0].filename ~ ',media=cdrom',
-              'ide3': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[1].filename ~ ',media=cdrom'
-            } | combine(
-              {'ide0': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[2].filename ~ ',media=cdrom'}
-              if (infravm_isos | length > 2) else {}
-            )
+              'ide3': proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[1].filename ~ ',media=cdrom',
+              'ide0': (proxmox_iso_storage_id ~ ':iso/' ~ infravm_isos[2].filename ~ ',media=cdrom')
+                      if (infravm_isos | length > 2) else 'none,media=cdrom'
+            }
           }}
         boot: "order=virtio0;ide2"
         serial:

@@ -43,7 +43,8 @@ FIELDS = {
     'SOPHON_INFRAVM_NAME': ('VM name', 'VM', 'text', 'sophon-infravm', True),
     'SOPHON_DEV_INFRAVM_NAME': ('Dev/drill VM name', 'VM', 'text', 'sophon-dev-infravm', False),
     'SOPHON_INFRAVM_MEMORY': ('Memory (MiB)', 'VM', 'number', '12288', True),
-    'SOPHON_INFRAVM_DISK_GB': ('Disk size (GiB)', 'VM', 'number', '160', True),
+    'SOPHON_INFRAVM_DISK_GB': ('Thin disk size (GiB)', 'VM', 'number', '1024', True),
+    'SOPHON_BACKUP_VM_DISK_GB': ('Backup VM thin disk size (GiB)', 'VM', 'number', '1536', False),
     'SOPHON_VNET_DNS': ('Upstream DNS', 'Site', 'ipv4', '', False),
     'SOPHON_INFRAVM_IP': ('InfraVM address', 'Site', 'ipv4', '', True),
     'SOPHON_DOMAIN': ('Domain', 'Site', 'host', '', True),
@@ -88,7 +89,8 @@ FIELDS = {
 }
 LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
           'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),
-          'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
+          'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_BACKUP_VM_DISK_GB': (16, 1048576),
+          'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
            'SOPHON_CF_TUNNEL_ENABLED': ('false', 'true'),
@@ -299,6 +301,8 @@ def main(argv=None):
             'SOPHON_DESTROY_VM_NAME',
             'SOPHON_DESTROY_VM_MARKER',
             'SOPHON_ALLOW_PRODUCTION_DESTROY',
+            'SOPHON_MOUNT_SECRETS_VM_NAME',
+            'SOPHON_MOUNT_SECRETS_VM_MARKER',
         ))
     if options.step == 'configure':
         allowed.add('SOPHON_ARCANE_ENCRYPTION_KEY')
@@ -318,6 +322,7 @@ def main(argv=None):
         '2-provision.yml': 'provision',
         '2-provision-backup.yml': 'provision',
         '3-destroy-vm.yml': 'provision',
+        '3-mount-secrets.yml': 'provision',
         '4-configure.yml': 'configure',
         '5-activate.yml': 'configure',
     }

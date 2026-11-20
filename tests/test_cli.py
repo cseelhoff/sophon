@@ -51,6 +51,8 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn('dashboard', cli.COMMANDS)
         self.assertEqual(cli.COMMANDS['verify-restore'](['--teardown', 'destroy']),
                          ['python3', 'src/verify_restore.py', '--teardown', 'destroy'])
+        self.assertEqual(cli.COMMANDS['mount-secrets'](['--keep-local']),
+                         ['python3', 'src/mount_secrets.py', '--keep-local'])
         self.assertEqual(cli.COMMANDS['certificates'](['issue']), ['python3', 'src/certificates.py', 'issue'])
 
     def test_load_dotenv_sets_0600_respects_shell_precedence_and_rejects_symlinks(self):
@@ -129,19 +131,63 @@ class CommandTests(unittest.TestCase):
         for name in (
             'sophon-provision.sh',
             'sophon-provision-dev.sh',
+            'sophon-mount-secrets.sh',
             'sophon-destroy-vm.sh',
             'sophon-provision.ps1',
             'sophon-provision-dev.ps1',
+            'sophon-mount-secrets.ps1',
             'sophon-destroy-vm.ps1',
         ):
             self.assertTrue((ROOT / name).is_file(), name)
         self.assertIn('provision-dev', cli.HELP_BY_ENTRYPOINT)
+        self.assertIn('mount-secrets', cli.HELP_BY_ENTRYPOINT)
         self.assertIn('destroy-vm', cli.HELP_BY_ENTRYPOINT)
         self.assertIn('sophon-provision-dev.sh', cli.HELP_PROVISION_DEV)
+        self.assertIn('sophon-mount-secrets.sh', cli.HELP_MOUNT_SECRETS)
         self.assertIn('sophon-destroy-vm.sh', cli.HELP_DESTROY_VM)
         self.assertIn('sophon-provision-dev.sh', cli.HELP)
+        self.assertIn('sophon-mount-secrets.sh', cli.HELP)
         self.assertIn('sophon-destroy-vm.sh', cli.HELP)
         self.assertNotIn('destroy-vm', cli.HELP_PROVISION)
+
+    def test_ensure_hypervisor_inputs_prompts_thin_disk_defaults_and_skips_on_destroy(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            backup_seed = Path(tmp) / 'sophon-sftp-secrets.iso'
+            backup_seed.write_bytes(b'seed')
+            old_env = os.environ.copy()
+            try:
+                for key in list(os.environ):
+                    if key.startswith('SOPHON_'):
+                        os.environ.pop(key, None)
+                os.environ.update({
+                    'SOPHON_HYPERVISOR': 'proxmox',
+                    'SOPHON_PROXMOX_HOST': '10.0.20.10',
+                    'SOPHON_PROXMOX_NODE': 'pve',
+                    'SOPHON_PROXMOX_PASSWORD': 'secret',
+                    'SOPHON_BACKUP_SECRETS_ISO': str(backup_seed),
+                })
+                # Pressing Enter ('') accepts 1024 GiB for InfraVM and 1536 GiB for Backup VM
+                answers = iter(['', ''])
+                with mock.patch.object(sys.stdin, 'isatty', return_value=True), \
+                     mock.patch('builtins.input', side_effect=lambda _p='': next(answers)):
+                    cli.ensure_hypervisor_inputs('provision')
+                self.assertEqual(os.environ['SOPHON_INFRAVM_DISK_GB'], '1024')
+                self.assertEqual(os.environ['SOPHON_BACKUP_VM_DISK_GB'], '1536')
+
+                # destroy-vm and mount-secrets never prompt for disk sizing or VM network/cluster creation fields
+                os.environ.pop('SOPHON_INFRAVM_DISK_GB', None)
+                os.environ.pop('SOPHON_BACKUP_VM_DISK_GB', None)
+                with mock.patch.object(sys.stdin, 'isatty', return_value=True), \
+                     mock.patch('builtins.input', side_effect=AssertionError('unexpected prompt')):
+                    cli.ensure_hypervisor_inputs('destroy-vm')
+                    cli.ensure_hypervisor_inputs('mount-secrets')
+                self.assertNotIn('SOPHON_INFRAVM_DISK_GB', os.environ)
+                self.assertNotIn('SOPHON_BACKUP_VM_DISK_GB', os.environ)
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
 
 
 if __name__ == '__main__':

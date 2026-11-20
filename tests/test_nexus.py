@@ -328,7 +328,7 @@ class NexusTests(unittest.TestCase):
         self.assertTrue(state.eula['accepted'])
         self.assertFalse(state.anonymous['enabled'])
         self.assertNotIn('default', state.blobstores)
-        self.assertEqual(set(state.blobstores), {'hosted', 'proxy-cache'})
+        self.assertEqual(set(state.blobstores), {'hosted', 'scratch', 'proxy-cache'})
         self.assertEqual(state.delete_order[0], 'repo:maven-public')
         self.assertEqual(state.delete_order[-1], 'bs:default')
         self.assertIn('LdapRealm', state.realms)
@@ -337,10 +337,22 @@ class NexusTests(unittest.TestCase):
         self.assertIn('nexus-developers', state.roles)
         self.assertIn('sophon-reader', state.roles)
         self.assertIn('sophon-pull', state.users)
-        self.assertEqual(len(state.repositories), 23)
+        self.assertEqual(len(state.repositories), 25)
         for name, repo in state.repositories.items():
-            expected_bs = 'proxy-cache' if repo['type'] == 'proxy' else 'hosted'
+            if repo['type'] == 'proxy':
+                expected_bs = 'proxy-cache'
+            elif name == 'raw-scratch':
+                expected_bs = 'scratch'
+            else:
+                expected_bs = 'hosted'
             self.assertEqual(repo['storage']['blobStoreName'], expected_bs, name)
+        self.assertEqual(state.repositories['raw-vault']['storage']['writePolicy'], 'ALLOW_ONCE')
+        self.assertEqual(state.repositories['raw-hosted']['storage']['writePolicy'], 'ALLOW')
+        self.assertEqual(state.repositories['raw-scratch']['storage']['writePolicy'], 'ALLOW')
+        self.assertEqual(
+            state.repositories['raw-group']['group']['memberNames'],
+            ['raw-vault', 'raw-hosted', 'raw-scratch'],
+        )
 
         # Pass 2: rerun without initial_admin_password and with persisted APT key must be 100% idempotent
         cfg2 = dict(cfg, initial_admin_password='', apt_signing_keypair=res1['apt_signing_keypair'])
@@ -350,7 +362,7 @@ class NexusTests(unittest.TestCase):
         self.assertFalse(res2['changed_anonymous'])
         self.assertFalse(res2['generated_apt_key'])
         self.assertFalse(res2['changed_realms'])
-        self.assertEqual(len(state.repositories), 23)
+        self.assertEqual(len(state.repositories), 25)
 
     @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is required to render templates')
     def test_nexus_gitea_and_arcane_templates_enforce_backup_and_gitops_invariants(self):
@@ -396,10 +408,14 @@ class NexusTests(unittest.TestCase):
 
             # Startup preserves restored nexus.secrets.json and sophon-pull.password when non-empty.
             cmd = nexus_svc['command'][0]
+            self.assertIn('/nexus-data/blobs/scratch', cmd)
             self.assertIn('if [ ! -s /nexus-data/etc/nexus.secrets.json ]', cmd)
             self.assertIn('if [ ! -s /nexus-data/etc/sophon-pull.password ]', cmd)
             self.assertIn('ldap_certs:/run/secrets/ldap:ro', nexus_svc['volumes'])
             self.assertEqual(nexus_compose['volumes']['ldap_certs']['name'], 'openldap_ldap_certs')
+
+            traefik_tpl = (ROOT / 'roles/traefik/templates/docker-compose.yml.j2').read_text()
+            self.assertIn('--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0', traefik_tpl)
 
             # Validate labels against real Kopia v3 backup.parse_spec!
             nexus_labels = dict(item.split('=', 1) for item in nexus_svc['labels'])

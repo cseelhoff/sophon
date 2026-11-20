@@ -47,7 +47,7 @@ the web UI (noVNC) shows step 3 and the `core` password prompt.
 | `2-provision-hyperv-local.ps1` | same VM on the local machine as the signed-in user (no host or credentials); takes `-Switch` / `SOPHON_HYPERV_SWITCH`, `-Path` / `SOPHON_HYPERV_PATH` and the `SOPHON_INFRAVM_*` sizes |
 
 All providers: `SOPHON_INFRAVM_NAME` (`sophon-infravm`), `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`, targeted by
-`sophon-provision-dev` which always deletes any existing dev VM first), `_CORES` (8), `_MEMORY` MiB (12288), `_DISK_GB` (160).
+`sophon-provision-dev` which always deletes any existing dev VM first), `_CORES` (8), `_MEMORY` MiB (12288), `_DISK_GB` (1024, thin-provisioned; min 40), and `SOPHON_BACKUP_VM_DISK_GB` (1536, thin-provisioned SFTP Backup VM disk; min 16). Proxmox enables `discard=on` on `virtio0` (vCenter thin VMFS6 and Hyper-V Dynamic `.vhdx` support UNMAP natively), while InfraVM enables `discard=async` + `fstrim.timer` and the Backup VM enables weekly `fstrim` with 1% `ext4` root block reservation (`-m 1 -i 65536`).
 For `sophon-provision`, a VM that already exists is only started if this workflow created it (`sophon-provision --recreate` replaces it;
 `sophon-destroy-vm` stops and deletes a VM);
 anything else is left alone. When building unattended seeds (`secrets`), `SOPHON_NETWORK_CIDR` sets the production

@@ -19,13 +19,14 @@ keeps the individual service names out of public Certificate Transparency logs.
 ## Make the secret certificate ISO (connected machine)
 
 ```sh
-sh sophon-build-isos.sh certificates issue --domain example.com
+sh sophon-build-isos.sh           # or: sh sophon-build-isos.sh certificates issue --domain example.com
 ```
 
 Prompts (on stderr) for the domain, an ACME email and a Cloudflare token (hidden), then issues the certificate for
 `example.com` and `*.example.com` with a throwaway Traefik (the one baked into the tools image). It keeps its ACME
 account and certificate in the `sophon-state` Docker volume (`/state/certificates/<domain>/`), so running it again
-**reuses** a certificate with more than 30 days left and only asks for the token when it must issue.
+**reuses** a certificate with more than 65 days left and automatically renews when 65 days or fewer remain (pass
+`--renew-certs` to `sophon-build-isos.sh` or `--force` to `certificates issue` to force an early 90-day renewal).
 
 The result is `artifacts/secrets/sophon-secrets.iso` (mode 0600, volume label `SOPHON_CERTS`), a small disk
 holding `acme.json` with the wildcard certificate, its **full chain** and its private key (preserving any existing
@@ -53,13 +54,17 @@ laptop.
 
 ## Renew
 
-Repeat the steps about monthly (certificates last 90 days). Run `sophon-deploy
---refresh-certificates` with the new disk attached and supply the existing service credentials:
-a refresh currently reruns the full service deployment. A normal rerun keeps the live store.
-If certificates already expired, the same procedure recovers the site.
+Repeat monthly (certificates last 90 days, and `sophon-build-isos.sh` automatically renews once ≤65 days remain):
+
+1. Run `sh sophon-build-isos.sh` (`.\sophon-build-isos.ps1`) on the connected workstation.
+2. Run `sh sophon-mount-secrets.sh` (`.\sophon-mount-secrets.ps1`) to hot-attach the renewed `sophon-secrets.iso` to
+   `sophon-infravm` (and delete the local workstation copy unless `--keep-local` is passed).
+3. Open `https://<domain>` and click **Update Certificates** (or run `sophon-refresh-certs` as `core` on the VM console
+   if the previous certificate already expired). This validates the new `acme.json`, updates Traefik, reloads
+   `certs-dumper` and OpenLDAP, triggers a Kopia backup snapshot, and ejects the certificate ISO automatically.
 
 An InfraVM that was deployed with the older per-service certificates keeps them on a normal rerun. Connected sites
-will request the wildcard on their own; air-gapped sites need `--refresh-certificates` with a new disk.
+will request the wildcard on their own; air-gapped sites can use **Update Certificates** (or `sophon-refresh-certs`).
 
 ## Handle with care
 

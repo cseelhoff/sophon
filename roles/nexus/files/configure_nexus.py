@@ -3,8 +3,9 @@
 
 Reads configuration JSON from stdin (so credentials never appear in process argv) and
 converges admin credentials, CE EULA, anonymous policy, SSL truststore, OpenLDAP server,
-RBAC roles, active realms, `sophon-pull` reader user, `hosted` / `proxy-cache` blob stores,
-and hosted/proxy/group repositories across Docker, PyPI, npm, APT, Maven, Cargo, and Raw.
+RBAC roles, active realms, `sophon-pull` reader user, `hosted` / `scratch` / `proxy-cache`
+blob stores, and hosted/proxy/group repositories across Docker, PyPI, npm, APT, Maven, Cargo,
+and Raw (`raw-vault`, `raw-hosted`, `raw-scratch`, `raw-group`).
 """
 
 from __future__ import annotations
@@ -504,8 +505,28 @@ def build_repository_specs(
             "raw",
             "hosted",
             {
+                "name": "raw-vault",
+                **_hosted_common("hosted", "ALLOW_ONCE"),
+                "raw": {"contentDisposition": "ATTACHMENT"},
+            },
+            False,
+        ),
+        (
+            "raw",
+            "hosted",
+            {
                 "name": "raw-hosted",
                 **_hosted_common("hosted", "ALLOW"),
+                "raw": {"contentDisposition": "ATTACHMENT"},
+            },
+            False,
+        ),
+        (
+            "raw",
+            "hosted",
+            {
+                "name": "raw-scratch",
+                **_hosted_common("scratch", "ALLOW"),
                 "raw": {"contentDisposition": "ATTACHMENT"},
             },
             False,
@@ -515,7 +536,7 @@ def build_repository_specs(
             "group",
             {
                 "name": "raw-group",
-                **_group_common(["raw-hosted"]),
+                **_group_common(["raw-vault", "raw-hosted", "raw-scratch"]),
                 "raw": {"contentDisposition": "ATTACHMENT"},
             },
             False,
@@ -821,6 +842,7 @@ def ensure_blobstores_and_purge_default(client: NexusClient) -> None:
     existing_names = {s.get("name") for s in (stores or []) if isinstance(s, dict)}
     for name, path in (
         ("hosted", "/nexus-data/blobs/hosted"),
+        ("scratch", "/nexus-data/blobs/scratch"),
         ("proxy-cache", "/nexus-data/blobs/proxy-cache"),
     ):
         if name not in existing_names:

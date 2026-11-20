@@ -14,7 +14,7 @@ import console
 ENV_KEY_RE = re.compile(r'^(?:SOPHON_[A-Z0-9_]*|CF_DNS_API_TOKEN)$')
 PENDING_DOTENV_JSON = '/tmp/sophon-build-dotenv.json'
 HYPERVISOR_COMMANDS = frozenset({
-    'provision', 'provision-dev', 'dev', 'provision-backup', 'backup', 'destroy-vm', 'verify-restore',
+    'provision', 'provision-dev', 'dev', 'provision-backup', 'backup', 'destroy-vm', 'mount-secrets', 'verify-restore',
 })
 
 
@@ -152,7 +152,7 @@ def _need_secret(name: str) -> None:
     os.environ[name] = value
 
 
-def ensure_hypervisor_inputs() -> None:
+def ensure_hypervisor_inputs(cmd_name: str = 'provision') -> None:
     if not sys.stdin.isatty():
         return
     hv = os.environ.get('SOPHON_HYPERVISOR', '').strip().lower()
@@ -167,19 +167,37 @@ def ensure_hypervisor_inputs() -> None:
         _need('SOPHON_VCENTER_URL', 'vCenter URL (https://...)')
         _need('SOPHON_VCENTER_USERNAME', 'vCenter username', 'administrator@vsphere.local')
         _need('SOPHON_VCENTER_DATACENTER', 'Datacenter')
-        _need('SOPHON_VCENTER_CLUSTER', 'Cluster')
-        _need('SOPHON_VCENTER_DATASTORE', 'Datastore')
-        _need('SOPHON_VCENTER_NETWORK', 'Port group')
+        if cmd_name not in ('destroy-vm', 'mount-secrets'):
+            _need('SOPHON_VCENTER_CLUSTER', 'Cluster')
+        if cmd_name != 'destroy-vm':
+            _need('SOPHON_VCENTER_DATASTORE', 'Datastore')
+        if cmd_name not in ('destroy-vm', 'mount-secrets'):
+            _need('SOPHON_VCENTER_NETWORK', 'Port group')
         _need_secret('SOPHON_VCENTER_PASSWORD')
     elif hv == 'hyperv':
         _need('SOPHON_HYPERV_HOST', 'Hyper-V host name or address')
         _need('SOPHON_HYPERV_USERNAME', 'Hyper-V username', 'Administrator')
-        _need('SOPHON_HYPERV_SWITCH', 'Virtual switch')
+        if cmd_name != 'mount-secrets':
+            _need('SOPHON_HYPERV_SWITCH', 'Virtual switch')
         _need_secret('SOPHON_HYPERV_PASSWORD')
     else:
         _need('SOPHON_PROXMOX_HOST', 'Proxmox host name or address')
         _need('SOPHON_PROXMOX_NODE', 'Proxmox node', 'proxmox')
         _need_secret('SOPHON_PROXMOX_PASSWORD')
+    if cmd_name in ('provision', 'provision-dev', 'dev', 'verify-restore'):
+        _need('SOPHON_INFRAVM_DISK_GB', 'InfraVM thin virtual disk size in GiB (min 40)', '1024')
+    backup_seed = Path(os.environ.get('SOPHON_BACKUP_SECRETS_ISO', '').strip() or 'artifacts/secrets/sophon-sftp-secrets.iso')
+    will_provision_backup = (
+        cmd_name in ('provision-backup', 'backup')
+        or (
+            cmd_name == 'provision'
+            and os.environ.get('SOPHON_ATTACH_SECRETS_ISO', 'true').strip().lower() not in ('0', 'false', 'no', 'off')
+            and os.environ.get('SOPHON_SKIP_BACKUP_VM', 'false').strip().lower() not in ('1', 'true', 'yes')
+            and backup_seed.is_file()
+        )
+    )
+    if will_provision_backup:
+        _need('SOPHON_BACKUP_VM_DISK_GB', 'Backup VM thin virtual disk size in GiB (min 16)', '1536')
 
 
 def _build_isos_command(args: list[str]) -> list[str]:
@@ -219,6 +237,7 @@ COMMANDS = {
     'provision-dev': lambda args: ['python3', 'src/verify_restore.py', *args],
     'dev': lambda args: ['python3', 'src/verify_restore.py', *args],
     'destroy-vm': lambda args: ['python3', 'src/verify_restore.py', '--destroy-only', *args],
+    'mount-secrets': lambda args: ['python3', 'src/mount_secrets.py', *args],
     'verify-restore': lambda args: ['python3', 'src/verify_restore.py', *args],
     # </dev/null: the wizard tests assume no terminal, and `docker run -it` would make them wait for keystrokes.
     'test': lambda args: ['sh', '-c', 'exec </dev/null; python3 -m unittest discover -s tests "$@" && '
@@ -228,11 +247,12 @@ COMMANDS = {
 
 HELP_BUILD = """usage: sh sophon-build-isos.sh [options | command]
 
-  (default)               build mode-0600 unattended secrets ISOs + CoreOS, apps, and SFTP server ISOs
+  (default)               build unattended secrets ISOs (auto-renews TLS certs <= 65d left) + CoreOS/apps/SFTP ISOs
+  --renew-certs           force immediate wildcard TLS certificate renewal into artifacts/secrets/sophon-secrets.iso
   --force                 also force-rebuild cached CoreOS, apps, and SFTP server ISOs
   --os-only               build only secret-free CoreOS, apps, and SFTP server ISOs (skip secrets ISOs)
   --secrets-only          build only mode-0600 unattended secrets ISOs (sophon-secrets.iso & sophon-sftp-secrets.iso)
-  certificates issue ...  air-gapped renewal: issue/renew wildcard TLS certificate into artifacts/secrets/sophon-secrets.iso"""
+  certificates issue ...  standalone certificate-only renewal into artifacts/secrets/sophon-secrets.iso"""
 
 HELP_PROVISION = """usage: sh sophon-provision.sh [options | command]
 
@@ -252,14 +272,22 @@ HELP_DESTROY_VM = """usage: sh sophon-destroy-vm.sh [options]
   --vm-name <name>        override target VM name (for example: sophon-dev-infravm)
   --yes                   skip interactive confirmation"""
 
+HELP_MOUNT_SECRETS = """usage: sh sophon-mount-secrets.sh [options]
+
+  (default)               upload and hot-mount sophon-secrets.iso onto SOPHON_INFRAVM_NAME, then delete the local ISO
+  --vm-name <name>        override target VM name (for example: sophon-dev-infravm)
+  --secrets-iso <path>    use a specific secrets ISO (default: artifacts/secrets/sophon-secrets.iso)
+  --keep-local            keep the local workstation sophon-secrets.iso copy after mounting"""
+
 HELP_BY_ENTRYPOINT = {
     'build-isos': HELP_BUILD,
     'provision': HELP_PROVISION,
     'provision-dev': HELP_PROVISION_DEV,
     'destroy-vm': HELP_DESTROY_VM,
+    'mount-secrets': HELP_MOUNT_SECRETS,
 }
 
-HELP = f'{HELP_BUILD}\n\n{HELP_PROVISION}\n\n{HELP_PROVISION_DEV}\n\n{HELP_DESTROY_VM}\n\n  test | shell            development helpers'
+HELP = f'{HELP_BUILD}\n\n{HELP_PROVISION}\n\n{HELP_PROVISION_DEV}\n\n{HELP_MOUNT_SECRETS}\n\n{HELP_DESTROY_VM}\n\n  test | shell            development helpers'
 
 
 def main(argv: list[str]) -> int:
@@ -275,7 +303,7 @@ def main(argv: list[str]) -> int:
             print(f'error: {exc}', file=sys.stderr)
             return 1
         if cmd_name in HYPERVISOR_COMMANDS:
-            ensure_hypervisor_inputs()
+            ensure_hypervisor_inputs(cmd_name)
     command = COMMANDS[cmd_name](argv[1:]) if cmd_name in COMMANDS else argv
     os.execvp(command[0], command)
 

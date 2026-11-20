@@ -506,6 +506,95 @@ class StatusWebServerEndToEndTests(unittest.TestCase):
         self.assertEqual(req_payload["requested_by"], "caleb")
         self.assertEqual(req_payload["tunnel_mode"], "default")
 
+    def test_certificate_refresh_readiness_and_api_trigger(self):
+        no_disk = status_ui.evaluate_cutover_readiness(
+            {"domain": "sophon.example.com", "cert_disk": {"present": False, "valid": False}},
+            {"state": "idle"},
+            {"state": "idle"},
+            tcp_probe_fn=lambda ip: (False, ""),
+        )
+        self.assertFalse(no_disk["refresh_certs_enabled"])
+        self.assertIn("sophon-mount-secrets", no_disk["refresh_certs_disabled_reason"])
+
+        bad_disk = status_ui.evaluate_cutover_readiness(
+            {
+                "domain": "sophon.example.com",
+                "cert_disk": {"present": True, "valid": False, "error": "Certificate domain mismatch."},
+            },
+            {"state": "idle"},
+            {"state": "idle"},
+            tcp_probe_fn=lambda ip: (False, ""),
+        )
+        self.assertFalse(bad_disk["refresh_certs_enabled"])
+        self.assertIn("Certificate domain mismatch", bad_disk["refresh_certs_disabled_reason"])
+
+        good_disk = status_ui.evaluate_cutover_readiness(
+            {
+                "domain": "sophon.example.com",
+                "live_cert_expires_at": "2026-06-01T00:00:00+00:00",
+                "cert_disk": {"present": True, "valid": True, "expires_at": "2026-07-15T00:00:00+00:00", "error": ""},
+            },
+            {"state": "idle"},
+            {"state": "idle"},
+            tcp_probe_fn=lambda ip: (False, ""),
+        )
+        self.assertTrue(good_disk["refresh_certs_enabled"])
+        self.assertEqual(good_disk["refresh_certs_disabled_reason"], "")
+
+        csrf = "csrf-cert-token-456"
+        session_val = status_ui.sign_cookie(
+            {"user": "caleb", "csrf": csrf, "exp": time.time() + 3600},
+            self.cfg.session_secret,
+        )
+        session_cookie = f"{status_ui.SESSION_COOKIE}={session_val}"
+
+        # Without SOPHON_CERTS disk mounted -> button disabled & /api/refresh-certs returns 409
+        dash_status, _, dash_html = self._request("GET", "/", headers={"Cookie": session_cookie})
+        self.assertEqual(dash_status, 200)
+        self.assertRegex(dash_html, r'id="refresh-certs-btn"[^>]*\sdisabled(?:\s|>)')
+
+        conflict_status, _, conflict_body = self._request(
+            "POST",
+            "/api/refresh-certs",
+            headers={"Cookie": session_cookie, "X-Sophon-CSRF": csrf},
+            body=b"{}",
+        )
+        self.assertEqual(conflict_status, 409)
+        self.assertFalse((self.control_dir / "refresh-certs.request").exists())
+        self.assertIn("sophon-mount-secrets", conflict_body)
+
+        # Attach valid SOPHON_CERTS disk in appliance-state.json -> /api/recheck-certs & /api/refresh-certs succeed
+        state = json.loads((self.control_dir / "appliance-state.json").read_text(encoding="utf-8"))
+        state["live_cert_expires_at"] = "2026-06-01T00:00:00+00:00"
+        state["cert_disk"] = {
+            "present": True,
+            "valid": True,
+            "expires_at": "2026-07-15T00:00:00+00:00",
+            "error": "",
+        }
+        (self.control_dir / "appliance-state.json").write_text(json.dumps(state), encoding="utf-8")
+
+        recheck_status, _, recheck_body = self._request(
+            "POST",
+            "/api/recheck-certs",
+            headers={"Cookie": session_cookie, "X-Sophon-CSRF": csrf},
+            body=b"{}",
+        )
+        self.assertEqual(recheck_status, 200)
+        self.assertTrue(json.loads(recheck_body)["refresh_certs_enabled"])
+
+        ok_status, _, ok_body = self._request(
+            "POST",
+            "/api/refresh-certs",
+            headers={"Cookie": session_cookie, "X-Sophon-CSRF": csrf},
+            body=b"{}",
+        )
+        self.assertEqual(ok_status, 202)
+        self.assertTrue(json.loads(ok_body)["ok"])
+        req_payload = json.loads((self.control_dir / "refresh-certs.request").read_text(encoding="utf-8"))
+        self.assertEqual(req_payload["requested_by"], "caleb")
+
+
 
 if __name__ == "__main__":
     unittest.main()
