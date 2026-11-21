@@ -1,0 +1,158 @@
+---
+# Create or start the standalone Sophon SFTP Backup Server VM on Proxmox.
+
+- name: Find guests that already use the Backup VM name
+  ansible.builtin.set_fact:
+    backup_named_guests: "{{ proxmox_vms.json.data | selectattr('name', 'eq', backup_vm_name) | list }}"
+
+- name: Reject ambiguous Backup VM names
+  ansible.builtin.assert:
+    that: backup_named_guests | length <= 1
+    fail_msg: "Multiple guests use the Backup VM name. No guests have been changed."
+
+- name: Validate an existing Backup VM before any modification
+  when: backup_named_guests | length == 1
+  block:
+    - name: Require a non-template QEMU guest on the selected node
+      ansible.builtin.assert:
+        that:
+          - backup_named_guests[0].type == 'qemu'
+          - backup_named_guests[0].node == proxmox_node
+          - backup_named_guests[0].template | default(0) | int == 0
+        fail_msg: "An incompatible guest already uses the Backup VM name. It has not been changed."
+    - name: Read existing Backup VM ownership
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ backup_named_guests[0].vmid }}/config"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: backup_existing_config
+    - name: Preserve unmanaged Backup VM
+      ansible.builtin.assert:
+        that: backup_existing_config.json.data.description | default('') == backup_vm_marker
+        fail_msg: "Existing Backup VM was not created by this workflow. Automatic migration is not supported."
+
+- name: Create a fresh Backup Server VM
+  when: backup_named_guests | length == 0
+  block:
+    - name: Validate Backup VM resources
+      ansible.builtin.assert:
+        that:
+          - backup_vm_cores | int >= 1
+          - backup_vm_memory | int >= 1024
+          - backup_vm_disk_gb | int >= 16
+        fail_msg: "Provide valid CPU/memory and at least 16 GiB disk space for the Backup Server VM."
+    - name: Resolve optional Backup Server secrets ISO
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ explicit_backup_secrets_iso_path }}"
+        - "{{ backup_secrets_iso_default_path }}"
+      when: item | length > 0 and (item == explicit_backup_secrets_iso_path or (attach_secrets_iso | bool))
+      register: backup_secret_candidates
+    - name: Require explicit Backup secrets ISO when SOPHON_BACKUP_SECRETS_ISO was supplied
+      ansible.builtin.assert:
+        that: backup_secret_candidates.results[0].stat.exists | default(false)
+        fail_msg: "SOPHON_BACKUP_SECRETS_ISO was set to '{{ explicit_backup_secrets_iso_path }}', but that file does not exist."
+      when: explicit_backup_secrets_iso_path | length > 0
+    - name: Select active Backup Server secrets ISO path
+      ansible.builtin.set_fact:
+        resolved_backup_secrets_iso_path: >-
+          {{ (backup_secret_candidates.results
+              | selectattr('stat', 'defined')
+              | selectattr('stat.exists', 'equalto', true)
+              | map(attribute='stat.path')
+              | list
+              | first) | default('') }}
+    - name: Identify Backup media by content
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      loop: "{{ [backup_installer_iso_path] + ([resolved_backup_secrets_iso_path] if resolved_backup_secrets_iso_path | length > 0 else []) }}"
+      register: backup_media
+    - name: Name immutable Backup hypervisor media
+      ansible.builtin.set_fact:
+        backup_isos: >-
+          {{
+            [{'source': backup_installer_iso_path,
+              'filename': 'sophon-sftp-server-' ~ backup_media.results[0].stat.checksum[:8] ~ '.iso',
+              'size': backup_media.results[0].stat.size}] + (
+              [{'source': resolved_backup_secrets_iso_path,
+                'filename': 'sophon-sftp-secrets-' ~ backup_media.results[1].stat.checksum[:8] ~ '.iso',
+                'size': backup_media.results[1].stat.size}]
+              if resolved_backup_secrets_iso_path | length > 0 else []
+            )
+          }}
+        backup_ide_drives: >-
+          {{
+            {'ide2': proxmox_iso_storage_id ~ ':iso/' ~ ('sophon-sftp-server-' ~ backup_media.results[0].stat.checksum[:8] ~ '.iso') ~ ',media=cdrom'}
+            | combine(
+              {'ide3': proxmox_iso_storage_id ~ ':iso/' ~ ('sophon-sftp-secrets-' ~ backup_media.results[1].stat.checksum[:8] ~ '.iso') ~ ',media=cdrom'}
+              if resolved_backup_secrets_iso_path | length > 0 else {}
+            )
+          }}
+    - name: Validate already uploaded Backup media sizes
+      ansible.builtin.assert:
+        that: >-
+          not existing or
+          (existing | length == 1 and existing[0].size | int == item.size | int)
+        fail_msg: "A hash-named ISO has an unexpected size in Proxmox storage; refusing to overwrite it."
+      vars:
+        existing: "{{ proxmox_iso_content.json.data | selectattr('volid', 'eq', proxmox_iso_storage_id ~ ':iso/' ~ item.filename) | list }}"
+      loop: "{{ backup_isos }}"
+      loop_control:
+        label: "{{ item.filename }}"
+    - name: Upload Backup Server installer and optional seed ISO
+      ansible.builtin.include_tasks: upload.yml
+      loop: "{{ backup_isos }}"
+      loop_control:
+        label: "{{ item.filename }}"
+      when: >-
+        (proxmox_iso_storage_id ~ ':iso/' ~ item.filename) not in
+        (proxmox_iso_content.json.data | map(attribute='volid') | list)
+    - name: Allocate a fresh VMID for Backup Server
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/cluster/nextid"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: backup_nextid
+    - name: Create Backup Server VM
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ backup_nextid.json.data }}"
+        name: "{{ backup_vm_name }}"
+        description: "{{ backup_vm_marker }}"
+        cores: "{{ backup_vm_cores }}"
+        memory: "{{ backup_vm_memory }}"
+        cpu: "{{ proxmox_cpu_type }}"
+        ostype: l26
+        onboot: "{{ proxmox_onboot }}"
+        net:
+          net0: "model=virtio,bridge={{ vnet_interface }}{{ ',tag=' ~ vnet_vlan if vnet_vlan else '' }}"
+        virtio:
+          virtio0: "{{ proxmox_disk_storage_id }}:{{ backup_vm_disk_gb }},discard=on"
+        ide: "{{ backup_ide_drives }}"
+        boot: "order=virtio0;ide2"
+        serial:
+          serial0: socket
+        state: present
+        timeout: 600
+      no_log: true
+
+- name: Start Backup Server VM
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_host }}"
+    api_port: "{{ proxmox_port }}"
+    api_user: "{{ proxmox_user }}"
+    api_password: "{{ proxmox_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ backup_named_guests[0].vmid if backup_named_guests else backup_nextid.json.data }}"
+    state: started
+  no_log: true

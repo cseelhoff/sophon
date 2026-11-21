@@ -1,5 +1,4 @@
 ---
-openldap_backup_volumes: []
 # OpenLDAP configuration
 openldap_image_name: "vegardit/openldap"
 openldap_image_tag: "2.6.10"

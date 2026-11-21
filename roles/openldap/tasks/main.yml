@@ -7,6 +7,24 @@
     compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
     compose_stack_image_tars: "{{ openldap_image_tars }}"
 
+- name: Wait for OpenLDAP directory configuration to become healthy
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+      - container
+      - inspect
+      - --format
+      - "{{ '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' }}"
+      - ldap
+  register: openldap_health
+  changed_when: false
+  until: openldap_health.rc == 0 and (openldap_health.stdout | trim) in ['healthy', 'unhealthy']
+  failed_when: openldap_health.rc != 0 or (openldap_health.stdout | trim) != 'healthy'
+  retries: 60
+  delay: 5
+
 - name: Display OpenLDAP status
   ansible.builtin.debug:
     msg: "OpenLDAP ready - LDAPS at {{ infravm_ip }}:{{ openldap_port_ldaps }}"

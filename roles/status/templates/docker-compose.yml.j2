@@ -1,0 +1,48 @@
+services:
+  sophon-status:
+    image: {{ status_image }}
+    pull_policy: never
+    container_name: sophon-status
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - label=disable
+    entrypoint: ["python3", "/app/status_ui.py"]
+    env_file:
+      - .env
+    extra_hosts:
+      - "{{ keycloak_hostname | default('auth') }}.{{ status_domain_clean }}:{{ infravm_ip }}"
+    volumes:
+      - {{ status_script_host_path }}:/app/status_ui.py:ro
+      - {{ status_control_host_dir }}:/control
+    networks:
+      - proxy
+    healthcheck:
+      test:
+        - "CMD"
+        - "python3"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:{{ status_port }}/healthz', timeout=3).read()"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    labels:
+      - "coredns.dockerdiscovery.host={{ status_domain_clean }}"
+      - "traefik.enable=true"
+      - "traefik.http.routers.sophon-status.entrypoints=websecure"
+      - "traefik.http.routers.sophon-status.rule=Host(`{{ status_domain_clean }}`) || Host(`status.{{ status_domain_clean }}`)"
+      - "traefik.http.routers.sophon-status.tls=true"
+      - "traefik.http.routers.sophon-status.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.sophon-status.tls.domains[0].main={{ status_domain_clean }}"
+      - "traefik.http.routers.sophon-status.tls.domains[0].sans=*.{{ status_domain_clean }}"
+      - "traefik.http.services.sophon-status.loadbalancer.server.port={{ status_port }}"
+
+networks:
+  proxy:
+    external: true

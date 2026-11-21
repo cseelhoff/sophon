@@ -49,12 +49,12 @@ def test_vm_network_config():
 def test_credential_inputs():
   required = [
     'arcane_admin_password', 'keycloak_admin_password',
-    'keycloak_db_password', 'keycloak_arcane_client_secret', 'gitea_admin_password',
+    'keycloak_db_password', 'keycloak_arcane_client_secret', 'gitea_admin_password', 'nexus_admin_password',
     'openldap_admin_password', 'openldap_example_user_password', 'openldap_example_admin_password',
   ]
   backup = ['kopia_password', 'kopia_server_password', 'kopia_sftp_private_key_b64', 'kopia_sftp_known_hosts_b64']
   required += ['arcane_encryption_key', *backup]
-  shared = ['gitea_db_password']
+  shared = ['gitea_db_password', 'nexus_db_password']
   inputs = [name for name in required if name not in ('arcane_encryption_key', *backup)] + shared + ['arcane_encryption_key', *backup]
   preflight = yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['pre_tasks']
   assert preflight[1]['loop'] == inputs

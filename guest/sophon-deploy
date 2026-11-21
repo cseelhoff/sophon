@@ -10,17 +10,30 @@ export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
 
 # `--network` asks the network questions again; the first run asks them because nothing is saved yet.
+# `--accept-dhcp` or `--network-cidr`/`--gateway` configure static networking non-interactively for serial automation.
 site=/var/lib/sophon/project/site.json
 redo_network=0
+explicit_network=0
+network_args=()
 forwarded=()
-for argument in "$@"; do
-    if [[ $argument == --network ]]; then redo_network=1; else forwarded+=("$argument"); fi
+while (( $# )); do
+    case $1 in
+        --network) redo_network=1; shift ;;
+        --accept-dhcp) network_args+=(--accept-dhcp); shift ;;
+        --network-cidr|--gateway|--dns)
+            (( $# >= 2 )) || { echo "$1 requires a value." >&2; exit 2; }
+            explicit_network=1
+            network_args+=("$1" "$2")
+            shift 2
+            ;;
+        *) forwarded+=("$1"); shift ;;
+    esac
 done
 set -- "${forwarded[@]}"
 network_changed=0
-if (( redo_network )) ||
+if (( redo_network || explicit_network )) ||
     ! jq -e '(.SOPHON_INFRAVM_IP // "") != "" and (.SOPHON_VNET_DNS // "") != ""' "$site" >/dev/null 2>&1; then
-    /usr/local/libexec/sophon-network "$site"
+    /usr/local/libexec/sophon-network "${network_args[@]}" "$site"
     network_changed=1
 fi
 # Host setup (loading the runner image, starting Podman socket) begins at boot; wait for it, and redo it once the
@@ -36,7 +49,7 @@ if [[ ! -f /run/user/1000/sophon-ready ]]; then
     exit 1
 fi
 
-install -d -m 0700 /var/lib/sophon/stacks
+install -d -m 0700 /var/lib/sophon/stacks /var/lib/sophon/control
 
 args=(
     --remote=false run --rm --network host --pull never
@@ -50,10 +63,12 @@ args=(
 if [[ -t 0 && -t 1 ]]; then
     args+=(-it)
 fi
-# A secret disk (label SOPHON_CERTS) carries the pre-issued certificate file for air-gapped sites.
-# It is copied into the project's imports folder (removed again once it is staged) and then left alone.
+# A secret disk (label SOPHON_CERTS) carries the pre-issued certificate file for air-gapped sites
+# (or sophon-autodeploy may have already staged /var/lib/sophon/project/imports/acme.json before ejecting the ISO).
 certs_device=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
-if [[ -e $certs_device ]]; then
+if [[ -f /var/lib/sophon/project/imports/acme.json ]]; then
+    export SOPHON_ACME_FILE=/workspace/imports/acme.json
+elif [[ -e $certs_device ]]; then
     mount_point=$(mktemp -d)
     if sudo mount -o ro "$certs_device" "$mount_point" 2>/dev/null; then
         if [[ -f $mount_point/acme.json ]]; then
@@ -61,7 +76,7 @@ if [[ -e $certs_device ]]; then
             install -m 600 "$mount_point/acme.json" /var/lib/sophon/project/imports/acme.json
             export SOPHON_ACME_FILE=/workspace/imports/acme.json
             echo "Found the certificate disk; using its acme.json."
-        else
+        elif [[ ! -f $mount_point/sophon-seed.json ]]; then
             echo "Warning: the certificate disk has no acme.json." >&2
         fi
         sudo umount "$mount_point" || true
@@ -70,19 +85,23 @@ if [[ -e $certs_device ]]; then
     fi
     rmdir "$mount_point" 2>/dev/null || true
 fi
+if [[ -d /run/user/1000/sophon-seed ]]; then
+    args+=(-v /run/user/1000/sophon-seed:/run/sophon-seed:Z)
+fi
 for name in \
     SOPHON_ACME_FILE SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
-    SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_NAME SOPHON_KEYCLOAK_REALM \
+    SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_ENABLED SOPHON_CF_TUNNEL_NAME \
+    SOPHON_KEYCLOAK_REALM \
     SOPHON_KEYCLOAK_REALM_DISPLAY_NAME SOPHON_KEYCLOAK_ADMIN_PASSWORD \
     SOPHON_KEYCLOAK_DB_PASSWORD SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET \
-    SOPHON_GITEA_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
+    SOPHON_GITEA_ADMIN_PASSWORD SOPHON_NEXUS_ADMIN_PASSWORD SOPHON_OPENLDAP_ADMIN_PASSWORD \
     SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD \
-    SOPHON_ARCANE_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD \
+    SOPHON_ARCANE_ADMIN_PASSWORD SOPHON_GITEA_DB_PASSWORD SOPHON_NEXUS_DB_PASSWORD \
     SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SERVER_USERNAME SOPHON_KOPIA_SERVER_PASSWORD \
     SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PATH \
     SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 \
     SOPHON_KOPIA_CREATE_REPOSITORY \
-    SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME SOPHON_KOPIA_EXTRA_VOLUMES \
+    SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME \
     SOPHON_KOPIA_BACKUPS_ENABLED SOPHON_KOPIA_SNAPSHOT_INTERVAL \
     SOPHON_KOPIA_COARSE_ENABLED SOPHON_KOPIA_COARSE_VOLUMES_DIR SOPHON_KOPIA_COARSE_WORK_DIR
 do
@@ -90,4 +109,13 @@ do
         args+=(--env "$name")
     fi
 done
-exec podman "${args[@]}" sophon:latest python3 src/console.py "$@"
+if [[ -v SOPHON_PREPARE_RESTORE ]]; then
+    args+=(--env SOPHON_PREPARE_RESTORE)
+fi
+podman "${args[@]}" sophon:latest python3 src/console.py "$@"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops && ( -f /var/lib/sophon/stacks/nexus/compose.yaml || -f /var/lib/sophon/stacks/nexus/docker-compose.yml ) ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi

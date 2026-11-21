@@ -1,0 +1,13 @@
+---
+- name: Destroy Sophon-managed VM on Hyper-V
+  hyperv_vm:
+    action: absent
+    host: "{{ hyperv_host }}"
+    port: "{{ hyperv_port }}"
+    username: "{{ hyperv_username }}"
+    password: "{{ hyperv_password }}"
+    ca_file: "{{ hyperv_ca_file }}"
+    switch: "{{ hyperv_switch }}"
+    path: "{{ hyperv_path }}"
+    name: "{{ destroy_vm_name }}"
+    marker: "{{ destroy_vm_marker }}"

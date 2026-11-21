@@ -15,7 +15,7 @@ main() {
     # The address arrives later, when sophon-deploy asks for the network; until then proxy needs no DNS server.
     infravm_ip=$(jq -er '.SOPHON_INFRAVM_IP | select(type == "string" and length > 0)' "$project/site.json" 2>/dev/null) || infravm_ip=
     [[ -f /var/lib/sophon/runner.tar ]]
-    install -d -m 0700 /var/lib/sophon/stacks "$HOME/.local/share/containers/storage" "$HOME/sophon-coarse"
+    install -d -m 0700 /var/lib/sophon/stacks /var/lib/sophon/control "$HOME/.local/share/containers/storage" "$HOME/sophon-coarse"
     if [[ ! -e $HOME/.local/share/containers/storage/volumes ]]; then
         [[ $(stat -f -c %T "$HOME/.local/share/containers/storage") == btrfs ]] || {
             echo "Persistent /var must be Btrfs for Podman volume snapshots." >&2; return 1;
@@ -46,9 +46,10 @@ main() {
     fi
     if podman --remote=false network exists proxy; then
         if [[ -n $dns_server ]]; then
-            if [[ ${#dns_frontends[@]} == 1 && -n $infravm_ip ]]; then
-                podman --remote=false network update --dns-drop "$infravm_ip" proxy
-            fi
+            while IFS= read -r old_dns; do
+                [[ -n $old_dns && $old_dns != "$dns_server" ]] || continue
+                podman --remote=false network update --dns-drop "$old_dns" proxy || true
+            done < <(podman --remote=false network inspect proxy --format '{{range .NetworkDNSServers}}{{println .}}{{end}}' 2>/dev/null || true)
             podman --remote=false network update --dns-add "$dns_server" proxy
         fi
     else

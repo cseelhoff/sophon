@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Early first-boot check for an optional SOPHON_CERTS seed ISO containing /sophon-seed.json.
+# When absent (or when SOPHON_CERTS only holds acme.json), exits 0 immediately so interactive setup runs unchanged.
+set -euo pipefail
+
+[[ ! -e /var/lib/sophon/autodeploy.done ]] || exit 0
+
+udevadm settle --timeout=10 2>/dev/null || true
+
+find_certs_dev() {
+    local dev
+    if [[ -b /dev/disk/by-label/SOPHON_CERTS ]]; then
+        printf '%s\n' /dev/disk/by-label/SOPHON_CERTS
+        return 0
+    fi
+    dev=$(blkid -L SOPHON_CERTS 2>/dev/null || true)
+    if [[ -n $dev && -b $dev ]]; then
+        printf '%s\n' "$dev"
+        return 0
+    fi
+    return 1
+}
+
+certs_dev=$(find_certs_dev) || exit 0
+
+mnt=/run/sophon-seed-mnt
+stage=/run/sophon-seed
+rm -rf "$mnt"
+install -d -m 0700 "$mnt"
+cleanup() {
+    umount "$mnt" 2>/dev/null || true
+    rmdir "$mnt" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+mount -o ro "$certs_dev" "$mnt"
+if [[ ! -f $mnt/sophon-seed.json ]]; then
+    # Certificate-only ISO (`certificates issue`) without unattended seed; leave interactive flow intact.
+    exit 0
+fi
+
+rm -rf "$stage"
+install -d -m 0700 "$stage"
+cp "$mnt/sophon-seed.json" "$stage/sophon-seed.json"
+chmod 0600 "$stage/sophon-seed.json"
+if [[ -f $mnt/acme.json ]]; then
+    cp "$mnt/acme.json" "$stage/acme.json"
+    chmod 0600 "$stage/acme.json"
+fi
+umount "$mnt"
+rmdir "$mnt" 2>/dev/null || true
+trap - EXIT
+eject "$certs_dev" 2>/dev/null || true
+
+core_hash=$(jq -er '.core_password_hash' "$stage/sophon-seed.json")
+if [[ $core_hash != '$6$'* ]]; then
+    echo "Error: sophon-seed.json core_password_hash must be a SHA-512 (\$6\$) hash." >&2
+    rm -rf "$stage"
+    exit 1
+fi
+
+usermod -p "$core_hash" core
+install -m 0644 /dev/null /var/lib/sophon-core-password-set
+/usr/local/libexec/sophon-update-issue progress sophon "" "" || true

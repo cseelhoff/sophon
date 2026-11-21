@@ -3,21 +3,19 @@
 Nothing site-specific is baked into the reusable ISOs. Each step asks only for what it needs.
 Keep every credential in a password manager: reruns need the same existing values.
 
-## On the laptop: prepare (internet)
+## On the laptop: build ISOs (`sophon-build-isos`)
 
-No inputs. Needs Docker or Podman, space for the images and ISOs, and internet.
-Pass `-e prepare_force=true` after `prepare` to refresh cached downloads and force an ISO rebuild, for example:
-`bash sophon-provision.sh prepare -e prepare_force=true` (or `.\sophon-provision.ps1 prepare -e prepare_force=true`;
-the raw `docker run` form is in [manual-commands.md](manual-commands.md)).
+Needs Docker or Podman, space for the images and ISOs, and internet.
+Run `sh sophon-build-isos.sh` (or `.\sophon-build-isos.ps1`) to build both the unattended mode-`0600` secrets ISOs and the reusable OS/app ISOs, or `--os-only` to build only the reusable OS/app ISOs (`--force` refreshes cached downloads and forces an ISO rebuild; the raw `docker run` form is in [manual-commands.md](manual-commands.md)).
 A laptop that is later offline
-must already have `artifacts/` and the built `sophon-tools` image from a completed run; steps 1-2 then
-use only the hypervisor's management network.
+must already have `artifacts/` and the built `sophon-tools` image from a completed run; provisioning then
+uses only the hypervisor's management network.
 
-## On the laptop: provision
+## On the laptop: provision (`sophon-provision`)
 
 Choose the hypervisor with `SOPHON_HYPERVISOR` (`proxmox` default, `vcenter` or `hyperv`).
-Every step 1-2 variable below is also listed, with a comment, in [`.env.example`](../.env.example); copy it to `.env` and the
-`sophon-provision` scripts read it.
+Every variable below is also listed, with a comment, in [`.env.example`](../.env.example); copy it to `.env` and both
+`sophon-build-isos` and `sophon-provision` read it automatically.
 
 | Proxmox | Meaning |
 |---|---|
@@ -48,8 +46,14 @@ the web UI (noVNC) shows step 3 and the `core` password prompt.
 | `SOPHON_HYPERV_PATH` | optional folder on the host for the VM, disk and ISOs (default: the host's VM path) |
 | `2-provision-hyperv-local.ps1` | same VM on the local machine as the signed-in user (no host or credentials); takes `-Switch` / `SOPHON_HYPERV_SWITCH`, `-Path` / `SOPHON_HYPERV_PATH` and the `SOPHON_INFRAVM_*` sizes |
 
-All providers: `SOPHON_INFRAVM_NAME`, `_CORES` (8), `_MEMORY` MiB (8192), `_DISK_GB` (100).
-A VM that already exists is only started if this workflow created it; anything else is left alone.
+All providers: `SOPHON_INFRAVM_NAME` (`sophon-infravm`), `SOPHON_DEV_INFRAVM_NAME` (`sophon-dev-infravm`, targeted by
+`sophon-provision-dev` which always deletes any existing dev VM first), `_CORES` (8), `_MEMORY` MiB (12288), `_DISK_GB` (1024, thin-provisioned; min 40), and `SOPHON_BACKUP_VM_DISK_GB` (1536, thin-provisioned SFTP Backup VM disk; min 16). Proxmox enables `discard=on` on `virtio0` (vCenter thin VMFS6 and Hyper-V Dynamic `.vhdx` support UNMAP natively), while InfraVM enables `discard=async` + `fstrim.timer` and the Backup VM enables weekly `fstrim` with 1% `ext4` root block reservation (`-m 1 -i 65536`).
+For `sophon-provision`, a VM that already exists is only started if this workflow created it (`sophon-provision --recreate` replaces it;
+`sophon-destroy-vm` stops and deletes a VM);
+anything else is left alone. When building unattended seeds (`secrets`), `SOPHON_NETWORK_CIDR` sets the production
+static IPv4 CIDR and `SOPHON_DEV_NETWORK_CIDR` sets the dev/restore-drill static IPv4 CIDR (promoting from `https://<domain>` or
+`sophon-activate` verifies `SOPHON_NETWORK_CIDR` is unoccupied and switches the VM's IP and self-pointing DNS from
+`SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`).
 
 ## Automatic install (nothing to type)
 
@@ -60,8 +64,9 @@ installation never reinstalls; it rechecks that right before writing and waits 1
 single blank disk, `--auto` stops with a message; run `sudo bash <deployment-iso-mount>/install.sh` to be asked which
 disk to use. No network settings or password are baked in.
 
-On the first boot of the installed system `sophon-set-password.service` asks for the `core` console password on tty1,
-before the login prompt (the account stays locked until then). The VM starts on DHCP.
+On the first boot of the installed system `sophon-set-password.service` (on `tty1`) and
+`sophon-set-password-serial.service` (on `ttyS0` / Proxmox `serial0`) ask for the `core` console password before the
+login prompt; setting the password on either console satisfies both. The VM starts on DHCP.
 
 ## On the VM console: sophon-deploy
 
@@ -82,23 +87,31 @@ service accounts** (default no), then asks for:
 |---|---|
 | Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
 | ACME email | Connected sites only. A real address. |
-| Cloudflare token | Connected sites only, required. A custom token with three permissions: Zone / Zone / Read, Zone / DNS / Edit and Account / Cloudflare Tunnel / Edit (tunnel permission only if you use tunnels), scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
-| Cloudflare tunnel name | Connected sites only (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
+| Cloudflare token | Connected sites only, required unless running `sophon-deploy --prepare-restore`. A custom token with Zone / Zone / Read, Zone / DNS / Edit and (when `SOPHON_CF_TUNNEL_ENABLED=true`) Account / Cloudflare Tunnel / Edit, scoped to your zone and account. Steps: [README](../README.md#cloudflare-api-token). |
+| Publish Cloudflare tunnel (`SOPHON_CF_TUNNEL_ENABLED`) | Default `true`. Set `false` on non-production, lab, or restore-verification instances so `coredns` never creates/updates Cloudflare tunnels or public CNAMEs and `cloudflared` is not deployed, even if a Cloudflare token is supplied for Let's Encrypt DNS-01. |
+| Cloudflare tunnel name | Connected sites with `SOPHON_CF_TUNNEL_ENABLED=true` (default `sophon`). `sophon-deploy` uses the tunnel with this name (Cloudflare Zero Trust > Networks > Tunnels) or creates it, then publishes the service names on it and runs its `cloudflared` connector next to Traefik, so the services are reachable from the internet. Any other tunnel in the account is left alone, so enter the name of an existing tunnel to reuse it. If the lookup or creation fails, nothing is published and no connector starts. |
 | Pre-issued certificates file | Air-gapped sites only, required: the `acme.json` from the secret `SOPHON_CERTS` disk (found automatically; press Enter) or another path under `/workspace`; see [certificates.md](certificates.md). |
-| Passwords | Arcane admin (12+ characters), Keycloak admin and database, Arcane OIDC client secret, Gitea admin, LDAP admin and two seed users, and Kopia UI; Gitea database defaults to the Arcane password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, existing Kopia repository password and SSH material. Configure generates and reuses Arcane's local SQLite encryption key under `credentials/arcane/` automatically. |
+| Passwords | Arcane admin (12+ characters), Keycloak admin and database, Arcane OIDC client secret, Gitea admin, Nexus admin, LDAP admin and two seed users, and Kopia UI; Gitea and Nexus databases default to the Arcane password. Typing shows `*`. "Same password for all" (12+ characters, confirmed) excludes the Cloudflare token, existing Kopia repository password and SSH material. Configure generates and reuses Arcane's local SQLite encryption key under `credentials/arcane/` and Nexus's datastore encryption key + `sophon-pull` reader credentials under `credentials/nexus/` automatically. |
 | Kopia | External SFTP host/user/path, repository password and backup policy; Configure generates the client key and confirms host fingerprints. |
 
 Required values are asked again until given. Settings already exported as `SOPHON_*` variables are used without asking
-(passwords are skipped silently). `sophon-deploy --run` does the same non-interactively.
+(passwords are skipped silently). `sophon-deploy --run` does the same non-interactively; pass `--accept-dhcp` (or
+`--network-cidr <ip/prefix> --gateway <gw> [--dns <dns>]`) to apply the guest network without prompts, and pass
+`--prepare-restore` when staging a clean VM for `sophon-restore` (automatically disables Cloudflare tunnel/DNS
+publishing, skips pre-restore certificate requirements since `sophon-restore` restores `acme.json`, connects Kopia in
+read-only standby mode against `sophon-restore` if configured, and defers OIDC client registration until after
+`sophon-restore`).
 
-Service names (`traefik`, `arcane`, `dns`, `kopia`, `ldap`, `auth`, `git` under your domain) must
+Service names (`traefik`, `arcane`, `dns`, `kopia`, `ldap`, `auth`, `git`, `nexus`, `registry`, `registry-push` under your domain) must
 resolve to InfraVM for your clients: point DNS or a split-DNS rule at CoreDNS on InfraVM.
 
 ### Kopia backup inputs
 
-Kopia deploys last, after core source volumes exist. Its backup operation needs
-no Arcane/Gitea token, stack definitions or environment capture. The collector
-uses a restricted engine proxy and explicitly mounted read-only source volumes.
+Kopia deploys last, after the core stacks exist. Its backup operation needs
+no Arcane/Gitea token, stack definitions or environment capture. Kopia's native
+scheduler and before/after snapshot actions use a locked-down `dump-proxy`
+(which strips `Config.Env` and only runs label-declared dump commands) and
+read-only `/volumes:ro` discovery for declared named volumes.
 Keep stack definitions in IaC and supplied secrets outside Arcane.
 
 These are Configure inputs on InfraVM, not laptop `.env` settings:
@@ -113,9 +126,8 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 | `SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64` | Optional single-line base64 of independently verified `known_hosts` for unattended pairing. Include all offered keys, with `[host]:port` for non-22 ports. Overrides cannot replace saved trust. |
 | `SOPHON_KOPIA_CREATE_REPOSITORY` | Optional unattended creation confirmation (`true`); default `false`. Used only for an exact missing repository on an unused path, never an existing repository or other error. No reset/rerun step is needed. |
 | `SOPHON_KOPIA_CLIENT_USERNAME`, `_CLIENT_HOSTNAME` | Stable snapshot source identity, default `backup@sophon`. Preserve it on reruns/recovery. |
-| `SOPHON_KOPIA_EXTRA_VOLUMES` | Site workload volume names as a JSON array, default `[]`. Core roles declare their own list. These become read-only mounts, not host paths. Retain the list in site IaC and redeploy after changes. |
-| `SOPHON_KOPIA_BACKUPS_ENABLED` | `false` until a first full backup is verified. Set `true` to enable scheduled backups; keep the existing value on reruns. |
-| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix. The container supervisor schedules collector runs, not raw filesystem snapshots. |
+| `SOPHON_KOPIA_BACKUPS_ENABLED` | Default `true` (Configure triggers and verifies the initial primary snapshot automatically and leaves Kopia's native `--snapshot-interval` schedule active in one step; interactive pairing of a new VM to an existing repository offers to pause until `sophon-restore` runs). |
+| `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix, applied directly to Kopia's native snapshot policy (`--snapshot-interval`). |
 | `SOPHON_KOPIA_COARSE_ENABLED` | Optional last-resort weekly live Btrfs subvolume snapshot layer, default `false`, independent of the primary schedule. |
 | `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | Host rootless Podman Btrfs `volumes` subvolume (default `/var/home/core/.local/share/containers/storage/volumes`), mounted read-only. |
 | `SOPHON_KOPIA_COARSE_WORK_DIR` | Disjoint host Btrfs working directory outside the volumes subvolume (default `/var/home/core/sophon-coarse`). Holds temporary read-only snapshot staging, config/cache/logs. |
@@ -166,7 +178,7 @@ before expecting them to be protected. Configure never restores state.
 
 ### Console recovery inputs
 
-`sophon-restore plan --group GROUP --snapshot latest` uses the existing `kopia`
+`sophon-restore` (or low-level `sophon-restore plan --group GROUP --snapshot latest`) uses the existing `kopia`
 container's connection settings, or the same `SOPHON_KOPIA_*` destination,
 password/key/pins and stable source identity overrides above when it is absent.
 It never uses Arcane or Gitea. Supply `SOPHON_RESTORE_SOURCE_VOLUME` when the
@@ -176,8 +188,9 @@ custom recovery image. `--state-volume NAME` selects a private labelled staging
 volume; default `sophon-restore-v3`.
 
 Apply requires the planned group, exact printed snapshot ID and `--approve`.
-The fresh deployment must use matching image IDs and current native import
-declarations. Failed groups are not restored from an older snapshot implicitly.
+Native database/LDAP producers must use matching image IDs and current native
+import declarations (file-only application containers may restore across rebuilt
+app images). Failed groups are not restored from an older snapshot implicitly.
 Keep decrypted staging private and run `cleanup --approve` after success or
 deliberate abandonment. See the [recovery procedure](../roles/kopia/README.md#explicit-group-restoration).
 

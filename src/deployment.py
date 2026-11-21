@@ -41,8 +41,10 @@ FIELDS = {
     'SOPHON_VNET_VLAN': ('VLAN', 'Network', 'number', '', False),
     'SOPHON_INFRAVM_CORES': ('CPU cores', 'VM', 'number', '8', True),
     'SOPHON_INFRAVM_NAME': ('VM name', 'VM', 'text', 'sophon-infravm', True),
-    'SOPHON_INFRAVM_MEMORY': ('Memory (MiB)', 'VM', 'number', '8192', True),
-    'SOPHON_INFRAVM_DISK_GB': ('Disk size (GiB)', 'VM', 'number', '100', True),
+    'SOPHON_DEV_INFRAVM_NAME': ('Dev/drill VM name', 'VM', 'text', 'sophon-dev-infravm', False),
+    'SOPHON_INFRAVM_MEMORY': ('Memory (MiB)', 'VM', 'number', '12288', True),
+    'SOPHON_INFRAVM_DISK_GB': ('Thin disk size (GiB)', 'VM', 'number', '1024', True),
+    'SOPHON_BACKUP_VM_DISK_GB': ('Backup VM thin disk size (GiB)', 'VM', 'number', '1536', False),
     'SOPHON_VNET_DNS': ('Upstream DNS', 'Site', 'ipv4', '', False),
     'SOPHON_INFRAVM_IP': ('InfraVM address', 'Site', 'ipv4', '', True),
     'SOPHON_DOMAIN': ('Domain', 'Site', 'host', '', True),
@@ -50,6 +52,7 @@ FIELDS = {
     'SOPHON_CF_TOKEN': ('Cloudflare API token', 'Site', 'password', '', False),
     'SOPHON_ACME_FILE': ('Pre-issued certificates file on this VM (air-gapped sites; the secret disk is read automatically)',
                          'Site', 'path', '', False),
+    'SOPHON_CF_TUNNEL_ENABLED': ('Publish public Cloudflare tunnel and DNS records', 'Site', 'choice', 'true', False),
     'SOPHON_CF_TUNNEL_NAME': ('Cloudflare tunnel name', 'Site', 'text', 'sophon', False),
     'SOPHON_ARCANE_ADMIN_PASSWORD': ('Arcane admin password (12+ characters)', 'Access', 'password', '', True),
     'SOPHON_KEYCLOAK_REALM': ('Keycloak realm', 'Access', 'text', 'sophon', False),
@@ -58,10 +61,12 @@ FIELDS = {
     'SOPHON_KEYCLOAK_DB_PASSWORD': ('Keycloak database password', 'Access', 'password', '', True),
     'SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET': ('Arcane OIDC client secret', 'Access', 'password', '', True),
     'SOPHON_GITEA_ADMIN_PASSWORD': ('Gitea admin password', 'Access', 'password', '', True),
+    'SOPHON_NEXUS_ADMIN_PASSWORD': ('Nexus admin password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_ADMIN_PASSWORD': ('LDAP admin password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD': ('LDAP seed-user password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD': ('LDAP seed-admin password', 'Access', 'password', '', True),
     'SOPHON_GITEA_DB_PASSWORD': ('Gitea database password (empty uses the Arcane password)', 'Access', 'password', '', False),
+    'SOPHON_NEXUS_DB_PASSWORD': ('Nexus database password (empty uses the Arcane password)', 'Access', 'password', '', False),
     'SOPHON_KOPIA_PASSWORD': ('Repository encryption password (new or existing; retain in your password manager)', 'Backup', 'password', '', True),
     'SOPHON_KOPIA_SERVER_USERNAME': ('Kopia UI username', 'Backup', 'text', 'admin', True),
     'SOPHON_KOPIA_SERVER_PASSWORD': ('Kopia UI password', 'Backup', 'password', '', True),
@@ -74,8 +79,7 @@ FIELDS = {
     'SOPHON_KOPIA_CREATE_REPOSITORY': ('Confirm creation only if no repository exists', 'Backup', 'choice', 'false', False),
     'SOPHON_KOPIA_CLIENT_USERNAME': ('Backup source username', 'Backup', 'text', 'backup', True),
     'SOPHON_KOPIA_CLIENT_HOSTNAME': ('Backup source hostname', 'Backup', 'text', 'sophon', True),
-    'SOPHON_KOPIA_EXTRA_VOLUMES': ('Additional site workload volumes (JSON array)', 'Backup', 'text', '[]', False),
-    'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups (after first verified backup)', 'Backup', 'choice', 'false', True),
+    'SOPHON_KOPIA_BACKUPS_ENABLED': ('Enable scheduled backups', 'Backup', 'choice', 'true', True),
     'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
     'SOPHON_KOPIA_COARSE_ENABLED': ('Enable weekly live Btrfs volume snapshots (true/false)', 'Backup', 'choice', 'false', False),
     'SOPHON_KOPIA_COARSE_VOLUMES_DIR': ('Host Btrfs Podman volumes subvolume (read-only source)', 'Backup', 'text',
@@ -85,9 +89,11 @@ FIELDS = {
 }
 LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
           'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),
-          'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
+          'SOPHON_INFRAVM_DISK_GB': (40, 1048576), 'SOPHON_BACKUP_VM_DISK_GB': (16, 1048576),
+          'SOPHON_KOPIA_SFTP_PORT': (1, 65535)}
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
+           'SOPHON_CF_TUNNEL_ENABLED': ('false', 'true'),
            'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true'),
            'SOPHON_KOPIA_CREATE_REPOSITORY': ('false', 'true'),
            'SOPHON_KOPIA_COARSE_ENABLED': ('false', 'true')}
@@ -111,7 +117,12 @@ def step_fields(step='provision'):
 
 
 def new_control(environment, step='provision'):
-    values = {name: environment.get(name) or definition[3] for name, definition in step_fields(step).items()}
+    values = {}
+    for name, definition in step_fields(step).items():
+        if name == 'SOPHON_CF_TUNNEL_NAME' and name in environment and environment[name].strip() == '':
+            values[name] = ''
+        else:
+            values[name] = environment.get(name) or definition[3]
     return {'values': values, 'step': step}
 
 
@@ -143,12 +154,6 @@ def validate_settings(current, changes, step='provision'):
         try:
             if name == 'SOPHON_KOPIA_SNAPSHOT_INTERVAL' and not re.fullmatch(r'[1-9][0-9]*(s|m|h|d)', value):
                 return None, 'Snapshot interval must be a positive integer followed by s, m, h or d.'
-            if name == 'SOPHON_KOPIA_EXTRA_VOLUMES':
-                volumes = json.loads(value)
-                if not isinstance(volumes, list) or any(
-                        not isinstance(volume, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)
-                        for volume in volumes) or len(volumes) != len(set(volumes)):
-                    return None, 'Additional backup volumes must be a JSON array of unique volume names.'
             if kind == 'choice' and value not in CHOICES[name]:
                 return None, f'{label} ({name}) must be one of {", ".join(CHOICES[name])}.'
             if name in ('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'):
@@ -257,7 +262,7 @@ def launch(arguments):
         return subprocess.run(['ansible-playbook', *arguments], env=environment).returncode
     except OSError:
         print('Could not start ansible-playbook. Run this through the sophon-tools container '
-              '(bash sophon-provision.sh) or install ansible-core.', file=sys.stderr)
+              '(sh sophon-provision.sh) or install ansible-core.', file=sys.stderr)
         return 127
     except KeyboardInterrupt:
         return 130
@@ -280,9 +285,29 @@ def main(argv=None):
     elif (os.environ.get('SOPHON_HYPERVISOR') or 'proxmox') not in CHOICES['SOPHON_HYPERVISOR']:
         parser.error('SOPHON_HYPERVISOR must be proxmox, vcenter or hyperv.')
     allowed = set(step_fields(options.step))
+    if options.step == 'provision':
+        allowed.update((
+            'SOPHON_PROXMOX_USER',
+            'SOPHON_PROXMOX_VALIDATE_CERTS',
+            'SOPHON_PROXMOX_ONBOOT',
+            'SOPHON_SECRETS_ISO',
+            'SOPHON_BACKUP_SECRETS_ISO',
+            'SOPHON_ATTACH_SECRETS_ISO',
+            'SOPHON_BACKUP_VM_NAME',
+            'SOPHON_BACKUP_VM_CORES',
+            'SOPHON_BACKUP_VM_MEMORY',
+            'SOPHON_BACKUP_VM_DISK_GB',
+            'SOPHON_SKIP_BACKUP_VM',
+            'SOPHON_DESTROY_VM_NAME',
+            'SOPHON_DESTROY_VM_MARKER',
+            'SOPHON_ALLOW_PRODUCTION_DESTROY',
+            'SOPHON_MOUNT_SECRETS_VM_NAME',
+            'SOPHON_MOUNT_SECRETS_VM_MARKER',
+        ))
     if options.step == 'configure':
         allowed.add('SOPHON_ARCANE_ENCRYPTION_KEY')
         allowed.add('SOPHON_KOPIA_PREFLIGHT_COMPLETE')
+        allowed.add('SOPHON_PREPARE_RESTORE')
     for name in list(os.environ):
         if name.startswith('SOPHON_') and name not in allowed:
             os.environ.pop(name, None)
@@ -293,8 +318,17 @@ def main(argv=None):
     if not arguments:
         parser.print_help()
         return 2
-    expected = '2-provision.yml' if options.step == 'provision' else '4-configure.yml'
-    if arguments[0] in ('2-provision.yml', '4-configure.yml') and arguments[0] != expected:
+    step_for_playbook = {
+        '2-provision.yml': 'provision',
+        '2-provision-backup.yml': 'provision',
+        '3-destroy-vm.yml': 'provision',
+        '3-mount-secrets.yml': 'provision',
+        '4-configure.yml': 'configure',
+        '5-activate.yml': 'configure',
+    }
+    required_step = step_for_playbook.get(arguments[0])
+    if required_step and required_step != options.step:
+        expected = '2-provision.yml' if options.step == 'provision' else '4-configure.yml'
         parser.error(f'{options.step} requires {expected}; choose the correct deployment step.')
     return launch(arguments)
 

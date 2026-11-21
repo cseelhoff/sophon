@@ -27,10 +27,12 @@
         - keycloak_db_password
         - keycloak_arcane_client_secret
         - gitea_admin_password
+        - nexus_admin_password
         - openldap_admin_password
         - openldap_example_user_password
         - openldap_example_admin_password
         - gitea_db_password
+        - nexus_db_password
         - arcane_encryption_key
         - kopia_password
         - kopia_server_password
@@ -59,7 +61,7 @@
         marker: "# {mark} SOPHON SERVICE NAMES"
         unsafe_writes: true
         block: |
-          {% for name in ['', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia'] %}
+          {% for name in ['', 'status', 'traefik', 'auth', 'ldap', 'git', 'nexus', 'registry', 'registry-push', 'arcane', 'dns', 'kopia'] %}
           {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
           {% endfor %}
       tags: [always]
@@ -82,12 +84,18 @@
     - name: Deploy Gitea
       ansible.builtin.include_role:
         name: gitea
+    - name: Deploy Nexus
+      ansible.builtin.include_role:
+        name: nexus
     - name: Deploy Arcane
       ansible.builtin.include_role:
         name: arcane
+    - name: Deploy Appliance Status and Cutover UI
+      ansible.builtin.include_role:
+        name: status
     - name: Deploy Kopia after source volumes exist
       ansible.builtin.include_role:
         name: kopia
     - name: Finish service deployment
       ansible.builtin.debug:
-        msg: "Deployment complete. Arcane: {{ arcane_url }}. Retain credentials in your password manager."
+        msg: "Deployment complete. Status & Cutover: https://{{ domain_name }} | Arcane: {{ arcane_url }}. Retain credentials in your password manager."

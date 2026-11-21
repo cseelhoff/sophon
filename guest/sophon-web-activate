@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Host-side detached activation runner triggered by sophon-web-activate.path.
+# Runs outside Podman containers so switching the host NIC from SOPHON_DEV_NETWORK_CIDR
+# to SOPHON_NETWORK_CIDR and restarting proxy-networked containers never interrupts cutover.
+set -euo pipefail
+
+CONTROL_DIR=/var/lib/sophon/control
+REQ_FILE=$CONTROL_DIR/activate.request
+STATUS_FILE=$CONTROL_DIR/activate-status.json
+LOG_FILE=$CONTROL_DIR/activate.log
+
+[[ -f $REQ_FILE ]] || exit 0
+install -d -o core -g core -m 0700 "$CONTROL_DIR"
+
+requested_by=$(jq -r '.requested_by // "admin"' "$REQ_FILE" 2>/dev/null || echo "admin")
+tunnel_mode=$(jq -r '.tunnel_mode // "default"' "$REQ_FILE" 2>/dev/null || echo "default")
+rm -f "$REQ_FILE"
+
+write_activate_status() {
+    local state=$1 msg=$2 rc=${3:-0}
+    local tmp="${STATUS_FILE}.tmp.$$"
+    jq -n \
+        --arg state "$state" \
+        --arg requested_by "$requested_by" \
+        --arg message "$msg" \
+        --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson exit_code "$rc" \
+        '{state: $state, requested_by: $requested_by, message: $message, exit_code: $exit_code, updated_at: $updated_at}' \
+        > "$tmp"
+    chmod 0600 "$tmp"
+    chown core:core "$tmp"
+    mv -f "$tmp" "$STATUS_FILE"
+}
+
+: > "$LOG_FILE"
+chmod 0600 "$LOG_FILE"
+chown core:core "$LOG_FILE"
+
+activate_args=(--yes)
+case "$tunnel_mode" in
+    enable) activate_args+=(--enable-tunnel) ;;
+    disable) activate_args+=(--disable-tunnel) ;;
+    default|"") ;;
+    *)
+        write_activate_status "failed" "Invalid tunnel_mode '$tunnel_mode' in activation request." 2
+        exit 2
+        ;;
+esac
+
+write_activate_status "running" "Promoting appliance to active production..." 0
+set +e
+runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    /usr/local/bin/sophon-activate "${activate_args[@]}" >> "$LOG_FILE" 2>&1
+rc=$?
+set -e
+
+/usr/local/libexec/sophon-control-sync --probe || true
+
+if [[ $rc -eq 0 ]]; then
+    write_activate_status "succeeded" "Appliance promoted to active production. Scheduled backups are active." 0
+else
+    last_err=$(tail -n 5 "$LOG_FILE" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//' || true)
+    write_activate_status "failed" "${last_err:-sophon-activate exited with status $rc}" "$rc"
+    exit "$rc"
+fi

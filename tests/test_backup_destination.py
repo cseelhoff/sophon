@@ -169,6 +169,33 @@ class DestinationTests(unittest.TestCase):
         self.assertFalse((self.root / 'credentials/kopia/id_ed25519').exists())
         self.assertNotIn(material.decode(), output)
 
+    def test_existing_repository_on_new_vm_can_pause_scheduled_backups_until_restore(self):
+        self.initialized = True
+        self.answers = [True, True, False]
+        values, _ = self.prepare()
+        self.assertEqual(values['SOPHON_KOPIA_BACKUPS_ENABLED'], 'false')
+
+    def test_readonly_preflight_skips_write_probe_and_refuses_repository_creation(self):
+        self.sftp.open.side_effect = PermissionError('read-only SFTP account rejects writes')
+        self.sftp.remove.side_effect = PermissionError('read-only SFTP account rejects deletes')
+        self.values['SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'] = base64.b64encode(self.hostkey.encode()).decode()
+        self.values['SOPHON_KOPIA_CREATE_REPOSITORY'] = 'true'
+        with patch('backup_destination.paramiko.SSHClient', return_value=self.client), \
+                patch('backup_destination.subprocess.run', side_effect=self.process):
+            with self.assertRaisesRegex(ValueError, 'existing backup repository'):
+                backup_destination.prepare(self.values, root=self.root, confirm=None, readonly=True)
+        self.assertEqual(self.operations, ['connect'])
+
+        self.operations.clear()
+        self.initialized = True
+        with patch('backup_destination.paramiko.SSHClient', return_value=self.client), \
+                patch('backup_destination.subprocess.run', side_effect=self.process), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            values = backup_destination.prepare(self.values, root=self.root, confirm=None, readonly=True)
+        self.assertIn('sophon-restore', output.getvalue())
+        self.assertEqual(self.operations, ['connect'])
+        self.assertEqual(values['SOPHON_KOPIA_BACKUPS_ENABLED'], 'false')
+
 
 if __name__ == '__main__':
     unittest.main()

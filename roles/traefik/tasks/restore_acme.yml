@@ -7,10 +7,12 @@
 - name: Skip acme.json restore (no local backup found)
   ansible.builtin.debug:
     msg: "No local acme.json; online ACME issuance will be used."
-  when: not _traefik_acme_local.stat.exists
+  when:
+    - not _traefik_acme_local.stat.exists
+    - not (prepare_restore | default(false) | bool and coredns_cf_token | default('', true) == '')
 
 - name: Seed a new certificate volume or explicitly refresh an existing one
-  when: _traefik_acme_local.stat.exists
+  when: _traefik_acme_local.stat.exists or (prepare_restore | default(false) | bool and coredns_cf_token | default('', true) == '')
   block:
     - name: Load the seed helper image from the offline archives
       ansible.builtin.include_role:
@@ -101,6 +103,21 @@
                 src: "{{ traefik_acme_backup_path }}"
                 dest: "{{ _traefik_acme_stage.path }}/acme.json"
                 mode: "0600"
+              when: _traefik_acme_local.stat.exists
+              changed_when: false
+              no_log: true
+
+            - name: Generate temporary pre-restore bootstrap certificate store
+              ansible.builtin.command:
+                argv:
+                  - "{{ ansible_playbook_python }}"
+                  - "{{ playbook_dir }}/src/certificates.py"
+                  - bootstrap
+                  - --domain
+                  - "{{ domain_name }}"
+                  - --output
+                  - "{{ _traefik_acme_stage.path }}/acme.json"
+              when: not _traefik_acme_local.stat.exists
               changed_when: false
               no_log: true
 

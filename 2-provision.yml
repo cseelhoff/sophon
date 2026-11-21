@@ -19,9 +19,53 @@
            ['SOPHON_HYPERV_HOST', 'SOPHON_HYPERV_PASSWORD', 'SOPHON_HYPERV_SWITCH'] if hypervisor_provider == 'hyperv' else
            ['SOPHON_VCENTER_URL', 'SOPHON_VCENTER_PASSWORD', 'SOPHON_VCENTER_DATACENTER',
             'SOPHON_VCENTER_CLUSTER', 'SOPHON_VCENTER_DATASTORE', 'SOPHON_VCENTER_NETWORK'] }}
+    - name: Check whether OS and app ISOs already exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ installer_iso_path }}"
+        - "{{ bundle_iso_path }}"
+        - "{{ backup_installer_iso_path }}"
+      register: _existing_media
+    - name: Check whether paired Backup Server secrets ISO exists
+      ansible.builtin.stat:
+        path: "{{ explicit_backup_secrets_iso_path if (explicit_backup_secrets_iso_path | length > 0) else backup_secrets_iso_default_path }}"
+      register: _backup_seed_stat
+    - name: Decide media build and Backup Server provisioning
+      ansible.builtin.set_fact:
+        sophon_media_missing: "{{ (_existing_media.results | selectattr('stat.exists', 'equalto', false) | list | length) > 0 }}"
+        sophon_provision_backup_vm: >-
+          {{ (attach_secrets_iso | bool)
+             and not ((lookup('env', 'SOPHON_SKIP_BACKUP_VM') | default('false', true) | lower) in ['1', 'true', 'yes'])
+             and (_backup_seed_stat.stat.exists | default(false)) }}
 
 - name: Prepare installation media
   ansible.builtin.import_playbook: 1-prepare.yml
+  when: (prepare_force | default(false) | bool) or (sophon_media_missing | default(true) | bool)
+
+- name: Ensure Sophon SFTP Backup Server VM is running when paired secrets ISO exists
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Provision Backup Server VM when paired seed ISO is present
+      when: sophon_provision_backup_vm | default(false) | bool
+      block:
+        - name: Authenticate with Proxmox for Backup Server
+          ansible.builtin.include_role:
+            name: proxmox
+          when: hypervisor_provider == 'proxmox'
+        - name: Authenticate with vCenter for Backup Server
+          ansible.builtin.include_role:
+            name: vcenter
+          when: hypervisor_provider == 'vcenter'
+        - name: Authenticate with Hyper-V for Backup Server
+          ansible.builtin.include_role:
+            name: hyperv
+          when: hypervisor_provider == 'hyperv'
+        - name: Create Backup Server VM with installer and unattended seed ISO
+          ansible.builtin.include_role:
+            name: "{{ hypervisor_provider }}"
+            tasks_from: backup_vm
 
 - name: Create InfraVM
   hosts: localhost
@@ -46,9 +90,9 @@
     - name: Hand off to the InfraVM console
       ansible.builtin.debug:
         msg: |
-          InfraVM is running. Step 3 installs CoreOS by itself and reboots; watch it on the VM's
-          hypervisor console (nothing to type). If it stops and says why, see "If the install stops"
-          in the README.
-          On the first boot, choose the password for the user core, log in, and run: sophon-deploy (step 4).
-          It first asks for the network (the VM starts on DHCP). At an air-gapped site, attach the
-          certificate disk (artifacts/secrets/sophon-certificates.iso) before running it.
+          InfraVM is running. Step 3 installs CoreOS automatically and reboots.
+          - If `artifacts/secrets/sophon-secrets.iso` was attached, networking, the `core` password,
+            and service deployment (Day-1 initialization if `/repository` is empty, or safe standby
+            auto-restore if snapshots exist) run completely unattended on first boot.
+          - If no unattended seed ISO was attached, open the hypervisor console on first boot to
+            choose the `core` password, log in, and run `sophon-deploy` interactively.

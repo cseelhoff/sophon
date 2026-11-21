@@ -1,6 +1,6 @@
 # Manual commands (without the wrapper scripts)
 
-`sophon-provision.sh` / `sophon-provision.ps1` run exactly the commands below after detecting your engine and socket.
+`sophon-build-isos.sh` / `sophon-provision.sh` (and `.ps1`) run the container commands below after detecting your engine and socket.
 Use this page when you want to see or customise them. Every setting is listed in [inputs.md](inputs.md).
 
 ## Build the tools image
@@ -38,7 +38,7 @@ docker run --rm -it -v "$(pwd):/workspace" -v /var/run/docker.sock:/var/run/dock
 docker run --rm -it -v "${PWD}:/workspace" -v /var/run/docker.sock:/var/run/docker.sock sophon-tools prepare
 ```
 
-Repeat runs rebuild the deployment ISO and the installer ISO (`artifacts/coreos/sophon-installer.iso`) only when an
+Repeat runs rebuild the apps ISO (`artifacts/bootstrap/sophon-apps.iso`) and the CoreOS installer ISO (`artifacts/coreos/sophon-coreos.iso`) only when an
 input changed (`-e prepare_force=true` as extra arguments forces it).
 
 ## Step 2: provision
@@ -104,23 +104,23 @@ Python or container:
 ```
 
 `-Switch` (or `SOPHON_HYPERV_SWITCH`) names an existing virtual switch (if omitted, the script lists them and asks);
-`-Path`, `-Name`, `-Cores`, `-MemoryMB` and `-DiskGB` are optional (`SOPHON_HYPERV_PATH` and `SOPHON_INFRAVM_*` are
-honoured). It creates the same VM as the remote provider, plus a third DVD drive for the secret certificate ISO
-(inserted if `artifacts\secrets\sophon-certificates.iso` exists, otherwise empty). Verified end to end on a real host.
+`-Path`, `-Name`, `-Cores`, `-MemoryMB`, `-DiskGB` and `-Recreate` are optional (`SOPHON_HYPERV_PATH` and `SOPHON_INFRAVM_*` are
+honoured). It creates the same VM as the remote provider, plus a third DVD drive for `artifacts\secrets\sophon-secrets.iso`
+(inserted if it exists, otherwise empty). Verified end to end on a real host.
 For an air-gapped site, `.\2-provision-hyperv-local.ps1 -AttachCertificates` inserts that ISO into the existing VM and
 `-DetachCertificates` ejects it (the same as `.\sophon-provision.ps1 attach-certificates` / `detach-certificates`).
 
 ## Certificates (air-gapped sites only)
 
-On a connected machine, to make the secret certificate ISO (`artifacts/secrets/sophon-certificates.iso`, label
+On a connected machine, to make or update `artifacts/secrets/sophon-secrets.iso` (label
 `SOPHON_CERTS`; see [certificates.md](certificates.md)). No engine socket is needed, but the `sophon-state` volume keeps
 the ACME account and issued certificate between runs:
 
 ```bash
-docker run --rm -it -v "$(pwd):/workspace" -v sophon-state:/state -e CF_DNS_API_TOKEN sophon-tools certificates issue --domain example.com
+docker run --rm -it -v "$(pwd):/workspace" -v sophon-state:/state -e SOPHON_ACME_EMAIL -e SOPHON_CF_TOKEN sophon-tools certificates issue --domain example.com
 ```
 
-It prompts for the ACME email (and the Cloudflare token if `CF_DNS_API_TOKEN` is unset, hidden). Options:
+It prompts for the ACME email and Cloudflare token (hidden) when `SOPHON_ACME_EMAIL` or `SOPHON_CF_TOKEN` are unset. Options:
 `--email`, `--timeout`, `--output-iso PATH`, `--output-file PATH` (also write the bare `acme.json`).
 
 ## Notes

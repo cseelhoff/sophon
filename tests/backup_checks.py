@@ -1,78 +1,71 @@
 #!/usr/bin/env python3
-"""V3 collector checks at the prepare/run and engine transport surfaces."""
+"""Backup collector, native Kopia action, and dump-proxy security checks."""
+from http.server import HTTPServer
 import io
 import json
+import os
 from pathlib import Path
+import shutil
+import socket
 import struct
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "roles/kopia/files"))
 import backup
+import dump_proxy
 
 
-def participant(number, name, group, stop=False, paths=(), dumps=(), volume=None):
-    labels = {"sophon.backup.version": "3", "sophon.backup.group": group,
-              "sophon.backup.stop": str(stop).lower()}
-    for collection, entries in (("paths", paths), ("dumps", dumps)):
-        for index, record in enumerate(entries):
-            for key, value in record.items():
-                labels[f"sophon.backup.{collection}.{index}.{key}"] = (
-                    json.dumps(value) if key == "argv" else value)
-    return {"Id": f"{number:064x}", "Name": "/" + name, "Image": "sha256:" + f"{number:064x}",
-            "Config": {"Image": "fixture:1", "Env": ["SECRET=NEVER_CAPTURE_ENV"], "Labels": labels},
-            "State": {"Running": True, "ExitCode": 0},
-            "Mounts": [{"Type": "volume", "Name": volume, "Destination": "/data", "RW": True}] if volume else []}
+def participant(number, name, labels=None, mounts=None):
+    return {
+        "Id": f"{number:064x}",
+        "Name": "/" + name,
+        "Image": "sha256:" + f"{number:064x}",
+        "Config": {
+            "Image": "fixture:1",
+            "Env": ["SECRET=NEVER_CAPTURE_ENV"],
+            "Labels": dict(labels or {}),
+        },
+        "State": {"Running": True, "ExitCode": 0},
+        "Mounts": list(mounts or []),
+    }
 
 
-class Engine:
-    def __init__(self, containers, source=None):
+class MockPodmanTransport:
+    def __init__(self, containers, dump_stdout=b"-- native fixture SQL\nCREATE TABLE fixture(id integer);\n",
+                 dump_exit=0):
         self.containers = {c["Id"]: c for c in containers}
         self.events = []
         self.execs = {}
-        self.source = source
-        self.dump_exit = 0
-        self.start_error = False
-        self.stop_error_once = False
-        self.stop_calls = 0
-        self.dump_stdout = b"-- native fixture SQL\nCREATE TABLE fixture(id integer);\n"
+        self.dump_stdout = dump_stdout
+        self.dump_exit = dump_exit
 
     def __call__(self, method, path, body, stream):
         self.events.append((method, path))
         parts = path.split("?")[0].strip("/").split("/")
-        if path.startswith("/containers/json"):
+        if method == "GET" and path.startswith("/containers/json"):
             return [{"Id": key} for key in self.containers]
-        if parts[0] == "containers":
+        if parts[0] == "containers" and len(parts) == 3:
             current = self.containers[parts[1]]
-            if parts[2] == "json":
+            if method == "GET" and parts[2] == "json":
                 return current
-            if parts[2] == "stop":
-                self.stop_calls += 1
-                if self.stop_error_once:
-                    self.stop_error_once = False
-                    raise OSError("fixture stop response lost")
-                current["State"].update(Running=False, ExitCode=0)
-                return None
-            if parts[2] == "start":
-                if self.start_error:
-                    raise RuntimeError("fixture restart failed")
-                if self.source:
-                    self.source()
-                current["State"]["Running"] = True
-                return None
-            if parts[2] == "exec":
+            if method == "POST" and parts[2] == "exec":
                 execution = f"{len(self.execs) + 1:064x}"
                 self.execs[execution] = body
                 return {"Id": execution}
-        if parts[0] == "exec":
-            if parts[2] == "json":
+        if parts[0] == "exec" and len(parts) == 3:
+            if method == "GET" and parts[2] == "json":
                 return {"Running": False, "ExitCode": self.dump_exit}
-            sql = self.dump_stdout
-            data = struct.pack(">BxxxI", 1, len(sql)) + sql
-            output = io.BytesIO(data)
-            return {"read": lambda size: output.read(min(size, 3)), "close": output.close}
+            if method == "POST" and parts[2] == "start":
+                payload = bytearray()
+                if self.dump_stdout:
+                    payload.extend(struct.pack(">BxxxI", 1, len(self.dump_stdout)) + self.dump_stdout)
+                buf = io.BytesIO(bytes(payload))
+                return {"read": lambda size: buf.read(min(size, 7)), "close": buf.close}
         raise AssertionError((method, path, body))
 
 
@@ -81,166 +74,375 @@ class CollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "restore.json").write_text('{"version":3,"volume":"recovery-state"}')
-            engine = Engine([])
+            engine = MockPodmanTransport([])
             with self.assertRaisesRegex(RuntimeError, "restoration"):
                 backup.prepare({"transport": engine}, {}, root, "fixture")
             self.assertEqual(engine.events, [])
 
-    def test_prepare_clones_before_restart_and_never_captures_environment(self):
+    def test_hot_collection_never_stops_containers_excludes_caches_and_never_captures_env(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = root / "volume"
-            source.mkdir()
-            (source / "identity").write_text("application-generated-key")
-            (source / "app.ini").write_text(
-                "APP_NAME = configured\n[database]\nPASSWD = DO_NOT_BACK_UP_CONFIG\n"
-                "[security]\nSECRET_KEY = application-generated-secret\n")
-            writer = participant(1, "writer", "app", True,
-                                 paths=[{"name": "identity", "volume": "app-data", "path": "identity"},
-                                        {"name": "identity.ini", "volume": "app-data", "path": "app.ini",
-                                         "ini": '["security.SECRET_KEY"]'}],
-                                 volume="app-data")
-            database = participant(2, "database", "app", dumps=[
-                {"name": "database.sql", "argv": ["pg_dumpall", "--clean"]}], volume="raw-db")
-            api = Engine([writer, database])
-            api.source = lambda: self.assertTrue(list((root / "stage").rglob("identity")))
-            result = backup.prepare({"transport": api}, {"app-data": str(source)}, root / "stage", "fixture-version")
-            manifest = json.loads((Path(result["path"]) / "manifest.json").read_text())
+            vol_root = root / "volumes"
+            gitea_vol = vol_root / "gitea_gitea_data/_data"
+            (gitea_vol / "git/lfs/objects/ab").mkdir(parents=True)
+            (gitea_vol / "git/lfs/objects/ab/oid123").write_text("lfs-binary-payload")
+            (gitea_vol / "git/lfs/tmp").mkdir(parents=True)
+            (gitea_vol / "git/lfs/tmp/partial").write_text("transient-upload")
+            (gitea_vol / "gitea/sessions").mkdir(parents=True)
+            (gitea_vol / "gitea/sessions/sess1").write_text("ephemeral-session")
+            (gitea_vol / "gitea/conf").mkdir(parents=True)
+            (gitea_vol / "gitea/conf/app.ini").write_text(
+                "APP_NAME = Sophon Git\n[database]\nPASSWD = DO_NOT_BACK_UP_DB_PASSWORD\n"
+                "[security]\nSECRET_KEY = generated-secret-key\n")
+
+            gitea = participant(
+                1, "gitea",
+                labels={
+                    "com.docker.compose.project": "gitea",
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.volumes": "/data",
+                    "sophon.backup.exclude": "git/lfs/tmp/,gitea/sessions/",
+                    "sophon.backup.ini": "/data/gitea/conf/app.ini:security.SECRET_KEY",
+                },
+                mounts=[{"Type": "volume", "Name": "gitea_gitea_data", "Destination": "/data", "RW": True}],
+            )
+            gitea_db = participant(
+                2, "gitea-db",
+                labels={
+                    "com.docker.compose.project": "gitea",
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.dump": 'exec pg_dumpall -U "$POSTGRES_USER" --clean --if-exists',
+                    "sophon.backup.dump.name": "postgres-cluster.sql",
+                    "sophon.backup.dump.restore": "postgres-cluster",
+                },
+                mounts=[{"Type": "volume", "Name": "gitea_db_data", "Destination": "/var/lib/postgresql", "RW": True}],
+            )
+            stateless = participant(
+                3, "coredns",
+                labels={"com.docker.compose.project": "coredns"},
+            )
+            disabled = participant(
+                4, "scratch",
+                labels={"sophon.backup.enable": "false"},
+                mounts=[{"Type": "volume", "Name": "scratch_vol", "Destination": "/scratch", "RW": True}],
+            )
+
+            api = MockPodmanTransport([gitea, gitea_db, stateless, disabled])
+            result = backup.prepare(
+                {"transport": api}, {}, root / "stage", "fixture-version", volumes_root=vol_root)
+            staged = Path(result["path"])
+            manifest = json.loads((staged / "manifest.json").read_text())
+
             self.assertEqual(manifest["version"], 3)
             self.assertEqual(manifest["sophon_version"], "fixture-version")
             self.assertEqual(manifest["failures"], [])
-            self.assertEqual(manifest["undeclared_volumes"], ["raw-db"])
+            self.assertEqual([g["name"] for g in manifest["groups"]], ["gitea"])
+            self.assertIn("gitea_db_data", manifest["undeclared_volumes"])
             self.assertNotIn("NEVER_CAPTURE_ENV", json.dumps(manifest))
-            self.assertFalse(any("archive" in event[1] or "api/backup" in event[1] for event in api.events))
-            self.assertTrue(writer["State"]["Running"])
-            self.assertFalse(list(Path(result["path"]).rglob("*.tar")))
-            self.assertEqual(next(Path(result["path"]).rglob("identity")).read_text(), "application-generated-key")
-            self.assertIn("CREATE TABLE", next(Path(result["path"]).rglob("database.sql")).read_text())
-            identity = next(Path(result["path"]).rglob("identity.ini")).read_text()
-            self.assertIn("application-generated-secret", identity)
-            self.assertNotIn("DO_NOT_BACK_UP_CONFIG", identity)
+            self.assertFalse(any(
+                ev[1].startswith("/containers/") and ("/stop" in ev[1] or "/start" in ev[1] or "/archive" in ev[1])
+                for ev in api.events
+            ))
+            self.assertTrue(gitea["State"]["Running"])
 
-    def test_missing_volume_fails_only_that_group_and_reports_how_to_add_it(self):
+            vol_stage = staged / "gitea/gitea/volume-data"
+            self.assertEqual((vol_stage / "git/lfs/objects/ab/oid123").read_text(), "lfs-binary-payload")
+            self.assertFalse((vol_stage / "git/lfs/tmp").exists())
+            self.assertFalse((vol_stage / "gitea/sessions").exists())
+            self.assertFalse((vol_stage / "gitea/conf/app.ini").exists())
+            kopiaignore = (vol_stage / ".kopiaignore").read_text()
+            self.assertIn("git/lfs/tmp/", kopiaignore)
+            self.assertIn("/gitea/conf/app.ini", kopiaignore)
+
+            ini_text = (staged / "gitea/gitea/ini-app.ini").read_text()
+            self.assertIn("generated-secret-key", ini_text)
+            self.assertNotIn("DO_NOT_BACK_UP_DB_PASSWORD", ini_text)
+            self.assertIn("CREATE TABLE", (staged / "gitea/gitea-db/postgres-cluster.sql").read_text())
+
+    def test_self_service_developer_workload_discovers_volume_and_custom_dump_without_ansible_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
-            bad = participant(1, "external", "external", True, paths=[
-                {"name": "data", "volume": "missing", "path": "state"}], volume="missing")
-            good = participant(2, "database", "good", dumps=[
-                {"name": "dump.sql", "argv": ["pg_dumpall"]}])
-            api = Engine([bad, good])
-            result = backup.prepare({"transport": api}, {}, Path(temporary), "fixture-version")
-            manifest = json.loads((Path(result["path"]) / "manifest.json").read_text())
+            root = Path(temporary)
+            vol_root = root / "volumes"
+            uploads = vol_root / "team_app_uploads/_data"
+            uploads.mkdir(parents=True)
+            (uploads / "report.pdf").write_bytes(b"%PDF-1.7-team-artifact")
+
+            app = participant(
+                1, "team-web",
+                labels={
+                    "com.docker.compose.project": "team-app",
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.volumes": "/var/lib/app/uploads",
+                },
+                mounts=[{"Type": "volume", "Name": "team_app_uploads", "Destination": "/var/lib/app/uploads", "RW": True}],
+            )
+            db = participant(
+                2, "team-db",
+                labels={
+                    "com.docker.compose.project": "team-app",
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.dump": 'exec pg_dump -Fc -Z0 -U "$POSTGRES_USER" "$POSTGRES_DB"',
+                    "sophon.backup.dump.name": "app.dump",
+                    "sophon.backup.dump.restore": "postgres-custom",
+                },
+                mounts=[{"Type": "volume", "Name": "team_app_pg", "Destination": "/var/lib/postgresql", "RW": True}],
+            )
+            api = MockPodmanTransport([app, db], dump_stdout=b"PGDMP-uncompressed-custom-stream")
+            result = backup.prepare({"transport": api}, {}, root / "stage", "fixture", volumes_root=vol_root)
+            staged = Path(result["path"])
+            self.assertEqual(result["manifest"]["failures"], [])
+            self.assertEqual(
+                (staged / "team-app/team-web/volume-var-lib-app-uploads/report.pdf").read_bytes(),
+                b"%PDF-1.7-team-artifact",
+            )
+            self.assertEqual(
+                (staged / "team-app/team-db/app.dump").read_bytes(),
+                b"PGDMP-uncompressed-custom-stream",
+            )
+
+    def test_missing_volume_fails_only_that_group(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bad = participant(
+                1, "external",
+                labels={"sophon.backup.enable": "true", "sophon.backup.group": "external",
+                        "sophon.backup.paths": "/data/state"},
+                mounts=[{"Type": "volume", "Name": "missing_vol", "Destination": "/data", "RW": True}],
+            )
+            good = participant(
+                2, "database",
+                labels={"sophon.backup.enable": "true", "sophon.backup.group": "good",
+                        "sophon.backup.dump": "pg_dumpall", "sophon.backup.dump.name": "dump.sql"},
+            )
+            api = MockPodmanTransport([bad, good])
+            result = backup.prepare(
+                {"transport": api}, {}, Path(temporary) / "stage", "fixture", volumes_root=Path(temporary) / "vols")
+            manifest = result["manifest"]
             self.assertEqual(manifest["failures"][0]["group"], "external")
-            self.assertIn("SOPHON_KOPIA_EXTRA_VOLUMES", manifest["failures"][0]["error"])
-            self.assertTrue(list(Path(result["path"]).rglob("dump.sql")))
-            self.assertTrue(bad["State"]["Running"])
+            self.assertIn("missing_vol", manifest["failures"][0]["error"])
+            self.assertEqual([g["name"] for g in manifest["groups"]], ["good"])
 
-    def test_retired_labels_are_rejected_without_decoding_a_legacy_recipe(self):
-        container = participant(1, "old", "old")
-        container["Config"]["Labels"] = {"sophon.backup.version": "1", "sophon.backup.spec": "{}"}
-        with self.assertRaisesRegex(RuntimeError, "version 3"):
-            backup.parse_spec(container)
+    def test_legacy_labels_without_enable_or_with_stop_are_rejected(self):
+        for labels in (
+            {"sophon.backup.version": "1", "sophon.backup.spec": "{}"},
+            {"sophon.backup.enable": "true", "sophon.backup.stop": "true", "sophon.backup.paths": "/data/a"},
+        ):
+            container = participant(1, "old", labels=labels,
+                                    mounts=[{"Type": "volume", "Name": "v", "Destination": "/data", "RW": True}])
+            with self.assertRaises(RuntimeError):
+                backup.parse_spec(container)
 
-    def test_failed_native_dump_does_not_publish_group_and_resumes_writer(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            writer = participant(1, "writer", "app", True)
-            database = participant(2, "database", "app", dumps=[
-                {"name": "database.sql", "argv": ["pg_dumpall"]}])
-            api = Engine([writer, database])
-            api.dump_exit = 7
-            result = backup.prepare({"transport": api}, {}, Path(temporary), "fixture")
-            self.assertEqual(result["manifest"]["groups"], [])
-            self.assertIn("exit 7", result["manifest"]["failures"][0]["error"])
-            self.assertTrue(writer["State"]["Running"])
-            self.assertFalse((Path(temporary) / "journal.json").exists())
-
-    def test_pending_restart_is_recovered_before_the_next_collection(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            writer = participant(1, "writer", "app", True)
-            api = Engine([writer])
-            api.start_error = True
-            backup.prepare({"transport": api}, {}, Path(temporary), "fixture")
-            self.assertFalse(writer["State"]["Running"])
-            self.assertTrue((Path(temporary) / "journal.json").exists())
-            api.start_error = False
-            with backup.locked(temporary) as root:
-                backup.recover({"transport": api}, root)
-            self.assertTrue(writer["State"]["Running"])
-            self.assertFalse((Path(temporary) / "journal.json").exists())
-
-    def test_partial_run_uploads_successful_groups_and_returns_failure(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            bad = participant(1, "missing", "bad", True, paths=[
-                {"name": "state", "volume": "missing", "path": "state"}], volume="missing")
-            good = participant(2, "database", "good", dumps=[
-                {"name": "dump.sql", "argv": ["pg_dumpall"]}])
-            api = Engine([bad, good])
-            environment = {"ENGINE_URL": "http://engine:2375", "BACKUP_VOLUMES": "{}",
-                           "SOURCE_ROOT": temporary, "SOPHON_VERSION": "fixture",
-                           "KOPIA_CLIENT_USERNAME": "backup", "KOPIA_CLIENT_HOSTNAME": "dev"}
-            completed = __import__("subprocess").CompletedProcess(
-                [], 0, json.dumps({"id": "a" * 32, "rootEntry": {"summ": {"numFailed": 0}}}), "")
-            with patch.object(backup, "engine_api", return_value={"transport": api}), \
-                    patch.object(backup.subprocess, "run", return_value=completed) as upload:
-                self.assertEqual(backup.run(environment), 1)
-            self.assertIn("--override-source=backup@dev:/sophon-state", upload.call_args.args[0])
-            report = json.loads((Path(temporary) / "last-run.json").read_text())
-            self.assertEqual(report["status"], "partial")
-            self.assertEqual(report["snapshot"]["id"], "a" * 32)
-            self.assertEqual(report["upload_status"], "complete")
-            self.assertEqual([group["name"] for group in report["groups"]], ["good"])
-
-    def test_recovery_refuses_a_replaced_writer_and_preserves_pending_intent(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            writer = participant(1, "writer", "app", True)
-            api = Engine([writer])
-            api.start_error = True
-            backup.prepare({"transport": api}, {}, Path(temporary), "fixture")
-            api.start_error = False
-            writer["Image"] = "sha256:" + "f" * 64
-            with backup.locked(temporary) as root, self.assertRaisesRegex(RuntimeError, "recovery incomplete"):
-                backup.recover({"transport": api}, root)
-            self.assertFalse(writer["State"]["Running"])
-            self.assertTrue((Path(temporary) / "journal.json").exists())
-
-    def test_lost_stop_response_is_settled_before_clearing_recovery_intent(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            writer = participant(1, "writer", "app", True)
-            api = Engine([writer])
-            api.stop_error_once = True
-            result = backup.prepare({"transport": api}, {}, Path(temporary), "fixture")
-            self.assertEqual(len(result["manifest"]["failures"]), 1)
-            self.assertEqual(api.stop_calls, 2)
-            self.assertTrue(writer["State"]["Running"])
-            self.assertFalse((Path(temporary) / "journal.json").exists())
-
-    def test_empty_native_export_is_not_accepted_as_successful_state(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            database = participant(1, "database", "app", dumps=[
-                {"name": "database.sql", "argv": ["pg_dumpall"]}])
-            api = Engine([database])
-            api.dump_stdout = b""
-            result = backup.prepare({"transport": api}, {}, Path(temporary), "fixture")
-            self.assertEqual(result["manifest"]["groups"], [])
-            self.assertIn("empty stdout", result["manifest"]["failures"][0]["error"])
-
-    def test_failed_intent_persistence_never_stops_a_writer(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            writer = participant(1, "writer", "app", True)
-            api = Engine([writer])
-            replace = backup.os.replace
-            failed = []
-
-            def unavailable(source, target):
-                if Path(target).name == "journal.json" and not failed:
-                    failed.append(True)
-                    raise OSError("fixture durable write unavailable")
-                return replace(source, target)
-
-            with patch.object(backup.os, "replace", side_effect=unavailable):
+    def test_failed_empty_or_truncated_native_dump_is_rejected(self):
+        for kwargs, expected in (
+            ({"dump_exit": 7}, "exit 7"),
+            ({"dump_stdout": b""}, "empty stdout"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                db = participant(
+                    1, "database",
+                    labels={"sophon.backup.enable": "true", "sophon.backup.group": "app",
+                            "sophon.backup.dump": "pg_dumpall", "sophon.backup.dump.name": "database.sql"},
+                )
+                api = MockPodmanTransport([db], **kwargs)
                 result = backup.prepare({"transport": api}, {}, Path(temporary), "fixture")
-            self.assertEqual(api.stop_calls, 0)
-            self.assertTrue(writer["State"]["Running"])
-            self.assertIn("durable write unavailable", result["manifest"]["failures"][0]["error"])
+                self.assertEqual(result["manifest"]["groups"], [])
+                self.assertIn(expected, result["manifest"]["failures"][0]["error"])
+        with tempfile.TemporaryDirectory() as temporary:
+            db = participant(
+                1, "database",
+                labels={"sophon.backup.enable": "true", "sophon.backup.group": "app",
+                        "sophon.backup.dump": "pg_dumpall", "sophon.backup.dump.name": "database.sql"},
+            )
+            truncated_payload = struct.pack(">BxxxI", 1, 9) + b"SELECT 1;"
+            buf = io.BytesIO(truncated_payload)
+            with patch.object(backup, "proxy_dump_stream",
+                              return_value={"read": buf.read, "close": buf.close}):
+                with self.assertRaisesRegex(RuntimeError, "truncated before completion status"):
+                    backup.dump({}, {"id": db["Id"], "name": "database", "running": True},
+                                {"name": "database.sql"}, Path(temporary) / "out.sql")
+
+    def test_dump_proxy_blocks_arbitrary_engine_requests_and_strips_env(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            sock_path = Path(temporary) / "podman.sock"
+            db = participant(
+                1, "gitea-db",
+                labels={
+                    "com.docker.compose.project": "gitea",
+                    "traefik.enable": "false",
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.dump": 'exec pg_dumpall -U "$POSTGRES_USER"',
+                    "sophon.backup.dump.name": "postgres-cluster.sql",
+                },
+            )
+            seen_exec = {}
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(str(sock_path))
+            srv.listen(16)
+
+            def serve_podman():
+                while True:
+                    try:
+                        conn, _ = srv.accept()
+                    except OSError:
+                        break
+                    with conn:
+                        raw = b""
+                        while b"\r\n\r\n" not in raw:
+                            chunk = conn.recv(4096)
+                            if not chunk:
+                                break
+                            raw += chunk
+                        if not raw:
+                            continue
+                        head, rest = raw.split(b"\r\n\r\n", 1)
+                        lines = head.decode().split("\r\n")
+                        method, path, _ = lines[0].split(" ", 2)
+                        headers = {k.lower(): v.strip() for k, v in (l.split(":", 1) for l in lines[1:] if ":" in l)}
+                        clen = int(headers.get("content-length", "0"))
+                        while len(rest) < clen:
+                            rest += conn.recv(clen - len(rest))
+                        if method == "GET" and path.startswith("/v1.41/containers/json"):
+                            body = json.dumps([{"Id": db["Id"]}]).encode()
+                            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                         + str(len(body)).encode() + b"\r\n\r\n" + body)
+                        elif method == "GET" and path == f"/v1.41/containers/{db['Id']}/json":
+                            body = json.dumps(db).encode()
+                            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                         + str(len(body)).encode() + b"\r\n\r\n" + body)
+                        elif method == "POST" and path == f"/v1.41/containers/{db['Id']}/exec":
+                            seen_exec["spec"] = json.loads(rest.decode())
+                            body = json.dumps({"Id": "e" * 64}).encode()
+                            conn.sendall(b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: "
+                                         + str(len(body)).encode() + b"\r\n\r\n" + body)
+                        elif method == "POST" and path == f"/v1.41/exec/{'e' * 64}/start":
+                            sql = b"SELECT 1;\n"
+                            frame = struct.pack(">BxxxI", 1, len(sql)) + sql
+                            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n"
+                                         b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame)
+                        elif method == "GET" and path == f"/v1.41/exec/{'e' * 64}/json":
+                            body = json.dumps({"Running": False, "ExitCode": 0}).encode()
+                            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                         + str(len(body)).encode() + b"\r\n\r\n" + body)
+                        else:
+                            conn.sendall(b"HTTP/1.1 500 Unexpected\r\nContent-Length: 0\r\n\r\n")
+
+            t_sock = threading.Thread(target=serve_podman, daemon=True)
+            t_sock.start()
+
+            service = dump_proxy.ProxyService({"socket": str(sock_path), "timeout": 10})
+            httpd = HTTPServer(("127.0.0.1", 0), dump_proxy.make_handler(service))
+            port = httpd.server_address[1]
+            t_http = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t_http.start()
+            try:
+                api = backup.engine_api(f"http://127.0.0.1:{port}", 10)
+                inventory = backup.proxy_inventory(api)
+                self.assertNotIn("NEVER_CAPTURE_ENV", json.dumps(inventory))
+                self.assertNotIn("traefik.enable", json.dumps(inventory))
+
+                for method, forbidden_path in (
+                    ("POST", f"/containers/{db['Id']}/exec"),
+                    ("POST", f"/containers/{db['Id']}/stop?t=10"),
+                    ("DELETE", f"/containers/{db['Id']}"),
+                    ("GET", f"/containers/{db['Id']}/archive?path=/var"),
+                    ("POST", f"/v1/dump/{db['Id']}/undeclared.sql"),
+                ):
+                    with self.assertRaises(backup.EngineError) as ctx:
+                        backup._http_request(api, method, forbidden_path, {})
+                    self.assertEqual(ctx.exception.status, 403)
+
+                out = Path(temporary) / "out.sql"
+                exported = backup.dump(api, {"id": db["Id"], "name": "gitea-db", "running": True},
+                                       {"name": "postgres-cluster.sql"}, out)
+                self.assertEqual(out.read_bytes(), b"SELECT 1;\n")
+                self.assertEqual(exported["bytes"], len(b"SELECT 1;\n"))
+                self.assertEqual(seen_exec["spec"]["Cmd"], ["sh", "-ec", 'exec pg_dumpall -U "$POSTGRES_USER"'])
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                srv.close()
+
+    @unittest.skipUnless(shutil.which("kopia"), "kopia binary required for live native action test")
+    def test_live_kopia_native_before_and_after_snapshot_actions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo_dir = root / "repo"
+            config_file = root / "config/repository.config"
+            cache_dir = root / "cache"
+            logs_dir = root / "logs"
+            source_root = root / "source"
+            sophon_state = root / "sophon-state"
+            vol_root = root / "volumes"
+            for d in (repo_dir, config_file.parent, cache_dir, logs_dir, source_root, sophon_state):
+                d.mkdir(parents=True, exist_ok=True)
+            (vol_root / "app_data/_data/keep").mkdir(parents=True)
+            (vol_root / "app_data/_data/keep/file.txt").write_text("important-state")
+            (vol_root / "app_data/_data/cache").mkdir(parents=True)
+            (vol_root / "app_data/_data/cache/drop.txt").write_text("transient-cache")
+
+            app = participant(
+                1, "app",
+                labels={
+                    "sophon.backup.enable": "true",
+                    "sophon.backup.group": "app",
+                    "sophon.backup.volumes": "/data",
+                    "sophon.backup.exclude": "cache/",
+                },
+                mounts=[{"Type": "volume", "Name": "app_data", "Destination": "/data", "RW": True}],
+            )
+
+            podman_mock = MockPodmanTransport([app])
+            service = dump_proxy.ProxyService({"transport": podman_mock})
+            httpd = HTTPServer(("127.0.0.1", 0), dump_proxy.make_handler(service))
+            t_http = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t_http.start()
+            try:
+                env = dict(
+                    os.environ,
+                    KOPIA_PASSWORD="test-repo-password",
+                    KOPIA_CONFIG_PATH=str(config_file),
+                    KOPIA_CACHE_DIRECTORY=str(cache_dir),
+                    KOPIA_LOG_DIR=str(logs_dir),
+                    KOPIA_CHECK_FOR_UPDATES="false",
+                    SOURCE_ROOT=str(source_root),
+                    VOLUMES_ROOT=str(vol_root),
+                    ENGINE_URL=f"http://127.0.0.1:{httpd.server_address[1]}",
+                    SOPHON_VERSION="live-action-test",
+                )
+                subprocess.run(
+                    ["kopia", "repository", "create", "filesystem", f"--path={repo_dir}",
+                     "--enable-actions", "--override-username=backup", "--override-hostname=sophon"],
+                    env=env, check=True, capture_output=True, text=True,
+                )
+                backup_script = str(Path(__file__).resolve().parents[1] / "roles/kopia/files/backup.py")
+                subprocess.run(
+                    ["kopia", "policy", "set", str(sophon_state),
+                     f"--before-snapshot-root-action={backup_script}",
+                     f"--after-snapshot-root-action={backup_script}",
+                     "--no-persist-action-script",
+                     "--action-command-mode=essential"],
+                    env=env, check=True, capture_output=True, text=True,
+                )
+                snap_proc = subprocess.run(
+                    ["kopia", "snapshot", "create", str(sophon_state), "--json"],
+                    env=env, capture_output=True, text=True,
+                )
+                self.assertEqual(snap_proc.returncode, 0, snap_proc.stdout + snap_proc.stderr)
+                snap = json.loads(snap_proc.stdout)
+                restored = root / "restored"
+                subprocess.run(
+                    ["kopia", "restore", snap["id"], str(restored)],
+                    env=env, check=True, capture_output=True, text=True,
+                )
+                self.assertEqual((restored / "app/app/volume-data/keep/file.txt").read_text(), "important-state")
+                self.assertFalse((restored / "app/app/volume-data/cache").exists())
+                report = json.loads((source_root / "last-run.json").read_text())
+                self.assertEqual(report["status"], "complete")
+                self.assertEqual(report["upload_status"], "complete")
+                self.assertEqual(list((source_root / "runs").iterdir()), [])
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

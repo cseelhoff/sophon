@@ -181,8 +181,9 @@ class CertificateTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('xorriso'), 'xorriso is only in the tools container')
     def test_the_secret_iso_has_its_label_and_carries_acme_json(self):
+        self.assertEqual(certificates.CERTIFICATE_ISO.name, 'sophon-secrets.iso')
         data = certificates.minimal_store(self.source.read_bytes(), 'fixture.example')
-        iso = certificates.write_certificate_iso(data, self.directory / 'secrets/sophon-certificates.iso')
+        iso = certificates.write_certificate_iso(data, self.directory / 'secrets/sophon-secrets.iso')
         self.assertEqual(stat.S_IMODE(iso.stat().st_mode), 0o600)
         with iso.open('rb') as stream:
             stream.seek(32808)
@@ -193,6 +194,25 @@ class CertificateTests(unittest.TestCase):
         self.assertEqual((extracted / 'acme.json').read_bytes(), data)
         self.assertEqual(sorted(path.name for path in extracted.iterdir()), ['acme.json'])
         self.assertFalse(list(iso.parent.glob('.sophon-certs-*')))
+
+        # Renewing acme.json into an existing sophon-secrets.iso preserves /sophon-seed.json!
+        stage_seed = self.directory / 'stage-seed'
+        stage_seed.mkdir()
+        (stage_seed / 'sophon-seed.json').write_text('{"version":1}\n')
+        (stage_seed / 'acme.json').write_bytes(b'old-acme')
+        subprocess.run(
+            ['xorriso', '-as', 'mkisofs', '-R', '-J', '-iso-level', '3', '-V', 'SOPHON_CERTS',
+             '-o', str(iso), str(stage_seed)],
+            check=True, capture_output=True,
+        )
+        iso.chmod(0o600)
+        certificates.write_certificate_iso(data, iso)
+        extracted2 = self.directory / 'extracted2'
+        subprocess.run(['xorriso', '-osirrox', 'on', '-indev', str(iso), '-extract', '/', str(extracted2)],
+                       check=True, capture_output=True)
+        self.assertEqual((extracted2 / 'acme.json').read_bytes(), data)
+        self.assertEqual((extracted2 / 'sophon-seed.json').read_text(), '{"version":1}\n')
+
         link = self.directory / 'link.iso'
         link.symlink_to(iso)
         with self.assertRaises(ValueError):
@@ -213,7 +233,7 @@ class CertificateTests(unittest.TestCase):
         state.mkdir(parents=True, mode=0o700)
         (state / 'acme.json').write_bytes(self.source.read_bytes())
         (state / 'acme.json').chmod(0o600)
-        iso = self.directory / 'out/sophon-certificates.iso'
+        iso = self.directory / 'out/sophon-secrets.iso'
         extra = self.directory / 'out/acme.json'
         with contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as progress, \
@@ -245,8 +265,11 @@ class CertificateTests(unittest.TestCase):
             'Path(target).chmod(0o600)\ntime.sleep(60)\n')
         executable.chmod(0o700)
         environment = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'])
+        environment.pop('SOPHON_DOMAIN', None)
+        environment.pop('SOPHON_ACME_EMAIL', None)
+        environment.pop('SOPHON_CF_TOKEN', None)
         environment.pop('CF_DNS_API_TOKEN', None)
-        iso = self.directory / 'secrets/sophon-certificates.iso'
+        iso = self.directory / 'secrets/sophon-secrets.iso'
         with patch.dict(os.environ, environment, clear=True), \
                 patch('getpass.getpass', return_value='FAKE_CLOUDFLARE_TOKEN') as secret, \
                 patch('builtins.input', side_effect=['fixture.example', 'admin@fixture.example']), \
@@ -287,19 +310,94 @@ class CertificateTests(unittest.TestCase):
         executable = self.directory / 'traefik'
         executable.write_text(f'#!{sys.executable}\nprint("FAKE_PRIVATE_ISSUER_DETAIL")\nraise SystemExit(27)\n')
         executable.chmod(0o700)
-        with patch.dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
-                        CF_DNS_API_TOKEN='FAKE_TOKEN'), \
+        environment = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
+                           SOPHON_DOMAIN='fixture.example', SOPHON_ACME_EMAIL='admin@fixture.example',
+                           SOPHON_CF_TOKEN='FAKE_TOKEN')
+        environment.pop('CF_DNS_API_TOKEN', None)
+        with patch.dict(os.environ, environment, clear=True), \
+                patch('builtins.input', side_effect=AssertionError('unexpected prompt')), \
+                patch('getpass.getpass', side_effect=AssertionError('unexpected secret prompt')), \
                 patch('certificates.write_certificate_iso') as write, \
                 contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit) as stopped:
-            certificates.main(['issue', '--domain', 'fixture.example', '--email', 'admin@fixture.example',
-                               '--state-dir', str(self.directory / 'failed')])
+            certificates.main(['issue', '--state-dir', str(self.directory / 'failed')])
         self.assertEqual(stopped.exception.code, 1)
         self.assertEqual(output.getvalue(), '')
         write.assert_not_called()
         self.assertIn('issuer exited', error.getvalue())
         self.assertNotIn('FAKE_PRIVATE_ISSUER_DETAIL', error.getvalue())
         self.assertEqual(stat.S_IMODE((self.directory / 'failed/fixture.example/issuer.log').stat().st_mode), 0o600)
+
+    def test_monthly_renewal_threshold_strips_domain_and_rolls_back_on_issuer_failure(self):
+        self.assertEqual(certificates.MIN_REMAINING_DAYS, 65)
+        leaf_45d = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'fixture.example')]))
+            .issuer_name(self.ca_name)
+            .public_key(self.key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(self.now - timedelta(days=45))
+            .not_valid_after(self.now + timedelta(days=45))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName('fixture.example'), x509.DNSName('*.fixture.example')]),
+                critical=False,
+            )
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.key.public_key()), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(self.key, hashes.SHA256())
+        )
+        key_pem = self.key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+        stale_store = {
+            'letsencrypt': {
+                'Account': {'Email': 'admin@fixture.example'},
+                'Certificates': [
+                    {
+                        'domain': {'main': 'fixture.example', 'sans': ['*.fixture.example']},
+                        'certificate': base64.b64encode(leaf_45d.public_bytes(serialization.Encoding.PEM)).decode(),
+                        'key': base64.b64encode(key_pem).decode(),
+                        'Store': 'default',
+                    },
+                    self.entry('other.example', ['*.other.example']),
+                ],
+            }
+        }
+        stale_bytes = json.dumps(stale_store).encode()
+        self.assertTrue(certificates.validate_data(stale_bytes, 'fixture.example'))
+        self.assertFalse(certificates.ready_to_export_data(stale_bytes, 'fixture.example'))
+        self.assertTrue(certificates.ready_to_export_data(self.source.read_bytes(), 'fixture.example'))
+
+        stripped = json.loads(certificates._strip_domain_certificate(stale_bytes, 'fixture.example'))
+        self.assertEqual(stripped['letsencrypt']['Account'], {'Email': 'admin@fixture.example'})
+        self.assertEqual([c['domain']['main'] for c in stripped['letsencrypt']['Certificates']], ['other.example'])
+
+        # If Traefik fails mid-renewal, the previous 45-day acme.json is restored intact.
+        state = self.directory / 'rollback-state' / 'fixture.example'
+        state.mkdir(parents=True, mode=0o700)
+        acme_path = state / 'acme.json'
+        acme_path.write_bytes(stale_bytes)
+        acme_path.chmod(0o600)
+        executable = self.directory / 'traefik'
+        executable.write_text(f'#!{sys.executable}\nraise SystemExit(19)\n')
+        executable.chmod(0o700)
+        environment = dict(
+            os.environ,
+            PATH=str(self.directory) + os.pathsep + os.environ['PATH'],
+            SOPHON_DOMAIN='fixture.example',
+            SOPHON_ACME_EMAIL='admin@fixture.example',
+            SOPHON_CF_TOKEN='FAKE_TOKEN',
+        )
+        with patch.dict(os.environ, environment, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                patch('certificates.write_certificate_iso') as write, \
+                self.assertRaises(SystemExit):
+            certificates.main(['issue', '--state-dir', str(self.directory / 'rollback-state')])
+        write.assert_not_called()
+        self.assertEqual(json.loads(acme_path.read_bytes()), stale_store)
+
 
     def test_service_file_is_staged_and_its_imported_copy_removed_but_never_forwarded(self):
         import deployment

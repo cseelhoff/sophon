@@ -9,6 +9,15 @@ services:
     cgroup: host
     networks:
       - proxy
+{% if infravm_ip | default('', true) != '' %}
+{% set arcane_clean_domain = (keycloak_domain | default(domain_name)) | lower | regex_replace('\\.$', '') %}
+    extra_hosts:
+      - "{{ keycloak_hostname | default('auth') }}.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "git.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "nexus.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "registry.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+      - "registry-push.{{ arcane_clean_domain }}:{{ infravm_ip }}"
+{% endif %}
     volumes:
       - /run/user/1000/podman/podman.sock:/var/run/docker.sock
       - arcane_data:/app/data
@@ -42,9 +51,6 @@ services:
       retries: 10
       start_period: 15s
     labels:
-      - 'sophon.backup.version=3'
-      - 'sophon.backup.group=arcane'
-      - 'sophon.backup.stop=false'
       - "coredns.dockerdiscovery.host={{ arcane_fqdn }}"
       - "traefik.enable=true"
       - "traefik.http.routers.arcane.rule=Host(`{{ arcane_fqdn }}`)"

@@ -1,5 +1,4 @@
 ---
-keycloak_backup_volumes: []
 # Keycloak configuration
 keycloak_image_name: "quay.io/keycloak/keycloak"
 keycloak_image_tag: "26.8.1"

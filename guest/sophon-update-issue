@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Narrow root helper to update /etc/issue.d/sophon.issue with non-secret deployment status.
+set -euo pipefail
+
+mode=${1:-}
+domain=${2:-sophon}
+ip=${3:-}
+detail=${4:-}
+
+for token in "$mode" "$domain" "$ip" "$detail"; do
+    if [[ $token =~ [^A-Za-z0-9._:/\ -] ]]; then
+        echo "Invalid characters in issue status." >&2
+        exit 1
+    fi
+done
+
+install -d -m 0755 /etc/issue.d
+case "$mode" in
+    progress)
+        cat > /etc/issue.d/sophon.issue <<EOF
+Sophon InfraVM — UNATTENDED DEPLOYMENT IN PROGRESS
+  Follow progress: journalctl -fu sophon-autodeploy
+
+EOF
+        ;;
+    day1|active)
+        cat > /etc/issue.d/sophon.issue <<EOF
+Sophon InfraVM — PRODUCTION ACTIVE (${domain}${ip:+ at $ip})
+  Services : https://${domain} | https://arcane.${domain} | https://git.${domain} | https://nexus.${domain} | https://auth.${domain} | https://kopia.${domain}
+  Backups  : Active scheduled snapshots enabled
+
+EOF
+        ;;
+    standby_restore)
+        cat > /etc/issue.d/sophon.issue <<EOF
+Sophon InfraVM — STANDBY RESTORE VERIFIED (${domain}${ip:+ at $ip}${detail:+, snapshot $detail})
+  Services : https://${domain} | https://arcane.${domain} | https://git.${domain} | https://nexus.${domain} | https://auth.${domain} | https://kopia.${domain}
+  Safety   : Cloudflare tunnel POSTPONED; Kopia READ-ONLY; scheduled backups PAUSED
+  Promote  : Open https://${domain} (or log in as core and run 'sophon-activate') after shutting down old prod
+
+EOF
+        ;;
+    failed)
+        cat > /etc/issue.d/sophon.issue <<EOF
+Sophon InfraVM — UNATTENDED DEPLOYMENT FAILED (${domain})
+  Inspect logs: sudo journalctl -u sophon-autodeploy --no-pager
+
+EOF
+        ;;
+    *)
+        echo "Unknown issue mode: $mode" >&2
+        exit 1
+        ;;
+esac
+chmod 0644 /etc/issue.d/sophon.issue
+agetty --reload 2>/dev/null || true

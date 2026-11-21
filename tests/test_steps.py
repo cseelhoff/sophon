@@ -163,17 +163,29 @@ def test_domain_deferred_until_services():
             {'ansible.builtin.set_fact': {
                 'proxmox_iso_storage_id': 'isos', 'proxmox_disk_storage_id': 'disks',
                 'infravm_disk_gb': 100, 'vnet_interface': 'vmbr0', 'vnet_vlan': '',
-                'infravm_isos': [{'filename': 'sophon-coreos-digest.iso'},
-                                 {'filename': 'sophon-deployment-digest.iso'}],
+                'infravm_isos': [{'filename': 'sophon-coreos-12345678.iso'},
+                                 {'filename': 'sophon-apps-abcdef01.iso'}],
             }},
             {'ansible.builtin.set_fact': {'devices': {key: config[key] for key in ('virtio', 'ide', 'boot', 'net', 'serial')}}},
             {'ansible.builtin.assert': {'that': [
-                "devices.virtio.virtio0 == 'disks:100'",
-                "devices.ide.ide2 == 'isos:iso/sophon-coreos-digest.iso,media=cdrom'",
-                "devices.ide.ide3 == 'isos:iso/sophon-deployment-digest.iso,media=cdrom'",
+                "devices.virtio.virtio0 == 'disks:100,discard=on'",
+                "devices.ide.ide2 == 'isos:iso/sophon-coreos-12345678.iso,media=cdrom'",
+                "devices.ide.ide3 == 'isos:iso/sophon-apps-abcdef01.iso,media=cdrom'",
+                "'ide0' not in devices.ide",
                 "devices.boot == 'order=virtio0;ide2'",
                 "devices.net.net0 == 'model=virtio,bridge=vmbr0'",
                 "devices.serial.serial0 == 'socket'",
+            ]}},
+            {'ansible.builtin.set_fact': {
+                'infravm_isos': [{'filename': 'sophon-coreos-12345678.iso'},
+                                 {'filename': 'sophon-apps-abcdef01.iso'},
+                                 {'filename': 'sophon-secrets-deadbeef.iso'}],
+            }},
+            {'ansible.builtin.set_fact': {'devices_with_seed': {'ide': config['ide']}}},
+            {'ansible.builtin.assert': {'that': [
+                "devices_with_seed.ide.ide0 == 'isos:iso/sophon-secrets-deadbeef.iso,media=cdrom'",
+                "devices_with_seed.ide.ide2 == 'isos:iso/sophon-coreos-12345678.iso,media=cdrom'",
+                "devices_with_seed.ide.ide3 == 'isos:iso/sophon-apps-abcdef01.iso,media=cdrom'",
             ]}},
         ])
         assert result.returncode == 0, result.stdout + result.stderr
@@ -227,7 +239,7 @@ def test_service_resolution_follows_entered_domain():
             canonical = domain.lower().rstrip('.')
             entries = [line for line in content.splitlines() if line.startswith(ip + ' ')]
             assert entries == [f'{ip} {name + "." if name else ""}{canonical}'
-                               for name in ('', 'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns', 'kopia')]
+                               for name in ('', 'status', 'traefik', 'auth', 'ldap', 'git', 'nexus', 'registry', 'registry-push', 'arcane', 'dns', 'kopia')]
             if canonical == 'second.example':
                 assert 'first.example' not in content and '192.0.2.3' not in content
         unchanged = hosts.read_text()
@@ -282,15 +294,14 @@ def test_cloudflared_connects_only_when_a_tunnel_was_found():
         assert service['pull_policy'] == 'never' and service['networks'] == ['proxy']
         assert service['environment'] == ['TUNNEL_TOKEN=CONNECTOR_TOKEN']
         assert 'ports' not in service
-        assert set(service['labels']) == {
-            'sophon.backup.version=3', 'sophon.backup.group=cloudflared', 'sophon.backup.stop=false'}
+        assert 'labels' not in service
         # No tunnel (no token or no egress): the role must not touch the network or engine.
         result, _ = run_fixture(directory, [{
             'ansible.builtin.include_tasks': str(ROOT / 'roles/cloudflared/tasks/main.yml'),
             'vars': {'coredns_cf_tunnel_id': '', 'coredns_cf_account_id': '', 'coredns_cf_token': 'unused'},
         }])
         assert result.returncode == 0, result.stdout + result.stderr
-        assert 'skipped=2' in result.stdout and 'failed=0' in result.stdout
+        assert 'changed=0' in result.stdout and 'failed=0' in result.stdout and 'skipped=' in result.stdout
     tasks = (ROOT / 'roles/cloudflared/tasks/main.yml').read_text()
     assert 'no_log: true' in tasks.split('Read the tunnel connector token')[1].split('- name:')[0]
     order = [task.get('name') for task in yaml.safe_load((ROOT / '4-configure.yml').read_text())[0]['tasks']]
@@ -497,7 +508,10 @@ def test_wildcard_certificate_labels_cover_every_certresolver_router():
             seen.add(router)
             assert f'traefik.http.routers.{router}.tls.domains[0].main={{{{' in text, (template.name, router)
             assert f'traefik.http.routers.{router}.tls.domains[0].sans=*.{{{{' in text, (template.name, router)
-    assert seen == {'dashboard', 'arcane', 'keycloak', 'gitea', 'coredns', 'ldap-certs'}, seen
+    assert seen == {
+        'dashboard', 'arcane', 'keycloak', 'gitea', 'nexus', 'nexus-registry', 'nexus-registry-push',
+        'coredns', 'ldap-certs', 'sophon-status',
+    }, seen
 
 
 def test_ldaps_reads_the_wildcard_certificate_by_its_main_domain():

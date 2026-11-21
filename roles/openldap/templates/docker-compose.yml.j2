@@ -12,9 +12,6 @@ services:
       - acme_data:/data:ro
       - ldap_certs:/output
     labels:
-      - 'sophon.backup.version=3'
-      - 'sophon.backup.group=traefik'
-      - 'sophon.backup.stop=false'
       - "traefik.enable=true"
       - "traefik.http.routers.ldap-certs.rule=Host(`{{ openldap_tls_domain }}`)"
       - "traefik.http.routers.ldap-certs.entrypoints=websecure"
@@ -74,14 +71,13 @@ services:
       SOPHON_USER_PASSWORD: {{ openldap_example_user_password | replace('$', '$$') | to_json }}
       SOPHON_ADMIN_PASSWORD: {{ openldap_example_admin_password | replace('$', '$$') | to_json }}
     labels:
-      - 'sophon.backup.version=3'
+      - 'sophon.backup.enable=true'
       - 'sophon.backup.group=ldap'
-      - 'sophon.backup.stop=false'
-      - 'sophon.backup.dumps.0.name=directory.ldif'
-      - 'sophon.backup.dumps.0.restore=ldap-subtree'
-      - 'sophon.backup.dumps.0.base={{ openldap_base_dn }}'
-      - 'sophon.backup.dumps.0.argv=["sh","-ec","exec slapcat -n 1 -s \"$$LDAP_INIT_ORG_DN\""]'
-      - 'sophon.backup.dumps.0.user=0'
+      - 'sophon.backup.dump=exec slapcat -n 1 -s "$$LDAP_INIT_ORG_DN"'
+      - 'sophon.backup.dump.name=directory.ldif'
+      - 'sophon.backup.dump.user=0'
+      - 'sophon.backup.dump.restore=ldap-subtree'
+      - 'sophon.backup.dump.base={{ openldap_base_dn }}'
       - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
     volumes:
       - openldap_database:/var/lib/ldap
@@ -214,6 +210,19 @@ services:
         objectClass: groupOfNames
         cn: arcane-admins
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+
+        dn: cn=nexus-admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        cn: nexus-admins
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+
+        dn: cn=nexus-developers,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        cn: nexus-developers
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_user_uid }},ou=people,{{ openldap_base_dn }}
         member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
 
         dn: cn=posix-users,ou=groups,{{ openldap_base_dn }}

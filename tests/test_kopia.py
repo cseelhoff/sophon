@@ -67,18 +67,19 @@ class KopiaRoleTests(unittest.TestCase):
         roles = [task["ansible.builtin.include_role"]["name"] for task in play["tasks"]
                  if "ansible.builtin.include_role" in task]
         self.assertEqual(roles[-1], "kopia")
-        for name in ("traefik", "gitea", "openldap", "keycloak", "arcane"):
+        for name in ("traefik", "gitea", "nexus", "openldap", "keycloak", "arcane"):
             self.assertLess(roles.index(name), roles.index("kopia"))
 
-    def test_every_core_template_uses_v3_and_databases_only_native_exports(self):
+    def test_core_templates_use_concise_hot_backup_labels_without_stopping_containers(self):
         variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
-        roles = ("traefik", "openldap", "keycloak", "gitea", "coredns", "cloudflared", "arcane", "kopia")
+        roles = ("traefik", "openldap", "keycloak", "gitea", "nexus", "coredns", "cloudflared", "arcane", "kopia")
         for role in roles:
             variables.update(yaml.safe_load((ROOT / f"roles/{role}/defaults/main.yml").read_text()))
         variables.update(domain_name="dev.invalid", infravm_ip="192.0.2.3", vnet_dns="1.1.1.1",
                          coredns_dns_port=53, coredns_cf_account_id="", coredns_cf_zone_id="",
-                         coredns_cf_tunnel_id="", cloudflared_token="dev-only",
-                         sophon_version="fixture", kopia_volume_names=["gitea_gitea_data", "traefik_traefik_data"])
+                         coredns_cf_tunnel_id="", cloudflared_token="dev-only", sophon_version="fixture",
+                         nexus_secrets_key="0" * 64, nexus_pull_password="pull-fixture-password")
+        expected_enabled = {"traefik", "ldap", "keycloak-db", "gitea", "gitea-db", "nexus", "nexus-db"}
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             tasks = [{"ansible.builtin.template": {
@@ -86,20 +87,39 @@ class KopiaRoleTests(unittest.TestCase):
                 "dest": str(directory / f"{role}.yml")}, "vars": variables} for role in roles]
             result = run_fixture(directory, tasks)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            seen_enabled = set()
             for role in roles:
                 compose = yaml.safe_load((directory / f"{role}.yml").read_text())
                 for name, service in compose["services"].items():
                     labels = service.get("labels", {})
                     if isinstance(labels, list):
                         labels = dict(label.split("=", 1) for label in labels)
-                    self.assertEqual(labels["sophon.backup.version"], "3", name)
+                    self.assertNotIn("sophon.backup.stop", labels, name)
+                    self.assertNotIn("sophon.backup.version", labels, name)
                     self.assertFalse(any(key.startswith(("sophon.restore.", "sophon.backup.covers.",
-                                                        "sophon.backup.archive-")) for key in labels))
-                    if name in ("gitea-db", "keycloak-db", "ldap"):
-                        self.assertFalse(any(key.startswith("sophon.backup.paths.") for key in labels))
-                        self.assertTrue(any(key.startswith("sophon.backup.dumps.") for key in labels))
+                                                        "sophon.backup.archive-", "sophon.backup.paths.")) for key in labels))
+                    if labels.get("sophon.backup.enable") == "true":
+                        seen_enabled.add(name)
+                    else:
+                        self.assertFalse(any(key.startswith("sophon.backup.") for key in labels), name)
+                    if name in ("gitea-db", "keycloak-db", "nexus-db", "ldap"):
+                        self.assertNotIn("sophon.backup.paths", labels)
+                        self.assertNotIn("sophon.backup.volumes", labels)
+                        self.assertIn("sophon.backup.dump", labels)
+                    if name == "nexus":
+                        self.assertEqual(
+                            labels["sophon.backup.paths"],
+                            "/nexus-data/blobs/hosted,/nexus-data/keystores,/nexus-data/etc",
+                        )
+                        self.assertNotIn("proxy-cache", labels["sophon.backup.paths"])
+                        self.assertNotIn("scratch", labels["sophon.backup.paths"])
+                    if name == "gitea":
+                        self.assertEqual(labels["sophon.backup.volumes"], "/data")
+                        self.assertIn("git/lfs/tmp/", labels["sophon.backup.exclude"])
+                        self.assertIn("/data/gitea/conf/app.ini:", labels["sophon.backup.ini"])
+            self.assertEqual(seen_enabled, expected_enabled)
 
-    def test_deployment_never_creates_a_collector_key_and_mounts_only_declared_volumes(self):
+    def test_deployment_never_creates_a_collector_key_and_uses_locked_down_dump_proxy(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             stacks = directory / "stacks"
@@ -117,6 +137,8 @@ class KopiaRoleTests(unittest.TestCase):
                 "args = sys.argv[1:]\n"
                 "if 'inspect' in args:\n"
                 f"    print('unhealthy' if pathlib.Path({str(state)!r}).exists() else 'healthy')\n"
+                "elif 'exec' in args:\n"
+                "    print(json.dumps({'status': 'complete', 'upload_status': 'complete', 'failures': []}))\n"
                 "elif 'logs' in args:\n"
                 "    sys.stderr.write('KOPIA_STARTUP_ERROR_JSON=' + json.dumps({\n"
                 "        'message': 'invalid repository password FIXTURE_SECRET_VALUE fixture-private-key'}) + '\\n')\n"
@@ -125,15 +147,14 @@ class KopiaRoleTests(unittest.TestCase):
             variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
             variables.update({name.removeprefix("SOPHON_").lower(): value
                               for name, value in service_values().items() if name.startswith("SOPHON_KOPIA_")})
-            variables.update(kopia_extra_volumes=[], sophon_version="fixture", domain_name="dev.invalid",
+            variables.update(sophon_version="fixture", domain_name="dev.invalid",
                              compose_stacks_dir=str(stacks),
                              compose_engine_host="unix:///fixture/podman.sock",
-                             kopia_image_tars=[str(archive), str(archive)])
+                             kopia_image_tars=[str(archive)])
             env = dict(os.environ, PATH=str(docker.parent) + os.pathsep + os.environ["PATH"],
                        ANSIBLE_ROLES_PATH=str(ROOT / "roles"))
             for attempt in range(2):
                 if attempt:
-                    variables["kopia_extra_volumes"] = ["site-workload-data"]
                     (stacks / "kopia/.env").write_text("BACKUP_PORTAINER_API_KEY=LEGACY_FIXTURE_KEY\nUI_ONLY=bad\n")
                 with patch.dict(os.environ, env, clear=True):
                     result = run_fixture(directory, [{"ansible.builtin.include_role": {
@@ -147,20 +168,20 @@ class KopiaRoleTests(unittest.TestCase):
                 self.assertNotIn("UI_ONLY", dotenv)
                 compose = yaml.safe_load((stacks / "kopia/compose.yaml").read_text())
                 kopia = compose["services"]["kopia"]
-                proxy = compose["services"]["engine-proxy"]
+                proxy = compose["services"]["dump-proxy"]
                 self.assertEqual(set(kopia["cap_add"]), {"DAC_OVERRIDE", "CHOWN", "FOWNER"})
                 self.assertEqual(kopia["user"], "0:0")
                 self.assertTrue(kopia["read_only"])
-                self.assertFalse(any("podman.sock" in mount for mount in kopia["volumes"]))
+                self.assertFalse(any("podman.sock" in str(mount) for mount in kopia["volumes"]))
+                self.assertIn({
+                    "type": "bind",
+                    "source": "/var/home/core/.local/share/containers/storage/volumes",
+                    "target": "/volumes",
+                    "read_only": True,
+                }, kopia["volumes"])
+                self.assertEqual(proxy["entrypoint"], ["python3", "/app/dump_proxy.py"])
                 self.assertFalse(proxy.get("ports"))
                 self.assertTrue(compose["networks"]["backup-engine"]["internal"])
-                mounts = json.loads(kopia["environment"]["BACKUP_VOLUMES"])
-                self.assertIn("gitea_gitea_data", mounts)
-                self.assertIn("traefik_traefik_data", mounts)
-                if attempt:
-                    self.assertIn("site-workload-data", mounts)
-                for name in mounts:
-                    self.assertIn("/volumes/" + name + ":ro", "\n".join(kopia["volumes"]))
 
             state.write_text("1")
             with patch.dict(os.environ, env, clear=True):
@@ -170,6 +191,74 @@ class KopiaRoleTests(unittest.TestCase):
             self.assertIn("invalid repository password", result.stdout + result.stderr)
             self.assertNotIn("FIXTURE_SECRET", result.stdout + result.stderr)
             self.assertNotIn("fixture-private-key", result.stdout + result.stderr)
+
+    def test_prepare_restore_and_tunnel_disable_templates_isolate_production_dns_and_certs(self):
+        variables = yaml.safe_load((ROOT / "group_vars/all.yml").read_text())
+        for role in ("coredns", "gitea", "arcane", "kopia"):
+            variables.update(yaml.safe_load((ROOT / f"roles/{role}/defaults/main.yml").read_text()))
+        variables.update(
+            domain_name="dev.invalid",
+            infravm_ip="192.0.2.3",
+            vnet_dns="1.1.1.1",
+            coredns_dns_port=53,
+            coredns_cf_token="live-token-for-dns01-only",
+            coredns_cf_account_id="acct-123",
+            coredns_cf_zone_id="zone-123",
+            coredns_cf_tunnel_id="tun-123",
+            cf_tunnel_enabled=False,
+            prepare_restore=True,
+            kopia_readonly=True,
+            sophon_version="fixture",
+            kopia_volume_names=["gitea_gitea_data", "traefik_traefik_data"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            tasks = [
+                {"ansible.builtin.template": {
+                    "src": str(ROOT / f"roles/{role}/templates/docker-compose.yml.j2"),
+                    "dest": str(directory / f"{role}.yml")}, "vars": variables}
+                for role in ("coredns", "gitea", "arcane", "kopia")
+            ]
+            # Verify cloudflared role skips completely when cf_tunnel_enabled is false.
+            tasks.append({"ansible.builtin.include_role": {"name": str(ROOT / "roles/cloudflared")}, "vars": variables})
+            # Verify traefik certificate validation guard skips during prepare_restore even with empty token.
+            traefik_guard = next(
+                task for task in yaml.safe_load((ROOT / "roles/traefik/tasks/main.yml").read_text())
+                if task.get("name") == "Validate imported certificates"
+            )
+            tasks.append(dict(traefik_guard, vars=dict(variables, coredns_cf_token="", traefik_acme_replace_existing=False)))
+            env = dict(os.environ, ANSIBLE_ROLES_PATH=str(ROOT / "roles"))
+            with patch.dict(os.environ, env, clear=True):
+                result = run_fixture(directory, tasks)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            coredns = yaml.safe_load((directory / "coredns.yml").read_text())["services"]["coredns"]
+            coredns_env = dict(entry.split("=", 1) for entry in coredns["environment"])
+            self.assertEqual(coredns_env["CF_TOKEN"], "")
+            self.assertEqual(coredns_env["CF_ACCOUNT_ID"], "")
+            self.assertEqual(coredns_env["CF_TUNNEL_ID"], "")
+            self.assertEqual(coredns_env["CF_ZONE_ID"], "")
+
+            gitea_services = yaml.safe_load((directory / "gitea.yml").read_text())["services"]
+            self.assertEqual(set(gitea_services), {"gitea", "gitea-db", "gitea-init"})
+            self.assertEqual(gitea_services["gitea"]["extra_hosts"], ["auth.dev.invalid:192.0.2.3"])
+            self.assertEqual(gitea_services["gitea-init"]["extra_hosts"], ["auth.dev.invalid:192.0.2.3"])
+            self.assertNotIn("gitea admin auth", "\n".join(gitea_services["gitea-init"]["command"]))
+
+            arcane = yaml.safe_load((directory / "arcane.yml").read_text())["services"]["arcane"]
+            self.assertEqual(
+                arcane["extra_hosts"],
+                [
+                    "auth.dev.invalid:192.0.2.3",
+                    "git.dev.invalid:192.0.2.3",
+                    "nexus.dev.invalid:192.0.2.3",
+                    "registry.dev.invalid:192.0.2.3",
+                    "registry-push.dev.invalid:192.0.2.3",
+                ],
+            )
+
+            kopia = yaml.safe_load((directory / "kopia.yml").read_text())["services"]["kopia"]
+            self.assertEqual(kopia["environment"]["KOPIA_READONLY"], "${KOPIA_READONLY:-false}")
 
 
 if __name__ == "__main__":

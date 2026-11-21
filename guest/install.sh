@@ -31,8 +31,11 @@ verify_bundle() {
     done < <(find "$media" -type f -print0)
     (cd "$media" && sha256sum --strict --check SHA256SUMS) ||
         die "Artifact checksum verification failed; do not install."
-    for path in install.sh runner.tar tools/busybox project/src/console.py \
-        guest/sophon-deploy guest/host-bootstrap.sh guest/sophon-network guest/sophon-set-password; do
+    for path in install.sh runner.tar tools/busybox project/src/console.py project/src/activate.py \
+        guest/sophon-deploy guest/sophon-restore guest/sophon-activate guest/sophon-refresh-certs \
+        guest/sophon-reconcile-gitops guest/sophon-seed-early guest/sophon-autodeploy \
+        guest/sophon-control-sync guest/sophon-web-activate guest/sophon-web-refresh-certs \
+        guest/sophon-update-issue guest/host-bootstrap.sh guest/sophon-network guest/sophon-set-password; do
         [[ -v 'listed[$path]' && -f $media/$path ]] || die "Missing required artifact: $path"
     done
 }
@@ -104,7 +107,9 @@ ignition_file() {
 }
 
 render_ignition() {
-    local media=$1 unit password_unit var_mount_unit
+    local media=$1 unit seed_early_unit autodeploy_unit password_unit serial_password_unit var_mount_unit
+    local ip_probe_path_unit ip_probe_service_unit web_activate_path_unit web_activate_service_unit
+    local web_refresh_certs_path_unit web_refresh_certs_service_unit
     unit='[Unit]
 Description=Sophon offline host bootstrap
 After=network-online.target user@1000.service
@@ -128,12 +133,45 @@ TimeoutStartSec=0
 [Install]
 WantedBy=multi-user.target
 '
-    # The console login is locked until the operator chooses a password here, before the first login prompt.
+    seed_early_unit='[Unit]
+Description=Sophon optional unattended seed ingestion
+ConditionPathExists=!/var/lib/sophon/autodeploy.done
+After=local-fs.target systemd-user-sessions.service
+Before=sophon-set-password.service sophon-set-password-serial.service getty@tty1.service serial-getty@ttyS0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/sophon-seed-early
+
+[Install]
+WantedBy=multi-user.target
+'
+    autodeploy_unit='[Unit]
+Description=Sophon unattended deployment and safe standby auto-restore
+ConditionPathExists=!/var/lib/sophon/autodeploy.done
+ConditionPathExists=/run/sophon-seed/sophon-seed.json
+After=sophon-seed-early.service sophon-host-bootstrap.service network-online.target user@1000.service
+Wants=network-online.target sophon-host-bootstrap.service
+Requires=user@1000.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/sophon-autodeploy
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+'
+    # Both tty1 and ttyS0 stay locked until the first-boot core password is set on either console;
+    # whichever finishes first stops the sibling unit so getty starts on both consoles immediately.
     password_unit='[Unit]
-Description=Sophon first-boot console password
+Description=Sophon first-boot console password (tty1)
 ConditionPathExists=!/var/lib/sophon-core-password-set
-After=systemd-user-sessions.service plymouth-quit-wait.service
-Before=getty@tty1.service getty.target
+After=sophon-seed-early.service systemd-user-sessions.service plymouth-quit-wait.service
+Before=getty@tty1.service
 
 [Service]
 Type=oneshot
@@ -143,7 +181,27 @@ StandardError=tty
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
-ExecStart=/usr/local/libexec/sophon-set-password
+ExecStart=/usr/local/libexec/sophon-set-password tty1
+
+[Install]
+WantedBy=multi-user.target
+'
+    serial_password_unit='[Unit]
+Description=Sophon first-boot serial console password (ttyS0)
+ConditionPathExists=!/var/lib/sophon-core-password-set
+ConditionPathExists=/dev/ttyS0
+After=sophon-seed-early.service systemd-user-sessions.service plymouth-quit-wait.service
+Before=serial-getty@ttyS0.service
+
+[Service]
+Type=oneshot
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+TTYReset=yes
+TTYVHangup=yes
+ExecStart=/usr/local/libexec/sophon-set-password ttyS0
 
 [Install]
 WantedBy=multi-user.target
@@ -156,14 +214,81 @@ Before=local-fs.target
 What=/dev/disk/by-label/sophon-var
 Where=/var
 Type=btrfs
-Options=noatime,user_subvol_rm_allowed
+Options=noatime,discard=async,user_subvol_rm_allowed
 
 [Install]
 RequiredBy=local-fs.target
 '
-    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"filesystems":[{"path":"/var","device":"/dev/disk/by-label/sophon-var","format":"btrfs","label":"sophon-var","wipeFilesystem":false,"mountOptions":["noatime","user_subvol_rm_allowed"]}],"files":['
+    ip_probe_path_unit='[Unit]
+Description=Watch for Sophon target-IP occupancy probe requests
+After=var.mount sophon-host-bootstrap.service
+
+[Path]
+PathExists=/var/lib/sophon/control/probe.request
+Unit=sophon-ip-probe.service
+
+[Install]
+WantedBy=multi-user.target
+'
+    ip_probe_service_unit='[Unit]
+Description=Run Sophon host target-IP occupancy probe
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/sophon-control-sync --probe
+'
+    web_activate_path_unit='[Unit]
+Description=Watch for Sophon web-triggered production activation requests
+After=var.mount sophon-host-bootstrap.service
+
+[Path]
+PathExists=/var/lib/sophon/control/activate.request
+Unit=sophon-web-activate.service
+
+[Install]
+WantedBy=multi-user.target
+'
+    web_activate_service_unit='[Unit]
+Description=Promote Sophon standby appliance to active production
+After=network-online.target user@1000.service
+Wants=network-online.target
+Requires=user@1000.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/sophon-web-activate
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=0
+'
+    web_refresh_certs_path_unit='[Unit]
+Description=Watch for Sophon web-triggered certificate refresh requests
+After=var.mount sophon-host-bootstrap.service
+
+[Path]
+PathExists=/var/lib/sophon/control/refresh-certs.request
+Unit=sophon-web-refresh-certs.service
+
+[Install]
+WantedBy=multi-user.target
+'
+    web_refresh_certs_service_unit='[Unit]
+Description=Rotate Sophon wildcard TLS certificates from attached SOPHON_CERTS disk
+After=network-online.target user@1000.service
+Wants=network-online.target
+Requires=user@1000.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/sophon-web-refresh-certs
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=0
+'
+    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"filesystems":[{"path":"/var","device":"/dev/disk/by-label/sophon-var","format":"btrfs","label":"sophon-var","wipeFilesystem":false,"mountOptions":["noatime","discard=async","user_subvol_rm_allowed"]}],"files":['
     ignition_file /etc/hostname 420 sophon-infravm; printf ','
     ignition_file /etc/sysctl.d/99-sophon-lowports.conf 420 $'net.ipv4.ip_unprivileged_port_start=0\n'; printf ','
+    ignition_file /etc/udev/rules.d/99-sophon-certs.rules 420 $'SUBSYSTEM=="block", ACTION=="add|change", ENV{ID_FS_LABEL}=="SOPHON_CERTS", TAG+="systemd", ENV{SYSTEMD_WANTS}+="sophon-ip-probe.service"\n'; printf ','
     ignition_file /etc/systemd/resolved.conf.d/nostub.conf 420 $'[Resolve]\nDNSStubListener=no\n'; printf ','
     ignition_file /etc/zincati/config.d/90-disable-auto-reboot.toml 420 $'[updates]\nenabled = false\n'; printf ','
     ignition_file /etc/ssh/sshd_config.d/40-sophon-console-only.conf 420 $'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'; printf ','
@@ -171,16 +296,43 @@ RequiredBy=local-fs.target
     ignition_file /etc/issue.d/sophon.issue 420 $'Sophon: log in as core, then run sophon-deploy (it asks for the network).\nIf setup failed: sudo systemctl restart sophon-host-bootstrap\nIf firmware boots the live ISO again, select the installed disk; do not reinstall.\n'; printf ','
     ignition_file /usr/local/bin/sophon-deploy 493 "$(cat "$media/guest/sophon-deploy")"; printf ','
     ignition_file /usr/local/bin/sophon-restore 493 "$(cat "$media/guest/sophon-restore")"; printf ','
+    ignition_file /usr/local/bin/sophon-activate 493 "$(cat "$media/guest/sophon-activate")"; printf ','
+    ignition_file /usr/local/bin/sophon-refresh-certs 493 "$(cat "$media/guest/sophon-refresh-certs")"; printf ','
+    ignition_file /usr/local/bin/sophon-reconcile-gitops 493 "$(cat "$media/guest/sophon-reconcile-gitops")"; printf ','
     ignition_file /usr/local/libexec/sophon-host-bootstrap 493 "$(cat "$media/guest/host-bootstrap.sh")"; printf ','
     ignition_file /usr/local/libexec/sophon-network 493 "$(cat "$media/guest/sophon-network")"; printf ','
-    ignition_file /usr/local/libexec/sophon-set-password 493 "$(cat "$media/guest/sophon-set-password")"
+    ignition_file /usr/local/libexec/sophon-set-password 493 "$(cat "$media/guest/sophon-set-password")"; printf ','
+    ignition_file /usr/local/libexec/sophon-seed-early 493 "$(cat "$media/guest/sophon-seed-early")"; printf ','
+    ignition_file /usr/local/libexec/sophon-autodeploy 493 "$(cat "$media/guest/sophon-autodeploy")"; printf ','
+    ignition_file /usr/local/libexec/sophon-control-sync 493 "$(cat "$media/guest/sophon-control-sync")"; printf ','
+    ignition_file /usr/local/libexec/sophon-web-activate 493 "$(cat "$media/guest/sophon-web-activate")"; printf ','
+    ignition_file /usr/local/libexec/sophon-web-refresh-certs 493 "$(cat "$media/guest/sophon-web-refresh-certs")"; printf ','
+    ignition_file /usr/local/libexec/sophon-update-issue 493 "$(cat "$media/guest/sophon-update-issue")"
     printf '],"links":[{"path":"/etc/systemd/user/sockets.target.wants/podman.socket","target":"/usr/lib/systemd/user/podman.socket"},{"path":"/etc/systemd/user/default.target.wants/podman-restart.service","target":"/usr/lib/systemd/user/podman-restart.service"}]},"systemd":{"units":[{"name":"var.mount","enabled":true,"contents":'
     json_string "$var_mount_unit"
+    printf '},{"name":"sophon-seed-early.service","enabled":true,"contents":'
+    json_string "$seed_early_unit"
     printf '},{"name":"sophon-host-bootstrap.service","enabled":true,"contents":'
     json_string "$unit"
+    printf '},{"name":"sophon-autodeploy.service","enabled":true,"contents":'
+    json_string "$autodeploy_unit"
+    printf '},{"name":"sophon-ip-probe.path","enabled":true,"contents":'
+    json_string "$ip_probe_path_unit"
+    printf '},{"name":"sophon-ip-probe.service","contents":'
+    json_string "$ip_probe_service_unit"
+    printf '},{"name":"sophon-web-activate.path","enabled":true,"contents":'
+    json_string "$web_activate_path_unit"
+    printf '},{"name":"sophon-web-activate.service","contents":'
+    json_string "$web_activate_service_unit"
+    printf '},{"name":"sophon-web-refresh-certs.path","enabled":true,"contents":'
+    json_string "$web_refresh_certs_path_unit"
+    printf '},{"name":"sophon-web-refresh-certs.service","contents":'
+    json_string "$web_refresh_certs_service_unit"
     printf '},{"name":"sophon-set-password.service","enabled":true,"contents":'
     json_string "$password_unit"
-    printf '}]}}\n'
+    printf '},{"name":"sophon-set-password-serial.service","enabled":true,"contents":'
+    json_string "$serial_password_unit"
+    printf '},{"name":"fstrim.timer","enabled":true}]}}\n'
 }
 
 partition_installed_storage() {

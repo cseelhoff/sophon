@@ -1,0 +1,59 @@
+---
+# Safely stop and delete a Sophon-managed VM on Proxmox (strictly verifying ownership marker).
+
+- name: Find Proxmox guests matching destroy_vm_name
+  ansible.builtin.set_fact:
+    destroy_named_guests: "{{ proxmox_vms.json.data | selectattr('name', 'eq', destroy_vm_name) | list }}"
+
+- name: Reject ambiguous guest names
+  ansible.builtin.assert:
+    that: destroy_named_guests | length <= 1
+    fail_msg: "Multiple guests use name '{{ destroy_vm_name }}'. Refusing to delete."
+
+- name: Stop and purge managed Proxmox VM
+  when: destroy_named_guests | length == 1
+  block:
+    - name: Require a non-template QEMU guest on the selected node
+      ansible.builtin.assert:
+        that:
+          - destroy_named_guests[0].type == 'qemu'
+          - destroy_named_guests[0].node == proxmox_node
+          - destroy_named_guests[0].template | default(0) | int == 0
+        fail_msg: "Guest '{{ destroy_vm_name }}' is not a non-template QEMU VM on {{ proxmox_node }}."
+    - name: Read existing VM config to verify Sophon ownership marker
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ proxmox_node }}/qemu/{{ destroy_named_guests[0].vmid }}/config"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: destroy_existing_config
+    - name: Refuse to delete unmanaged VM
+      ansible.builtin.assert:
+        that: destroy_existing_config.json.data.description | default('') == destroy_vm_marker
+        fail_msg: "VM '{{ destroy_vm_name }}' (VMID {{ destroy_named_guests[0].vmid }}) does not carry marker '{{ destroy_vm_marker }}'; refusing to delete."
+    - name: Stop managed Proxmox VM
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ destroy_named_guests[0].vmid }}"
+        state: stopped
+        force: true
+        timeout: 120
+      no_log: true
+    - name: Remove managed Proxmox VM and its disks
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_host }}"
+        api_port: "{{ proxmox_port }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ destroy_named_guests[0].vmid }}"
+        state: absent
+        purge: true
+        timeout: 180
+      no_log: true

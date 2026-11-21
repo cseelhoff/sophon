@@ -2,7 +2,7 @@
 
 import argparse
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import getpass
 import json
 import os
@@ -17,16 +17,21 @@ import time
 
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
 
 
-SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git')
+SERVICES = ('traefik', 'arcane', 'dns', 'ldap', 'auth', 'git', 'kopia')
 MAX_FILE = 2 * 1024 * 1024
 KEY_TYPE = 'EC256'
-# The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (it contains a private key).
+MIN_REMAINING_DAYS = 65
+MIN_REMAINING_SECONDS = MIN_REMAINING_DAYS * 86400
+BOOTSTRAP_CN = 'SOPHON PRE-RESTORE BOOTSTRAP'
+# The secret disk `issue` writes and the InfraVM reads: one ISO holding acme.json (and optional sophon-seed.json).
 CERTIFICATE_LABEL = 'SOPHON_CERTS'
-CERTIFICATE_ISO = Path(__file__).resolve().parents[1] / 'artifacts/secrets/sophon-certificates.iso'
+CERTIFICATE_ISO = Path(__file__).resolve().parents[1] / 'artifacts/secrets/sophon-secrets.iso'
 
 
 def validate(source, domain):
@@ -136,7 +141,7 @@ def import_file(source, domain, destination):
 
 
 def write_certificate_iso(data, output):
-    """Write the secret disk: a small ISO (label SOPHON_CERTS) holding acme.json, mode 0600 on this machine."""
+    """Write the secret disk: a small ISO (label SOPHON_CERTS) holding acme.json (preserving any sophon-seed.json), mode 0600."""
     if not shutil.which('xorriso'):
         raise ValueError('xorriso is missing; run this through the sophon-tools container.')
     output = Path(os.path.abspath(output))
@@ -145,12 +150,25 @@ def write_certificate_iso(data, output):
     output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix='sophon-certs-') as work:
         contents = Path(work) / 'contents'
-        contents.mkdir()
-        (contents / 'acme.json').write_bytes(data)
-        image = Path(work) / 'certificates.iso'
+        contents.mkdir(mode=0o700)
+        if output.is_file():
+            existing_seed = contents / 'sophon-seed.json'
+            res = subprocess.run(
+                ['xorriso', '-osirrox', 'on', '-indev', str(output), '-extract', '/sophon-seed.json', str(existing_seed)],
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode == 0 and existing_seed.is_file() and existing_seed.stat().st_size > 0:
+                existing_seed.chmod(0o400)
+            else:
+                existing_seed.unlink(missing_ok=True)
+        acme_path = contents / 'acme.json'
+        acme_path.write_bytes(data)
+        acme_path.chmod(0o400)
+        image = Path(work) / 'secrets.iso'
         subprocess.run(['xorriso', '-as', 'mkisofs', '-R', '-J', '-iso-level', '3', '-V', CERTIFICATE_LABEL,
                         '-o', str(image), str(contents)], check=True, capture_output=True)
-        descriptor, partial = tempfile.mkstemp(prefix='.sophon-certs-', suffix='.iso', dir=output.parent)
+        descriptor, partial = tempfile.mkstemp(prefix='.sophon-secrets-', suffix='.iso', dir=output.parent)
         try:
             with os.fdopen(descriptor, 'wb') as target, image.open('rb') as source:
                 os.fchmod(target.fileno(), 0o600)
@@ -161,19 +179,63 @@ def write_certificate_iso(data, output):
     return output
 
 
-def ready_to_export(source, domain):
-    if not source.exists():
-        return False
+def ready_to_export_data(data, domain):
     try:
-        expiries = validate(source, domain)
+        expiries = validate_data(data, domain)
     except (ValueError, KeyError, TypeError, UnicodeError):
         return False
     now = datetime.now(timezone.utc)
-    return all((datetime.fromisoformat(value) - now).total_seconds() > 30 * 86400 for value in expiries.values())
+    return all((datetime.fromisoformat(value) - now).total_seconds() > MIN_REMAINING_SECONDS for value in expiries.values())
+
+
+def ready_to_export(source, domain):
+    source = Path(source)
+    if not source.exists() or source.is_symlink():
+        return False
+    try:
+        return ready_to_export_data(source.read_bytes(), domain)
+    except OSError:
+        return False
+
+
+def _strip_domain_certificate(data, domain):
+    """Remove `domain`'s cached certificate while preserving `.letsencrypt.Account` so Traefik issues a fresh 90-day cert."""
+    target = normalize_domain(domain)
+    payload = json.loads(data)
+    le = payload.get('letsencrypt')
+    if isinstance(le, dict) and isinstance(le.get('Certificates'), list):
+        le['Certificates'] = [
+            entry for entry in le['Certificates']
+            if not (isinstance(entry, dict)
+                    and isinstance(entry.get('domain'), dict)
+                    and isinstance(entry['domain'].get('main'), str)
+                    and normalize_domain(entry['domain']['main']) == target)
+        ]
+    return json.dumps(payload, separators=(',', ':')).encode()
+
+
+def _write_private_bytes(path, data):
+    descriptor, temporary = tempfile.mkstemp(prefix='.acme-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'wb') as output:
+            os.fchmod(output.fileno(), 0o600)
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def issue(source, domain, email, token, timeout):
     directory = source.parent
+    previous_bytes = source.read_bytes() if source.exists() else None
+    if previous_bytes is not None:
+        try:
+            stripped = _strip_domain_certificate(previous_bytes, domain)
+            _write_private_bytes(source, stripped)
+        except (ValueError, KeyError, TypeError, UnicodeError):
+            pass
     dynamic = directory / 'routers.json'
     # One wildcard certificate (the domain and *.domain) covers every service name.
     dynamic.write_text(json.dumps({'http': {'routers': {'wildcard': {
@@ -199,26 +261,34 @@ def issue(source, domain, email, token, timeout):
     ]
     log_path = directory / 'issuer.log'
     descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, 'w') as log:
-        os.fchmod(log.fileno(), 0o600)
-        process = subprocess.Popen(arguments, env=environment, stdout=log, stderr=subprocess.STDOUT)
-        try:
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise ValueError(f'Certificate issuer exited. Inspect the private log: {log_path}')
-                if ready_to_export(source, domain):
-                    return
-                time.sleep(2)
-            raise ValueError(f'Certificate issuance timed out. Inspect the private log: {log_path}')
-        finally:
-            if process.poll() is None:
-                process.terminate()
+    try:
+        with os.fdopen(descriptor, 'w') as log:
+            os.fchmod(log.fileno(), 0o600)
+            process = subprocess.Popen(arguments, env=environment, stdout=log, stderr=subprocess.STDOUT)
             try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        raise ValueError(f'Certificate issuer exited. Inspect the private log: {log_path}')
+                    if ready_to_export(source, domain):
+                        return
+                    time.sleep(2)
+                raise ValueError(f'Certificate issuance timed out. Inspect the private log: {log_path}')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+    except Exception:
+        if previous_bytes is not None:
+            try:
+                _write_private_bytes(source, previous_bytes)
+            except OSError:
+                pass
+        raise
 
 
 def issue_main(argv):
@@ -232,6 +302,8 @@ def issue_main(argv):
     parser.add_argument('--output-iso', type=Path, default=CERTIFICATE_ISO,
                         help=f'secret ISO to write (label {CERTIFICATE_LABEL}; default: %(default)s)')
     parser.add_argument('--output-file', type=Path, help='also write the acme.json itself to this file')
+    parser.add_argument('--force', action='store_true',
+                        help=f'issue a fresh 90-day certificate even when more than {MIN_REMAINING_DAYS} days remain')
     options = parser.parse_args(argv)
 
     def prompt(label):
@@ -258,11 +330,15 @@ def issue_main(argv):
             raise ValueError('The private ACME store must not be a symlink.')
         if source.exists():
             source.chmod(0o600)
-        if not ready_to_export(source, domain):
+        if options.force or not ready_to_export(source, domain):
             email = options.email or os.environ.get('SOPHON_ACME_EMAIL') or prompt('ACME contact email: ')
             if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
                 raise ValueError('Supply a valid ACME contact email.')
-            token = os.environ.get('CF_DNS_API_TOKEN') or getpass.getpass('Cloudflare DNS API token: ', stream=sys.stderr)
+            token = (
+                os.environ.get('SOPHON_CF_TOKEN')
+                or os.environ.get('CF_DNS_API_TOKEN')
+                or getpass.getpass('Cloudflare DNS API token: ', stream=sys.stderr)
+            )
             if not token.strip():
                 raise ValueError('A Cloudflare API token is required for issuance.')
             if not shutil.which('traefik'):
@@ -291,10 +367,56 @@ def issue_main(argv):
     return 0
 
 
+def bootstrap_store(domain):
+    """Generate a temporary 24h self-signed acme.json so OpenLDAP can initialize slapd.d before sophon-restore."""
+    domain = normalize_domain(domain)
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, BOOTSTRAP_CN)])
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(hours=24))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(domain), x509.DNSName(f'*.{domain}')]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    entry = {
+        'domain': {'main': domain, 'sans': [f'*.{domain}']},
+        'certificate': base64.b64encode(cert_pem).decode('ascii'),
+        'key': base64.b64encode(key_pem).decode('ascii'),
+        'Store': 'default',
+    }
+    return json.dumps({'letsencrypt': {'Certificates': [entry]}}, separators=(',', ':')).encode('utf-8')
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ['issue']:
         return issue_main(argv[1:])
+    if argv[:1] == ['bootstrap']:
+        parser = argparse.ArgumentParser(description='Write a temporary pre-restore bootstrap acme.json')
+        parser.add_argument('--domain', required=True)
+        parser.add_argument('--output', type=Path, required=True)
+        options = parser.parse_args(argv[1:])
+        data = bootstrap_store(options.domain)
+        options.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(options.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(data)
+        return 0
     parser = argparse.ArgumentParser(description=__doc__, epilog='Connected issuance/renewal: python3 certificates.py issue')
     parser.add_argument('command', choices=['check'], help='Validate an acme.json file')
     parser.add_argument('--source', type=Path, required=True, help='Traefik-format acme.json')

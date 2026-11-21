@@ -3,8 +3,40 @@
 # does not connect to it. Without a connector Cloudflare answers error 1033, so
 # run one next to Traefik. Skipped when no tunnel was found (no token or no
 # egress): coredns/tasks/main.yml leaves coredns_cf_tunnel_id empty then.
+- name: Disconnect and remove any existing Cloudflare tunnel connector when tunnel publishing is disabled
+  when: not (coredns_cf_tunnel_enabled | default(cf_tunnel_enabled | default(true)) | bool)
+  block:
+    - name: Check for an existing cloudflared stack directory
+      ansible.builtin.stat:
+        path: "{{ compose_stacks_root | default('/var/lib/sophon/stacks') }}/cloudflared"
+      register: _cloudflared_stack
+
+    - name: Remove cloudflared container and persisted connector token
+      when: _cloudflared_stack.stat.exists
+      block:
+        - name: Remove cloudflared container if present
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+              - rm
+              - -f
+              - cloudflared
+          register: _cloudflared_rm
+          failed_when: >-
+            _cloudflared_rm.rc != 0 and
+            not ((_cloudflared_rm.stderr | default('') | lower) is search('no such container|not found'))
+          changed_when: _cloudflared_rm.rc == 0
+
+        - name: Remove persisted cloudflared stack directory and connector token
+          ansible.builtin.file:
+            path: "{{ compose_stacks_root | default('/var/lib/sophon/stacks') }}/cloudflared"
+            state: absent
+
 - name: Connect the Cloudflare tunnel
   when:
+    - coredns_cf_tunnel_enabled | default(cf_tunnel_enabled | default(true)) | bool
     - coredns_cf_tunnel_id | default('', true) != ''
     - coredns_cf_account_id | default('', true) != ''
   block:

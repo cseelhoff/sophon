@@ -11,33 +11,12 @@
     fail_msg: "Coarse backups need disjoint absolute host volume/work directories on the same filesystem."
   when: kopia_coarse_enabled | bool
 
-- name: Validate the site backup volume list
+- name: Validate Podman volumes directory path
   ansible.builtin.assert:
     that:
-      - kopia_extra_volumes is sequence and kopia_extra_volumes is not string and kopia_extra_volumes is not mapping
-      - kopia_extra_volumes | unique | length == kopia_extra_volumes | length
-    fail_msg: "SOPHON_KOPIA_EXTRA_VOLUMES must be a JSON array of unique named volumes."
-
-- name: Reset the declared backup volume list
-  ansible.builtin.set_fact:
-    kopia_volume_names: []
-
-- name: Read core roles' declared backup volumes
-  ansible.builtin.set_fact:
-    kopia_volume_names: >-
-      {{ (kopia_volume_names | default([])) +
-         (lookup('file', role_path ~ '/../' ~ item ~ '/defaults/main.yml') | from_yaml)[item ~ '_backup_volumes'] }}
-  loop: [traefik, openldap, keycloak, gitea, coredns, cloudflared, arcane, kopia]
-
-- name: Include site workload volumes
-  ansible.builtin.set_fact:
-    kopia_volume_names: "{{ (kopia_volume_names + kopia_extra_volumes) | unique | sort }}"
-
-- name: Require volume names, not host paths
-  ansible.builtin.assert:
-    that: item is string and item is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
-    fail_msg: "Backup volumes must be engine-managed volume names, never host paths."
-  loop: "{{ kopia_volume_names }}"
+      - kopia_volumes_dir is match('^/[A-Za-z0-9_./-]+$') and kopia_volumes_dir != '/'
+      - "'..' not in kopia_volumes_dir.split('/')"
+    fail_msg: "kopia_volumes_dir must be a normalized absolute host directory path."
 
 - name: Deploy the v3 backup stack
   ansible.builtin.include_role:
@@ -117,6 +96,34 @@
       ansible.builtin.fail:
         msg: "Kopia deployment failed: {{ kopia_startup_error }}"
 
+- name: Wait for the initial primary backup to finish when scheduled backups are enabled
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --host
+      - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+      - exec
+      - kopia
+      - cat
+      - /source/last-run.json
+  register: kopia_initial_backup
+  until: >-
+    kopia_initial_backup.rc == 0 and
+    (kopia_initial_backup.stdout | trim | length > 0) and
+    ((kopia_initial_backup.stdout | from_json).upload_status | default('')) != 'pending'
+  retries: 60
+  delay: 5
+  changed_when: false
+  when: kopia_backups_enabled | bool
+
+- name: Require a verified initial primary backup when scheduled backups are enabled
+  ansible.builtin.assert:
+    that:
+      - (kopia_initial_backup.stdout | from_json).status == 'complete'
+      - ((kopia_initial_backup.stdout | from_json).failures | default([])) == []
+    fail_msg: "Initial Kopia backup failed or was incomplete: {{ kopia_initial_backup.stdout }}"
+  when: kopia_backups_enabled | bool
+
 - name: Report the management-independent backup command
   ansible.builtin.debug:
-    msg: "Kopia ready. Run a backup from the console: podman exec kopia python3 /app/backup.py run"
+    msg: "Kopia ready. Run an on-demand backup from the console: podman exec kopia python3 /app/backup.py run"

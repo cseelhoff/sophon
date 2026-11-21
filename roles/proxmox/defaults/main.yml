@@ -1,6 +1,7 @@
 ---
 proxmox_username: root
-proxmox_user: "{{ proxmox_username }}@pam"
-# Set true when the Proxmox API presents a trusted certificate.
-proxmox_validate_certs: false
+proxmox_user: "{{ lookup('env', 'SOPHON_PROXMOX_USER') | default(proxmox_username ~ '@pam', true) }}"
+# Set true (or SOPHON_PROXMOX_VALIDATE_CERTS=true) when the Proxmox API presents a trusted certificate.
+proxmox_validate_certs: "{{ (lookup('env', 'SOPHON_PROXMOX_VALIDATE_CERTS') | default('false', true) | lower) in ['1', 'true', 'yes', 'on'] }}"
+proxmox_onboot: "{{ (lookup('env', 'SOPHON_PROXMOX_ONBOOT') | default('true', true) | lower) in ['1', 'true', 'yes', 'on'] }}"
 proxmox_cpu_type: "x86-64-v2-AES"

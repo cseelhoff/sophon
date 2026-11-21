@@ -51,21 +51,6 @@ def checksum(path):
     return digest.hexdigest(), size
 
 
-def tree_hash(root):
-    digest = hashlib.sha256()
-    for path in [root, *sorted(root.rglob("*"))]:
-        attributes = path.lstat()
-        digest.update(os.fsencode(str(path.relative_to(root))) + b"\0")
-        digest.update(f"{attributes.st_mode}:{attributes.st_uid}:{attributes.st_gid}:{attributes.st_mtime_ns}".encode())
-        if path.is_symlink():
-            digest.update(os.fsencode(os.readlink(path)))
-        elif stat.S_ISREG(attributes.st_mode):
-            digest.update(bytes.fromhex(checksum(path)[0]))
-        elif not stat.S_ISDIR(attributes.st_mode):
-            backup.fail("Unsupported special file in restored snapshot")
-    return digest.hexdigest()
-
-
 def make_plan(snapshot, targets, group):
     snapshot = Path(snapshot)
     if snapshot.is_symlink() or not snapshot.is_dir():
@@ -86,34 +71,68 @@ def make_plan(snapshot, targets, group):
     source = matching[0]
     if not source["paths"] and not source["dumps"]:
         backup.fail("This group is reconstructible; rerun Configure instead of restoring it")
-    current = {}
+    current, peers = {}, []
     for target in targets:
-        if (target["Config"].get("Labels") or {}).get(backup.PREFIX + "group") != group:
+        labels = target["Config"].get("Labels") or {}
+        has_backup_labels = any(k.startswith(backup.PREFIX) for k in labels)
+        project = labels.get("com.docker.compose.project", "").strip()
+        explicit_group = labels.get(backup.PREFIX + "group", "").strip()
+        if not has_backup_labels:
+            if project == group:
+                name = target["Name"].lstrip("/")
+                if backup.NAME.fullmatch(name):
+                    peers.append({
+                        "id": target["Id"],
+                        "name": name,
+                        "image_id": target["Image"],
+                        "signature": backup.signature(target),
+                        "running": target["State"]["Running"],
+                    })
+            continue
+        if explicit_group and explicit_group != group:
+            continue
+        if not explicit_group and project != group and target["Name"].lstrip("/") != group:
             continue
         spec = backup.parse_spec(target)
-        if spec is not None and spec["group"] == group:
+        if spec is None:
+            if (explicit_group or project) == group:
+                name = target["Name"].lstrip("/")
+                if backup.NAME.fullmatch(name):
+                    peers.append({
+                        "id": target["Id"],
+                        "name": name,
+                        "image_id": target["Image"],
+                        "signature": backup.signature(target),
+                        "running": target["State"]["Running"],
+                    })
+            continue
+        if spec["group"] == group:
             name = target["Name"].lstrip("/")
             if not backup.NAME.fullmatch(name) or name in current:
                 backup.fail("Ambiguous target member name")
             current[name] = (target, spec)
     if set(current) != {member["name"] for member in source["members"]}:
         backup.fail("Freshly configured group membership does not match the snapshot")
+    peers = [p for p in peers if p["name"] not in current]
+    # ponytail: Kopia verifies content hashes on restore; re-hashing multi-GB LFS trees twice in Python wastes 2x disk I/O
     plan = {"version": 3, "group": group, "manifest_sha256": checksum(manifest_path)[0],
-            "sophon_version": manifest["sophon_version"], "snapshot_sha256": tree_hash(snapshot),
-            "members": [], "paths": [], "dumps": []}
+            "sophon_version": manifest["sophon_version"],
+            "members": [], "peers": peers, "paths": [], "dumps": []}
     for member in source["members"]:
         target, spec = current[member["name"]]
-        if image_id(member["image_id"]) != image_id(target["Image"]):
+        image_id(target["Image"])
+        paths = {item["name"]: item for item in spec["paths"]}
+        dumps = {item["name"]: item for item in spec["dumps"]}
+        source_paths = [item for item in source["paths"] if item["member"] == member["name"]]
+        source_dumps = [item for item in source["dumps"] if item["member"] == member["name"]]
+        # ponytail: enforce exact image digest only on native DB/LDAP engine producers; allow rebuilt app images to restore files
+        if source_dumps and image_id(member["image_id"]) != image_id(target["Image"]):
             backup.fail("Target image differs from the snapshot: " + member["name"])
         mounts = [{key: mount.get(key) for key in ("Type", "Name", "Destination", "RW")}
                   for mount in target.get("Mounts", [])]
         plan["members"].append({"id": target["Id"], "name": member["name"],
                                 "image_id": target["Image"], "signature": backup.signature(target),
                                 "running": target["State"]["Running"], "mounts": mounts})
-        paths = {item["name"]: item for item in spec["paths"]}
-        dumps = {item["name"]: item for item in spec["dumps"]}
-        source_paths = [item for item in source["paths"] if item["member"] == member["name"]]
-        source_dumps = [item for item in source["dumps"] if item["member"] == member["name"]]
         if set(paths) != {item["name"] for item in source_paths} or set(dumps) != {item["name"] for item in source_dumps}:
             backup.fail("Current path/export declarations differ from the snapshot")
         for item in source_paths:
@@ -139,13 +158,14 @@ def make_plan(snapshot, targets, group):
                 backup.fail("Native dump checksum/size mismatch")
             declared = dumps[item["name"]]
             kind = declared.get("restore")
-            if kind not in ("postgres-cluster", "ldap-subtree"):
+            if kind not in ("postgres-cluster", "postgres-custom", "ldap-subtree"):
                 backup.fail("Native export needs an explicit supported restore declaration in current IaC")
             if kind == "ldap-subtree":
                 validate_ldif(path.read_bytes(), declared["base"], subtree_only=True)
             member_plan = next(entry for entry in plan["members"] if entry["name"] == member["name"])
-            native_mounts(member_plan, "validation-state", "/var/lib/postgresql" if kind == "postgres-cluster" else "/var/lib/ldap")
-            if kind == "postgres-cluster":
+            writable_dest = "/var/lib/postgresql" if kind in ("postgres-cluster", "postgres-custom") else "/var/lib/ldap"
+            native_mounts(member_plan, "validation-state", writable_dest)
+            if kind in ("postgres-cluster", "postgres-custom"):
                 values = dict(entry.split("=", 1) for entry in target["Config"]["Env"])
                 if (not values.get("POSTGRES_USER") or not values.get("PGDATA", "").startswith("/var/lib/postgresql/")
                         or ".." in values["PGDATA"].split("/")):
@@ -215,8 +235,54 @@ def merge_ini(source, target, selectors):
 
 def replace_paths(plan, snapshot, mounts):
     snapshot = Path(snapshot)
+    preserved_ini = {}
+    whole_volumes = {item["volume"] for item in plan["paths"] if item["path"] == "." and item["present"]}
     for item in plan["paths"]:
-        target = bounded_target(mounts[item["volume"]], item["path"])
+        if "ini" in item and item["present"] and item["volume"] in whole_volumes:
+            target = bounded_target(mounts[item["volume"]], item["path"])
+            if target.is_symlink() or not target.is_file():
+                backup.fail("INI identity merge requires real freshly configured files")
+            st = target.stat()
+            parent_chain = []
+            cursor = target.parent
+            vol_root = Path(mounts[item["volume"]])
+            while cursor != vol_root:
+                pst = cursor.stat()
+                parent_chain.append((cursor, pst.st_uid, pst.st_gid, pst.st_mode & 0o7777))
+                cursor = cursor.parent
+            preserved_ini[(item["volume"], item["path"])] = (
+                target.read_bytes(), st.st_uid, st.st_gid, st.st_mode & 0o7777,
+                (st.st_atime_ns, st.st_mtime_ns), list(reversed(parent_chain)),
+            )
+
+    def _order_key(entry):
+        if entry["path"] == ".":
+            return 0
+        if "ini" not in entry:
+            return 1
+        return 2
+
+    for item in sorted(plan["paths"], key=_order_key):
+        if item["path"] == ".":
+            target = Path(mounts[item["volume"]])
+            if target.is_symlink() or not target.is_dir():
+                backup.fail("Target mount must be a real named-volume directory")
+        else:
+            saved = preserved_ini.get((item["volume"], item["path"]))
+            if saved is not None:
+                data, uid, gid, mode, times_ns, parents = saved
+                for pdir, puid, pgid, pmode in parents:
+                    if not pdir.exists():
+                        pdir.mkdir(mode=pmode)
+                        os.chown(pdir, puid, pgid)
+                        os.chmod(pdir, pmode)
+                target_file = Path(mounts[item["volume"]]) / item["path"]
+                if not target_file.exists():
+                    target_file.write_bytes(data)
+                    os.chown(target_file, uid, gid)
+                    os.chmod(target_file, mode)
+                    os.utime(target_file, ns=times_ns)
+            target = bounded_target(mounts[item["volume"]], item["path"])
         source = artifact(snapshot, item, plan["group"])
         if not item["present"]:
             remove_path(target)
@@ -225,10 +291,10 @@ def replace_paths(plan, snapshot, mounts):
         elif item["path"] == ".":
             for entry in target.iterdir():
                 remove_path(entry)
-            result = subprocess.run(["cp", "--archive", "--reflink=auto", "--", str(source) + "/.", str(target) + "/"],
-                                    capture_output=True, text=True, timeout=3600)
-            if result.returncode:
-                backup.fail("Whole-volume state replacement failed: " + result.stderr)
+            for src_entry in source.iterdir():
+                if src_entry.name == ".kopiaignore":
+                    continue
+                backup.clone(src_entry, target / src_entry.name)
         else:
             remove_path(target)
             backup.clone(source, target)
@@ -348,18 +414,6 @@ def remove_helpers(api, root, state):
         save(root, state)
 
 
-def run_helper(api, record):
-    deadline = time.monotonic() + 86400
-    while time.monotonic() < deadline:
-        value = backup.engine(api, "GET", f"/containers/{record['id']}/json")
-        if not value["State"]["Running"]:
-            if value["State"]["ExitCode"]:
-                backup.fail("Restore helper failed; inspect its logs before retrying: " + record["name"])
-            return
-        time.sleep(.2)
-    backup.fail("Restore helper timed out")
-
-
 def native_mounts(member, state_volume, writable):
     result = [state_volume + ":/restore:ro"]
     for mount in member["mounts"]:
@@ -406,12 +460,23 @@ SQL
 '''
 
 
-def restore_dump(api, root, state, item, image, volume):
+POSTGRES_CUSTOM_IMPORT = r'''
+set -eu
+target_db=$1 dump=$2
+i=0; until pg_isready -q; do i=$((i+1)); test "$i" -lt 90; sleep 1; done
+psql -X -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -v target_db="$target_db" -v owner="$POSTGRES_USER" <<'SQL'
+SELECT format('CREATE DATABASE %I OWNER %I', :'target_db', :'owner') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname=:'target_db') \gexec
+SQL
+pg_restore --clean --if-exists --no-owner --role="$POSTGRES_USER" --exit-on-error -U "$POSTGRES_USER" -d "$target_db" "$dump" > /tmp/sophon-import.log 2>&1
+'''
+
+
+def restore_dump(api, root, state, item, volume):
     plan = state["plan"]
     member = next(m for m in plan["members"] if m["name"] == item["member"])
     live = current(api, member)
     source = "/restore/snapshot/" + item["snapshot_path"]
-    if item["restore"] == "postgres-cluster":
+    if item["restore"] in ("postgres-cluster", "postgres-custom"):
         values = dict(entry.split("=", 1) for entry in live["Config"]["Env"])
         pgdata = values.get("PGDATA", "")
         if not pgdata.startswith("/var/lib/postgresql/") or ".." in pgdata.split("/"):
@@ -419,13 +484,17 @@ def restore_dump(api, root, state, item, image, volume):
         record = helper(api, root, state, member["image_id"], native_mounts(
             member, volume, "/var/lib/postgresql"), ["postgres", "-c", "listen_addresses="], ["docker-entrypoint.sh"],
             ["POSTGRES_USER=" + values["POSTGRES_USER"], "PGDATA=" + pgdata], database=True)
-        backup.control(api, record["id"], [
-            "sh", "-ceu", POSTGRES_IMPORT, "restore", "sophon_temp_" + state["owner"][:12],
-            "sophon_temp_" + state["owner"][:12], "sophon_system_" + state["owner"][:12], source])
+        if item["restore"] == "postgres-cluster":
+            backup.control(api, record["id"], [
+                "sh", "-ceu", POSTGRES_IMPORT, "restore", "sophon_temp_" + state["owner"][:12],
+                "sophon_temp_" + state["owner"][:12], "sophon_system_" + state["owner"][:12], source])
+        else:
+            target_db = values.get("POSTGRES_DB") or values["POSTGRES_USER"]
+            backup.control(api, record["id"], [
+                "sh", "-ceu", POSTGRES_CUSTOM_IMPORT, "restore", target_db, source])
     else:
         record = helper(api, root, state, member["image_id"], native_mounts(
             member, volume, "/var/lib/ldap"), ["sleep 86400"], ["/bin/sh", "-c"])
-        data_mount = next(m for m in member["mounts"] if m["Destination"] == "/var/lib/ldap")
         owner = backup.control(api, record["id"], ["stat", "-c", "%u:%g", "/var/lib/ldap"]).decode().strip()
         if not re.fullmatch(r"[0-9]+:[0-9]+", owner):
             backup.fail("Invalid LDAP data ownership")
@@ -444,12 +513,11 @@ def restore_dump(api, root, state, item, image, volume):
             save(root, state)
         elif destination.is_symlink() or list(checksum(destination)) != saved:
             backup.fail("Prepared LDAP import changed; targets were not cleared")
-        state["clear_volume"] = data_mount["Name"]
-        save(root, state)
-        cleaner = helper(api, root, state, image, [volume + ":/restore:ro",
-                         data_mount["Name"] + ":/targets/" + data_mount["Name"]],
-                         ["files", "--clear-volume", data_mount["Name"]], ["python3", "/app/restore.py"])
-        run_helper(api, cleaner)
+        backup.control(api, record["id"], [
+            "sh", "-ceu",
+            'for p in /var/lib/ldap/* /var/lib/ldap/.[!.]* /var/lib/ldap/..?*; do '
+            '[ -e "$p" ] || [ -L "$p" ] || continue; rm -rf -- "$p"; done'
+        ])
         backup.control(api, record["id"], ["slapadd", "-n", "1", "-w", "-F", "/etc/ldap/slapd.d",
                                           "-l", "/restore/imports/" + destination.name])
         backup.control(api, record["id"], ["chown", "-R", owner, "/var/lib/ldap"])
@@ -457,26 +525,35 @@ def restore_dump(api, root, state, item, image, volume):
     remove_helpers(api, root, state)
 
 
-def apply(api, root, approve=False, image=None, state_volume=None):
+def apply(api, root, approve=False, state_volume=None, volumes_root="/volumes"):
     if not approve:
         backup.fail("Restore requires explicit approval (--approve); native dumps are trusted executable input")
-    if not image or not state_volume or not backup.NAME.fullmatch(state_volume):
-        backup.fail("Restore needs an immutable helper image and an owned state volume")
-    image_id(image)
+    if not state_volume or not backup.NAME.fullmatch(state_volume):
+        backup.fail("Restore needs an owned state volume")
     state = state_file(root)
     if state["phase"] == "complete":
         backup.fail("This restore already completed; inspect it or clean up its state")
     plan = state["plan"]
-    if tree_hash(root / "snapshot") != plan["snapshot_sha256"]:
+    snapshot_dir = root / "snapshot"
+    manifest_path = snapshot_dir / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file() or checksum(manifest_path)[0] != plan["manifest_sha256"]:
         backup.fail("Staged snapshot changed after planning; no restore targets were modified")
-    for member in plan["members"]:
+    for item in plan["dumps"]:
+        dump_path = artifact(snapshot_dir, item, plan["group"])
+        if dump_path.is_symlink() or not dump_path.is_file() or checksum(dump_path) != (item["sha256"], item["bytes"]):
+            backup.fail("Staged snapshot changed after planning; no restore targets were modified")
+    peers = plan.get("peers", [])
+    for member in [*plan["members"], *peers]:
         current(api, member)
     remove_helpers(api, root, state)
     state["approved"] = True
     state["phase"] = "stopping"
     save(root, state)
     producers = {item["member"] for item in plan["dumps"]}
-    stop_order = sorted(plan["members"], key=lambda member: (member["name"] in producers, member["name"]))
+    stop_order = [
+        *sorted(peers, key=lambda p: p["name"]),
+        *sorted(plan["members"], key=lambda member: (member["name"] in producers, member["name"])),
+    ]
     try:
         for member in stop_order:
             if current(api, member)["State"]["Running"]:
@@ -486,7 +563,7 @@ def apply(api, root, approve=False, image=None, state_volume=None):
         mutated = {item["volume"] for item in plan["paths"]}
         for item in plan["dumps"]:
             member = next(m for m in plan["members"] if m["name"] == item["member"])
-            destination = "/var/lib/postgresql" if item["restore"] == "postgres-cluster" else "/var/lib/ldap"
+            destination = "/var/lib/postgresql" if item["restore"] in ("postgres-cluster", "postgres-custom") else "/var/lib/ldap"
             mutated.add(next(m["Name"] for m in member["mounts"] if m["Destination"] == destination))
         for value in targets(api):
             if value["State"]["Running"] and any(m.get("Type") == "volume" and m.get("Name") in mutated
@@ -494,19 +571,22 @@ def apply(api, root, approve=False, image=None, state_volume=None):
                 backup.fail("An unrelated writer is using a restore target volume")
         state["phase"] = "files"
         save(root, state)
-        binds = [state_volume + ":/restore:ro"] + [
-            volume + ":/targets/" + volume for volume in sorted({item["volume"] for item in plan["paths"]})]
+        # ponytail: restore files directly into mounted /volumes instead of spawning ephemeral Podman file-helper containers
         if plan["paths"]:
-            record = helper(api, root, state, image, binds, ["files"], ["python3", "/app/restore.py"])
-            run_helper(api, record)
-            remove_helpers(api, root, state)
+            mounts = {vol: str(backup.resolve_volume(vol, volumes_root=volumes_root))
+                      for vol in {item["volume"] for item in plan["paths"]}}
+            replace_paths(plan, snapshot_dir, mounts)
         state["phase"] = "importing"
         save(root, state)
         for item in plan["dumps"]:
-            restore_dump(api, root, state, item, image, state_volume)
+            restore_dump(api, root, state, item, state_volume)
         state["phase"] = "starting"
         save(root, state)
-        for member in sorted(plan["members"], key=lambda m: (m["name"] not in producers, m["name"])):
+        start_order = [
+            *sorted(plan["members"], key=lambda m: (m["name"] not in producers, m["name"])),
+            *sorted(peers, key=lambda p: p["name"]),
+        ]
+        for member in start_order:
             if member["running"]:
                 backup.engine(api, "POST", f"/containers/{member['id']}/start")
                 if not current(api, member)["State"]["Running"]:
@@ -552,7 +632,7 @@ def connection_environment(stdin=False):
 
 
 def plan(api, root, environment, snapshot_id, group):
-    runtime.connect(environment)
+    runtime.connect(environment, readonly=True)
     if snapshot_id == "latest":
         source = environment["KOPIA_CLIENT_USERNAME"] + "@" + environment["KOPIA_CLIENT_HOSTNAME"] + ":/sophon-state"
         snapshots = json.loads(runtime.kopia(environment, "snapshot", "list", source, "--json"))
@@ -584,16 +664,57 @@ def plan(api, root, environment, snapshot_id, group):
     return state
 
 
+GROUP_ORDER = ("traefik", "ldap", "keycloak", "gitea")
+
+
+def inspect_snapshot(environment, snapshot_id, selected_group=None):
+    runtime.connect(environment, readonly=True)
+    source = environment["KOPIA_CLIENT_USERNAME"] + "@" + environment["KOPIA_CLIENT_HOSTNAME"] + ":/sophon-state"
+    snapshots = json.loads(runtime.kopia(environment, "snapshot", "list", source, "--json"))
+    if not snapshots:
+        backup.fail("No snapshots exist for the configured source")
+    if snapshot_id == "latest":
+        chosen = max(snapshots, key=lambda value: value["endTime"])
+    else:
+        if not re.fullmatch(r"[a-f0-9]{32}", snapshot_id):
+            backup.fail("Snapshot must be latest or an exact snapshot ID")
+        matches = [value for value in snapshots if value["id"] == snapshot_id]
+        if not matches:
+            backup.fail(f"Snapshot {snapshot_id} not found for {source}")
+        chosen = matches[0]
+    tree = json.loads(runtime.kopia(environment, "show", chosen["rootEntry"]["obj"]))
+    manifest_obj = next((e["obj"] for e in tree.get("entries", []) if e.get("name") == "manifest.json"), None)
+    if not manifest_obj:
+        backup.fail("Snapshot is missing manifest.json")
+    manifest = json.loads(runtime.kopia(environment, "show", manifest_obj))
+    failed = {item["group"] for item in manifest.get("failures", [])}
+    groups = [
+        group for group in manifest.get("groups", [])
+        if (group.get("paths") or group.get("dumps")) and group["name"] not in failed
+    ]
+    if selected_group:
+        groups = [group for group in groups if group["name"] == selected_group]
+        if not groups:
+            backup.fail(f"Snapshot {chosen['id']} has no restorable state for group '{selected_group}'")
+    groups.sort(key=lambda g: (GROUP_ORDER.index(g["name"]) if g["name"] in GROUP_ORDER else len(GROUP_ORDER), g["name"]))
+    return {
+        "snapshot": chosen["id"],
+        "timestamp": chosen["endTime"],
+        "groups": [
+            {"name": g["name"], "paths": len(g.get("paths", [])), "dumps": len(g.get("dumps", []))}
+            for g in groups
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "apply", "status", "cleanup", "files"))
+    parser.add_argument("action", choices=("plan", "apply", "status", "cleanup", "inspect"))
     parser.add_argument("--group")
     parser.add_argument("--snapshot", default="latest")
     parser.add_argument("--approve", action="store_true")
     parser.add_argument("--connection-stdin", action="store_true")
     parser.add_argument("--state-volume")
-    parser.add_argument("--image")
-    parser.add_argument("--clear-volume")
     args = parser.parse_args()
     if args.action in ("plan", "apply") and not args.group:
         parser.error("--group is required")
@@ -604,27 +725,14 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     root = Path("/restore")
     try:
-        if args.action == "files":
-            state = state_file(root)
-            if not state["approved"] or state["phase"] not in ("files", "importing"):
-                backup.fail("File helper has no approved active restore")
-            if args.clear_volume:
-                if args.clear_volume != state.get("clear_volume"):
-                    backup.fail("Unapproved native data volume")
-                target = Path("/targets") / args.clear_volume
-                if target.is_symlink() or not target.is_dir():
-                    backup.fail("Invalid native data mount")
-                for entry in target.iterdir():
-                    remove_path(entry)
-            else:
-                replace_paths(state["plan"], root / "snapshot",
-                              {item["volume"]: "/targets/" + item["volume"] for item in state["plan"]["paths"]})
-            return 0
         if args.action == "status":
             print(json.dumps(state_file(root)))
             return 0
-        api = {"socket": "/socket/podman.sock", "timeout": 3600}
         environment = connection_environment(args.connection_stdin)
+        if args.action == "inspect":
+            print(json.dumps(inspect_snapshot(environment, args.snapshot, args.group)))
+            return 0
+        api = {"socket": "/socket/podman.sock", "timeout": 3600}
         with backup.locked(root):
             if args.action in ("apply", "cleanup") and not args.approve:
                 backup.fail("Destructive recovery actions require explicit approval (--approve)")
@@ -645,14 +753,13 @@ def main():
                         remove_path(root / name)
                     print("Recovery helpers/staging and backup hold removed; workload running state was not changed")
                     return 0
-                if (source / "journal.json").exists():
-                    backup.fail("Finish pending backup stop recovery before restoring")
                 state = plan(api, root, environment, args.snapshot, args.group)
                 if args.action == "apply":
                     if state["phase"] == "complete":
                         backup.fail("This restore already completed; inspect it or clean up its state")
                     backup.write_json(journal, {"version": 3, "owner": state["owner"], "volume": args.state_volume})
-                    state = apply(api, root, args.approve, args.image, args.state_volume)
+                    state = apply(api, root, args.approve, args.state_volume,
+                                  volumes_root=os.environ.get("VOLUMES_ROOT", "/volumes"))
                     journal.unlink()
             print(json.dumps({"snapshot": state["snapshot"], "phase": state["phase"], "plan": state["plan"]}))
         return 0
