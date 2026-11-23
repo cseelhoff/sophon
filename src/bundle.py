@@ -20,12 +20,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 # Only what step 4 runs; hypervisor roles and credentials never reach the VM.
 PROJECT = (
-    '4-configure.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
+    '4-configure.yml', '5-activate.yml', 'ansible.cfg', 'inventory.yml', 'group_vars',
     *(f'roles/{role}' for role in ('compose_stack', 'arcane', 'coredns', 'traefik',
-                                   'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea')),
-    'src/console.py', 'src/deployment.py', 'src/certificates.py', 'src/backup_destination.py',
+                                   'cloudflared', 'kopia', 'openldap', 'keycloak', 'gitea', 'nexus', 'status')),
+    'src/console.py', 'src/activate.py', 'src/deployment.py', 'src/certificates.py',
+    'src/backup_destination.py', 'src/status_ui.py',
 )
-GUEST = ('host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-network', 'sophon-set-password')
+GUEST = (
+    'host-bootstrap.sh', 'sophon-deploy', 'sophon-restore', 'sophon-activate', 'sophon-refresh-certs',
+    'sophon-reconcile-gitops', 'sophon-network', 'sophon-set-password', 'sophon-seed-early',
+    'sophon-autodeploy', 'sophon-control-sync', 'sophon-web-activate', 'sophon-web-refresh-certs',
+    'sophon-update-issue',
+)
 EXCLUDED = frozenset((
     'artifacts', 'deployment', 'logs', 'log', 'keys', 'credentials', 'secrets',
     '__pycache__', 'node_modules', 'result', 'results',
@@ -241,7 +247,7 @@ def main(argv=None):
             if not isinstance(containers, list) or not all(isinstance(path, str) for path in containers):
                 raise ValueError('Container manifest must be a JSON list of paths')
             containers = [root / path for path in containers]
-        output = Path(os.path.abspath(args.output or root / 'artifacts/bootstrap/sophon-deployment.iso'))
+        output = Path(os.path.abspath(args.output or root / 'artifacts/bootstrap/sophon-apps.iso'))
         runner = args.runner or root / 'artifacts/bootstrap/runner.tar'
         tools = args.bootstrap_tools or root / 'artifacts/bootstrap/busybox-1.38.0-musl'
         stamp = output.with_name(output.name + '.stamp')

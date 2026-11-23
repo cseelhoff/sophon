@@ -26,11 +26,13 @@ if podman --remote=false container exists kopia; then
     fi
 fi
 [[ $source =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ && $source != "$state" ]] || {
-    echo "Supply the configured backup coordination volume with SOPHON_RESTORE_SOURCE_VOLUME." >&2; exit 1;
+    echo "Supply the configured backup source/coordination volume with SOPHON_RESTORE_SOURCE_VOLUME." >&2; exit 1;
 }
 podman --remote=false volume exists "$source" || {
     echo "Configured backup source/coordination volume is missing." >&2; exit 1;
 }
+volumes_dir=$(podman --remote=false info --format '{{.Store.VolumePath}}')
+[[ -d $volumes_dir && ! -L $volumes_dir ]] || { echo "Podman volume store directory is missing." >&2; exit 1; }
 if podman --remote=false volume exists "$state"; then
     [[ $(podman --remote=false volume inspect --format '{{index .Labels "sophon.restore.state"}}' "$state") == 3 ]] || {
         echo "Refusing an unowned recovery state volume." >&2; exit 1;
@@ -42,6 +44,7 @@ args=(--remote=false run --rm -i --pull never --network host --read-only --user 
       --cap-drop ALL --cap-add DAC_OVERRIDE --cap-add CHOWN --cap-add FOWNER
       --security-opt label=disable --security-opt no-new-privileges
       --tmpfs /tmp:rw,mode=1777 -v "$state:/restore" -v "$source:/source"
+      -v "$volumes_dir:/volumes"
       -v "${XDG_RUNTIME_DIR:?}/podman/podman.sock:/socket/podman.sock:ro"
       --entrypoint python3)
 for name in SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT \
@@ -49,5 +52,79 @@ for name in SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT 
     SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME; do
     [[ ! -v $name ]] || args+=(--env "$name")
 done
-printf '%s' "$connection" | podman "${args[@]}" "$image" /app/restore.py \
-    "${forwarded[@]}" --connection-stdin --state-volume "$state" --image "$image"
+
+run_restore() {
+    printf '%s' "$connection" | podman "${args[@]}" "$image" /app/restore.py \
+        "$@" --connection-stdin --state-volume "$state"
+}
+
+# Explicit low-level subcommands remain available for scripted or single-phase operations.
+first=${forwarded[0]:-}
+case "$first" in
+    plan|apply|status|cleanup|inspect|-h|--help)
+        run_restore "${forwarded[@]}"
+        exit $?
+        ;;
+esac
+
+# Default human workflow: `sophon-restore [--group <name>] [--snapshot <id>] [--yes|--approve]`
+selected_group=""
+selected_snapshot="latest"
+auto_approve=0
+idx=0
+while (( idx < ${#forwarded[@]} )); do
+    arg=${forwarded[idx]}
+    case "$arg" in
+        --group)
+            (( idx + 1 < ${#forwarded[@]} )) || { echo "--group needs a name." >&2; exit 1; }
+            selected_group=${forwarded[idx + 1]}
+            idx=$(( idx + 2 ))
+            ;;
+        --snapshot)
+            (( idx + 1 < ${#forwarded[@]} )) || { echo "--snapshot needs an ID or 'latest'." >&2; exit 1; }
+            selected_snapshot=${forwarded[idx + 1]}
+            idx=$(( idx + 2 ))
+            ;;
+        --yes|--approve|-y)
+            auto_approve=1
+            idx=$(( idx + 1 ))
+            ;;
+        *)
+            echo "Usage: sophon-restore [--group <name>] [--snapshot <id|latest>] [--yes]" >&2
+            echo "   or: sophon-restore {plan|apply|status|cleanup|inspect} ..." >&2
+            exit 2
+            ;;
+    esac
+done
+
+inspect_args=(inspect --snapshot "$selected_snapshot")
+[[ -z $selected_group ]] || inspect_args+=(--group "$selected_group")
+summary_json=$(run_restore "${inspect_args[@]}")
+snapshot_id=$(jq -r '.snapshot' <<< "$summary_json")
+snapshot_ts=$(jq -r '.timestamp' <<< "$summary_json")
+mapfile -t group_names < <(jq -r '.groups[].name' <<< "$summary_json")
+(( ${#group_names[@]} > 0 )) || { echo "No stateful groups found to restore in snapshot $snapshot_id." >&2; exit 1; }
+
+joined_groups=$(printf '%s, ' "${group_names[@]}")
+joined_groups=${joined_groups%, }
+printf 'Snapshot : %s (%s)\n' "$snapshot_id" "$snapshot_ts"
+printf 'Services : %s\n' "$joined_groups"
+if (( ! auto_approve )); then
+    [[ -t 0 ]] || { echo "Pass --yes for non-interactive recovery." >&2; exit 1; }
+    read -r -p 'Restore application state into these services now? [y/N] ' reply
+    [[ ${reply,,} == y || ${reply,,} == yes ]] || { echo "Cancelled; no service state was modified."; exit 130; }
+fi
+
+for grp in "${group_names[@]}"; do
+    printf 'Restoring %s...\n' "$grp"
+    run_restore plan --group "$grp" --snapshot "$snapshot_id" >/dev/null
+    run_restore apply --group "$grp" --approve >/dev/null
+    run_restore cleanup --approve >/dev/null
+done
+printf 'Restore complete (%s).\n' "$joined_groups"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi

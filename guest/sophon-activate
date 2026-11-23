@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Promote a standby-restored InfraVM into active production:
+# switches network/DNS from dev IP to prod IP (when configured), promotes SFTP + Kopia to read-write
+# scheduled backups, and connects Cloudflare tunnel when enabled.
+set -euo pipefail
+trap '' HUP
+
+if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
+    echo "Log in as core to run sophon-activate (do not use sudo)." >&2
+    exit 1
+fi
+export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
+unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+
+if ! podman --remote=false container exists kopia; then
+    echo "Kopia container is not deployed yet; run sophon-deploy first." >&2
+    exit 1
+fi
+
+site=/var/lib/sophon/project/site.json
+standby=/var/lib/sophon/project/standby.json
+override_cidr=${SOPHON_NETWORK_CIDR:-}
+override_gw=${SOPHON_NETWORK_GATEWAY:-}
+override_dns=${SOPHON_VNET_DNS:-}
+assume_yes=0
+force_ip=0
+forwarded=()
+while (( $# )); do
+    case $1 in
+        -y|--yes)
+            assume_yes=1
+            forwarded+=("$1")
+            shift
+            ;;
+        --force-ip)
+            force_ip=1
+            shift
+            ;;
+        --network-cidr)
+            (( $# >= 2 )) || { echo "$1 requires a value." >&2; exit 2; }
+            override_cidr=$2
+            shift 2
+            ;;
+        --gateway)
+            (( $# >= 2 )) || { echo "$1 requires a value." >&2; exit 2; }
+            override_gw=$2
+            shift 2
+            ;;
+        --dns)
+            (( $# >= 2 )) || { echo "$1 requires a value." >&2; exit 2; }
+            override_dns=$2
+            shift 2
+            ;;
+        *)
+            forwarded+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${forwarded[@]}"
+
+current_ip=$(jq -r '.SOPHON_INFRAVM_IP // empty' "$site" 2>/dev/null || true)
+current_dns=$(jq -r '.SOPHON_VNET_DNS // empty' "$site" 2>/dev/null || true)
+target_cidr=$override_cidr
+target_gw=$override_gw
+target_dns=${override_dns:-$current_dns}
+if [[ -z $target_cidr && -f $standby ]]; then
+    if [[ $(jq -r '.prod_network.mode // empty' "$standby" 2>/dev/null || true) == "static" ]]; then
+        target_cidr=$(jq -r '.prod_network.cidr // empty' "$standby" 2>/dev/null || true)
+        target_gw=${target_gw:-$(jq -r '.prod_network.gateway // empty' "$standby" 2>/dev/null || true)}
+        target_dns=${override_dns:-$(jq -r '.prod_network.dns // empty' "$standby" 2>/dev/null || true)}
+    fi
+fi
+
+target_ip=${target_cidr%%/*}
+if [[ -n $target_cidr && -n $target_ip && $target_ip != "$current_ip" ]]; then
+    [[ -n $target_gw ]] || { echo "Switching to static production CIDR $target_cidr requires --gateway (or SOPHON_NETWORK_GATEWAY)." >&2; exit 2; }
+    if (( ! force_ip )) && [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+        if ! conflict_reason=$(/usr/local/libexec/sophon-control-sync --check-ip "$target_ip" "$current_ip" 2>&1); then
+            echo "Refusing to switch appliance IP to ${target_ip}: address is still in use on the network (${conflict_reason})." >&2
+            echo "Power off or decommission the active production VM first (sh sophon-destroy-vm.sh), then retry." >&2
+            exit 2
+        fi
+    fi
+    if (( ! assume_yes )); then
+        if [[ ! -t 0 ]]; then
+            echo "Pass --yes for non-interactive production activation." >&2
+            exit 2
+        fi
+        read -r -p "Switch InfraVM IP from ${current_ip:-current} -> ${target_cidr} (self-DNS ${target_ip}) and promote to active production? [y/N]: " reply
+        if [[ ! ${reply:-} =~ ^[Yy]([Ee][Ss])?$ ]]; then
+            echo "Activation cancelled; server remains in safe read-only standby."
+            exit 130
+        fi
+        set -- --yes "$@"
+    fi
+    echo "Switching InfraVM IP from ${current_ip:-current} -> ${target_cidr} (SSH sessions on ${current_ip:-old IP} reconnect at ${target_ip})..."
+    /usr/local/libexec/sophon-network --network-cidr "$target_cidr" --gateway "$target_gw" --dns "${target_dns:-1.1.1.1}" "$site"
+    sudo systemctl restart sophon-host-bootstrap
+    export SOPHON_PREVIOUS_INFRAVM_IP="$current_ip"
+    export SOPHON_INFRAVM_IP="$target_ip"
+    export SOPHON_VNET_DNS="${target_dns:-1.1.1.1}"
+fi
+
+kopia_env_json=$(podman --remote=false inspect --format '{{json .Config.Env}}' kopia)
+
+# Read SOPHON_CF_TOKEN from an attached SOPHON_CERTS seed disk if present and not already exported.
+certs_device=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
+if [[ -z ${SOPHON_CF_TOKEN:-} && -e $certs_device ]]; then
+    mnt=$(mktemp -d)
+    if sudo mount -o ro "$certs_device" "$mnt" 2>/dev/null; then
+        if [[ -f $mnt/sophon-seed.json ]]; then
+            tok=$(jq -r '.env.SOPHON_CF_TOKEN // empty' "$mnt/sophon-seed.json" 2>/dev/null || true)
+            if [[ -n $tok ]]; then
+                export SOPHON_CF_TOKEN=$tok
+            fi
+        fi
+        sudo umount "$mnt" || true
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+fi
+
+args=(
+    --remote=false run --rm --network host --pull never
+    --security-opt label=disable
+    --label sophon.deployment=activate
+    -v /run/user/1000/podman/podman.sock:/var/run/docker.sock
+    -v /var/lib/sophon/stacks:/var/lib/sophon/stacks
+    -v /var/lib/sophon/project:/workspace:Z --workdir /workspace
+    --env SOPHON_DEPLOYMENT_STEP=configure
+)
+if [[ -t 0 && -t 1 ]]; then
+    args+=(-it)
+fi
+for name in SOPHON_DOMAIN SOPHON_INFRAVM_IP SOPHON_PREVIOUS_INFRAVM_IP SOPHON_VNET_DNS SOPHON_CF_TOKEN \
+    SOPHON_CF_TUNNEL_ENABLED SOPHON_CF_TUNNEL_NAME SOPHON_ACME_EMAIL \
+    SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 \
+    SOPHON_KOPIA_SNAPSHOT_INTERVAL SOPHON_KOPIA_COARSE_ENABLED; do
+    if [[ -v $name ]]; then
+        args+=(--env "$name")
+    fi
+done
+
+export SOPHON_ACTIVATE_KOPIA_ENV_JSON="$kopia_env_json"
+args+=(--env SOPHON_ACTIVATE_KOPIA_ENV_JSON)
+
+podman "${args[@]}" sophon:latest python3 src/activate.py "$@"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
+    /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
+fi
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi
+if [[ -x /usr/local/libexec/sophon-update-issue ]]; then
+    domain=$(jq -r '.domain // empty' /var/lib/sophon/project/deploy-result.json 2>/dev/null || true)
+    ip=$(jq -r '.infravm_ip // empty' /var/lib/sophon/project/deploy-result.json 2>/dev/null || true)
+    sudo /usr/local/libexec/sophon-update-issue active "${domain:-sophon}" "${ip:-}" "" 2>/dev/null || true
+fi

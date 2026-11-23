@@ -1,0 +1,44 @@
+---
+- name: Resolve optional Backup Server secrets ISO
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ explicit_backup_secrets_iso_path }}"
+    - "{{ backup_secrets_iso_default_path }}"
+  when: item | length > 0 and (item == explicit_backup_secrets_iso_path or (attach_secrets_iso | bool))
+  register: backup_secret_candidates
+
+- name: Require explicit Backup secrets ISO when SOPHON_BACKUP_SECRETS_ISO was supplied
+  ansible.builtin.assert:
+    that: backup_secret_candidates.results[0].stat.exists | default(false)
+    fail_msg: "SOPHON_BACKUP_SECRETS_ISO was set to '{{ explicit_backup_secrets_iso_path }}', but that file does not exist."
+  when: explicit_backup_secrets_iso_path | length > 0
+
+- name: Provision Sophon Backup Server VM on Hyper-V
+  hyperv_vm:
+    host: "{{ hyperv_host }}"
+    port: "{{ hyperv_port }}"
+    username: "{{ hyperv_username }}"
+    password: "{{ hyperv_password }}"
+    ca_file: "{{ hyperv_ca_file }}"
+    switch: "{{ hyperv_switch }}"
+    path: "{{ hyperv_path }}"
+    name: "{{ backup_vm_name }}"
+    cores: "{{ backup_vm_cores }}"
+    memory: "{{ backup_vm_memory }}"
+    disk_gb: "{{ backup_vm_disk_gb }}"
+    min_disk_gb: 16
+    marker: "{{ backup_vm_marker }}"
+    coreos_iso: "{{ backup_installer_iso_path }}"
+    secrets_iso: >-
+      {{ (backup_secret_candidates.results
+          | selectattr('stat', 'defined')
+          | selectattr('stat.exists', 'equalto', true)
+          | map(attribute='stat.path')
+          | list
+          | first) | default('') }}
+  register: backup_hyperv
+
+- name: Show the selected Hyper-V Backup VM
+  ansible.builtin.debug:
+    msg: "Sophon Backup Server VM running at {{ backup_hyperv.vm_path }}."

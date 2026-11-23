@@ -2,11 +2,13 @@
 
 import argparse
 import getpass
+import json
 import os
 from pathlib import Path
 import select
 import subprocess
 import sys
+import tempfile
 import termios
 
 import deployment
@@ -14,7 +16,7 @@ import backup_destination
 
 NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_KOPIA_PASSWORD',
               'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'}
-INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_NAME'}
+INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_ENABLED', 'SOPHON_CF_TUNNEL_NAME'}
 
 
 def read_secret(prompt):
@@ -106,22 +108,104 @@ def prompt_shared_password(values, fields):
     return shared
 
 
+def _write_json_private(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp = tempfile.mkstemp(prefix='.sophon-json-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Configure Sophon services on installed InfraVM')
     parser.add_argument('--run', action='store_true', help='Validate exported settings and run without prompting')
+    parser.add_argument('--auto', action='store_true',
+                        help='Unattended deployment: initialize Day 1 if SFTP repository is empty, or deploy in safe standby mode if snapshots exist')
+    parser.add_argument('--seed-file', type=Path, default=Path('/run/sophon-seed/sophon-seed.json'),
+                        help='Optional RAM-backed seed JSON file consumed and unlinked on startup')
     parser.add_argument('--refresh-certificates', action='store_true',
                         help='Replace an existing Traefik certificate store with the validated local handoff')
+    parser.add_argument('--prepare-restore', action='store_true',
+                        help='Deploy services as a read-only standby ready for sophon-restore without touching Cloudflare or writing backups')
     options = parser.parse_args(argv)
+    seed_target = 'prod'
+    seed_prod_network = None
+    seed_sftp: dict[str, str] = {}
+    if options.auto:
+        options.run = True
+        if options.seed_file and options.seed_file.is_file() and not options.seed_file.is_symlink():
+            try:
+                seed_doc = json.loads(options.seed_file.read_text(encoding='utf-8'))
+            finally:
+                options.seed_file.unlink(missing_ok=True)
+            seed_target = str(seed_doc.get('target') or 'prod')
+            if isinstance(seed_doc.get('prod_network'), dict):
+                seed_prod_network = seed_doc['prod_network']
+            elif isinstance(seed_doc.get('network'), dict):
+                seed_prod_network = seed_doc['network']
+            if isinstance(seed_doc.get('sftp'), dict):
+                seed_sftp = {
+                    k: v for k, v in seed_doc['sftp'].items()
+                    if isinstance(k, str) and isinstance(v, str) and v
+                }
+            for k, v in (seed_doc.get('env') or {}).items():
+                if isinstance(k, str) and isinstance(v, str) and k.startswith('SOPHON_'):
+                    os.environ.setdefault(k, v)
     if os.environ.get('SOPHON_DEPLOYMENT_STEP') != 'configure':
         parser.error('Start this program using sophon-deploy on installed InfraVM.')
     try:
         site = deployment.load_site_settings()
         for name, value in site.items():
-            os.environ.setdefault(name, value)
+            if name in ('SOPHON_INFRAVM_IP', 'SOPHON_VNET_DNS') and value:
+                os.environ[name] = value
+            else:
+                os.environ.setdefault(name, value)
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    prepare_restore = (
+        options.prepare_restore
+        or seed_target == 'dev'
+        or os.environ.get('SOPHON_PREPARE_RESTORE', '').strip().lower() == 'true'
+    )
     arguments = ['--step', 'configure']
     values = deployment.new_control(os.environ, 'configure')['values']
+    backup_key_b64 = seed_sftp.get('backup_private_key_b64') or (
+        values.get('SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', '')
+        if values.get('SOPHON_KOPIA_SFTP_USERNAME') == 'sophon-backup' else ''
+    )
+    desired_standby = {
+        'domain': values.get('SOPHON_DOMAIN', ''),
+        'desired_cf_tunnel_enabled': values.get('SOPHON_CF_TUNNEL_ENABLED', 'true') == 'true' and bool(values.get('SOPHON_CF_TOKEN', '').strip()),
+        'desired_cf_token': values.get('SOPHON_CF_TOKEN', '').strip(),
+        'desired_cf_tunnel_name': values.get('SOPHON_CF_TUNNEL_NAME', 'sophon'),
+        'desired_acme_email': values.get('SOPHON_ACME_EMAIL', 'admin@example.com'),
+        'desired_backups_enabled': values.get('SOPHON_KOPIA_BACKUPS_ENABLED', 'true') == 'true',
+        'desired_snapshot_interval': values.get('SOPHON_KOPIA_SNAPSHOT_INTERVAL', '6h'),
+        'desired_coarse_enabled': values.get('SOPHON_KOPIA_COARSE_ENABLED', 'false') == 'true',
+        'desired_coarse_volumes_dir': values.get('SOPHON_KOPIA_COARSE_VOLUMES_DIR', '/var/home/core/.local/share/containers/storage/volumes'),
+        'desired_coarse_work_dir': values.get('SOPHON_KOPIA_COARSE_WORK_DIR', '/var/home/core/sophon-coarse'),
+    }
+    if seed_prod_network is not None:
+        desired_standby['prod_network'] = seed_prod_network
+    if backup_key_b64:
+        desired_standby['desired_sftp_username'] = 'sophon-backup'
+        desired_standby['desired_sftp_private_key_b64'] = backup_key_b64
+    if prepare_restore:
+        if seed_sftp.get('restore_private_key_b64'):
+            values['SOPHON_KOPIA_SFTP_USERNAME'] = 'sophon-restore'
+            values['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'] = seed_sftp['restore_private_key_b64']
+        values['SOPHON_CF_TOKEN'] = ''
+        values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
+        values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+        values['SOPHON_KOPIA_COARSE_ENABLED'] = 'false'
+        values['SOPHON_KOPIA_CREATE_REPOSITORY'] = 'false'
     if not options.run:
         if not sys.stdin.isatty():
             parser.error('Interactive setup requires a terminal; use --run with exported settings for automation.')
@@ -130,17 +214,22 @@ def main(argv=None):
         print('Settings already exported in the environment are used; Enter keeps a displayed default.')
         fields = deployment.step_fields('configure')
         try:
-            # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
-            # Connected is the normal case; only an explicit "n" selects the pre-issued certificate path.
-            has_internet = ask_yes_no('Does this site have internet access?', default=True)
-            skipped = {'SOPHON_ACME_FILE'} if has_internet else INTERNET_ONLY
-            if not has_internet:
-                values['SOPHON_CF_TOKEN'] = ''
-                if not values['SOPHON_ACME_FILE']:
-                    print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
-                          'run sophon-deploy again, or give the path of an acme.json already under /workspace.')
+            if prepare_restore:
+                has_internet = False
+                skipped = INTERNET_ONLY | {'SOPHON_ACME_FILE', 'SOPHON_KOPIA_BACKUPS_ENABLED',
+                                           'SOPHON_KOPIA_SNAPSHOT_INTERVAL', 'SOPHON_KOPIA_COARSE_ENABLED'}
             else:
-                values['SOPHON_ACME_FILE'] = ''
+                # Offline sites supply a pre-issued certificate file (from the secret disk) instead of Let's Encrypt access.
+                # Connected is the normal case; only an explicit "n" selects the pre-issued certificate path.
+                has_internet = ask_yes_no('Does this site have internet access?', default=True)
+                skipped = {'SOPHON_ACME_FILE'} if has_internet else INTERNET_ONLY
+                if not has_internet:
+                    values['SOPHON_CF_TOKEN'] = ''
+                    if not values['SOPHON_ACME_FILE']:
+                        print('No certificate disk was found. Attach the secret ISO (label SOPHON_CERTS) to this VM and '
+                              'run sophon-deploy again, or give the path of an acme.json already under /workspace.')
+                else:
+                    values['SOPHON_ACME_FILE'] = ''
             prompt_shared_password(values, {name: field for name, field in fields.items() if name not in skipped})
             for name, (label, group, kind, default, required) in fields.items():
                 value = values[name]
@@ -150,6 +239,8 @@ def main(argv=None):
                     continue
                 if name in skipped:
                     continue
+                if name == 'SOPHON_CF_TUNNEL_NAME' and values.get('SOPHON_CF_TUNNEL_ENABLED') != 'true':
+                    continue
                 if name in (*backup_destination.MATERIAL, 'SOPHON_KOPIA_CREATE_REPOSITORY'):
                     continue
                 if name in ('SOPHON_KOPIA_COARSE_VOLUMES_DIR', 'SOPHON_KOPIA_COARSE_WORK_DIR') and values['SOPHON_KOPIA_COARSE_ENABLED'] != 'true':
@@ -157,7 +248,7 @@ def main(argv=None):
                 if kind == 'password' and value:
                     # Supplied by the environment or the shared password; keep it without asking again.
                     continue
-                needed = required or (name == 'SOPHON_ACME_FILE' and not has_internet) or (
+                needed = required or (name == 'SOPHON_ACME_FILE' and not has_internet and not prepare_restore) or (
                     name == 'SOPHON_CF_TOKEN' and has_internet)
                 values[name] = prompt_field(name, label, kind, value, needed)
             values, error = deployment.validate_settings(values, {}, 'configure')
@@ -177,7 +268,20 @@ def main(argv=None):
             return 2
     try:
         values = backup_destination.prepare(values, root=deployment.ROOT,
-                                            confirm=None if options.run else ask_yes_no)
+                                            confirm=None if options.run else ask_yes_no,
+                                            readonly=prepare_restore,
+                                            auto=options.auto)
+        auto_mode = values.pop('_SOPHON_AUTO_MODE', None)
+        if auto_mode == 'standby_restore':
+            prepare_restore = True
+            if seed_sftp.get('restore_private_key_b64'):
+                values['SOPHON_KOPIA_SFTP_USERNAME'] = 'sophon-restore'
+                values['SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64'] = seed_sftp['restore_private_key_b64']
+            values['SOPHON_CF_TOKEN'] = ''
+            values['SOPHON_CF_TUNNEL_ENABLED'] = 'false'
+            values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'false'
+            values['SOPHON_KOPIA_COARSE_ENABLED'] = 'false'
+            values['SOPHON_KOPIA_CREATE_REPOSITORY'] = 'false'
         values = deployment.stage_certificates(values)
         values['SOPHON_ARCANE_ENCRYPTION_KEY'] = deployment.ensure_arcane_encryption_key(deployment.ROOT)
     except KeyboardInterrupt:
@@ -190,11 +294,33 @@ def main(argv=None):
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f'Configure preflight failed: {error}', file=sys.stderr)
         return 2
+    standby_file = deployment.ROOT / 'standby.json'
+    desired_standby['domain'] = values.get('SOPHON_DOMAIN', desired_standby['domain'])
+    desired_standby['sftp_username'] = values.get('SOPHON_KOPIA_SFTP_USERNAME', '')
+    if prepare_restore:
+        _write_json_private(standby_file, desired_standby)
+    else:
+        standby_file.unlink(missing_ok=True)
     os.environ.pop('SOPHON_ACME_FILE', None)
     os.environ.update(values)
     os.environ['SOPHON_KOPIA_PREFLIGHT_COMPLETE'] = 'true'
+    if prepare_restore:
+        os.environ['SOPHON_PREPARE_RESTORE'] = 'true'
+    else:
+        os.environ.pop('SOPHON_PREPARE_RESTORE', None)
     extra = ['--extra-vars', 'traefik_acme_replace_existing=true'] if options.refresh_certificates else []
-    return deployment.main(arguments + ['--', '4-configure.yml', *extra])
+    rc = deployment.main(arguments + ['--', '4-configure.yml', *extra])
+    if rc == 0:
+        _write_json_private(
+            deployment.ROOT / 'deploy-result.json',
+            {
+                'mode': auto_mode or ('standby_restore' if prepare_restore else 'day1'),
+                'domain': values.get('SOPHON_DOMAIN', ''),
+                'infravm_ip': values.get('SOPHON_INFRAVM_IP', ''),
+                'prepare_restore': bool(prepare_restore),
+            },
+        )
+    return rc
 
 
 if __name__ == '__main__':

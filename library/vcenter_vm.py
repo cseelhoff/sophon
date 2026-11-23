@@ -21,9 +21,9 @@ description:
   - Unmarked, template, ambiguous and incomplete VMs are never adopted.
 options:
   action:
-    description: Authenticate without changes, or provision and start InfraVM.
+    description: Authenticate without changes, provision and start InfraVM, remove a managed VM, or hot-insert a secrets ISO.
     type: str
-    choices: [authenticate, provision]
+    choices: [authenticate, provision, absent, mount_secrets]
     default: provision
   url:
     description: HTTPS vCenter URL without embedded credentials.
@@ -80,6 +80,18 @@ options:
   bundle_iso:
     description: Local reusable Sophon artifact ISO.
     type: path
+  secrets_iso:
+    description: Optional mode-0600 Sophon secrets/certificate ISO (`SOPHON_CERTS`).
+    type: path
+    default: ''
+  min_disk_gb:
+    description: Minimum allowed disk size in GiB.
+    type: int
+    default: 40
+  marker:
+    description: Ownership annotation marker required on managed VMs.
+    type: str
+    default: sophon-infravm-two-iso-v1
 requirements: [govc]
 author: Sophon
 '''
@@ -104,17 +116,19 @@ def connection_environment(params):
 
 def provision(params, run):
     name = params['name']
+    marker = params.get('marker') or MARKER
+    min_disk_gb = params.get('min_disk_gb') or 40
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}', name):
         raise ValueError('VM name must contain 1-80 letters, digits, dots, underscores or hyphens.')
-    if params['cores'] < 1 or params['memory'] < 1024 or params['disk_gb'] < 40:
-        raise ValueError('Provide valid CPU/memory and at least 40 GiB of disk space.')
+    if params['cores'] < 1 or params['memory'] < 1024 or params['disk_gb'] < min_disk_gb:
+        raise ValueError(f'Provide valid CPU/memory and at least {min_disk_gb} GiB of disk space.')
     folder = params['folder'] or f"/{params['datacenter']}/vm"
     paths = run('find', folder, '-type', 'm', '-name', name).splitlines()
     if len(paths) > 1:
         raise ValueError('Multiple VMs use this name in the selected folder. No VMs have been changed.')
     if paths:
         vm = json.loads(run('vm.info', '-json', paths[0]))['virtualMachines'][0]
-        if vm['config'].get('template') or vm['config'].get('annotation') != MARKER:
+        if vm['config'].get('template') or vm['config'].get('annotation') != marker:
             raise ValueError('Existing VM is unmanaged, a template or an incomplete bootstrap. It has not been changed.')
         power = vm['runtime']['powerState']
         if power not in ('poweredOn', 'poweredOff'):
@@ -123,14 +137,22 @@ def provision(params, run):
             run('vm.power', '-on', paths[0])
         return {'changed': power == 'poweredOff', 'vm_path': paths[0], 'created': False}
 
+    if params.get('bundle_iso'):
+        iso_specs = [('coreos', params['coreos_iso']), ('apps', params['bundle_iso'])]
+        if params.get('secrets_iso'):
+            iso_specs.append(('secrets', params['secrets_iso']))
+    else:
+        iso_specs = [('sftp-server', params['coreos_iso'])]
+        if params.get('secrets_iso'):
+            iso_specs.append(('sftp-secrets', params['secrets_iso']))
     media = []
-    for label, source in (('coreos', params['coreos_iso']), ('deployment', params['bundle_iso'])):
+    for label, source in iso_specs:
         path = Path(source)
         if not path.is_file():
             raise ValueError(f'Missing installation ISO: {path}')
         with path.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        media.append((path, f'sophon-{label}-{digest}.iso', path.stat().st_size))
+        media.append((path, f'sophon-{label}-{digest[:8]}.iso', path.stat().st_size))
 
     run('datastore.mkdir', '-p', 'sophon-isos')
     listing = json.loads(run('datastore.ls', '-json', '-l', 'sophon-isos/'))
@@ -143,33 +165,137 @@ def provision(params, run):
             run('datastore.upload', str(source), f'sophon-isos/{filename}')
 
     vm_path = f'{folder.rstrip("/")}/{name}'
-    run('vm.create', '-on=false', '-annotation', MARKER + ':preparing',
+    run('vm.create', '-on=false', '-annotation', marker + ':preparing',
         '-folder', folder, '-cluster', params['cluster'], '-ds', params['datastore'],
         '-net', params['network'], '-net.adapter', 'vmxnet3', '-g', 'fedora64Guest',
         '-c', str(params['cores']), '-m', str(params['memory']),
         '-disk', f"{params['disk_gb']}G", '-disk.controller', 'pvscsi', '-disk.thick=false',
         '-iso', f'sophon-isos/{media[0][1]}', name)
-    device = run('device.cdrom.add', '-vm', vm_path).strip()
-    if not device:
-        raise ValueError('vCenter did not identify the new artifact CD drive; VM remains marked incomplete.')
-    run('device.cdrom.insert', '-vm', vm_path, '-device', device, f'sophon-isos/{media[1][1]}')
+    for _src, extra_filename, _sz in media[1:]:
+        device = run('device.cdrom.add', '-vm', vm_path).strip()
+        if not device:
+            raise ValueError('vCenter did not identify the new artifact CD drive; VM remains marked incomplete.')
+        run('device.cdrom.insert', '-vm', vm_path, '-device', device, f'sophon-isos/{extra_filename}')
+    if params.get('bundle_iso') and not params.get('secrets_iso'):
+        empty_cd = run('device.cdrom.add', '-vm', vm_path).strip()
+        if not empty_cd:
+            raise ValueError('vCenter did not identify the spare certificate CD drive; VM remains marked incomplete.')
     run('device.boot', '-vm', vm_path, '-order', 'disk,cdrom')
-    run('vm.change', '-vm', vm_path, '-annotation', MARKER)
+    run('vm.change', '-vm', vm_path, '-annotation', marker)
     run('vm.power', '-on', vm_path)
     return {'changed': True, 'vm_path': vm_path, 'created': True}
 
 
+def destroy(params, run):
+    name = params['name']
+    marker = params.get('marker') or MARKER
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}', name):
+        raise ValueError('VM name must contain 1-80 letters, digits, dots, underscores or hyphens.')
+    folder = params['folder'] or f"/{params['datacenter']}/vm"
+    paths = run('find', folder, '-type', 'm', '-name', name).splitlines()
+    if len(paths) > 1:
+        raise ValueError('Multiple VMs use this name in the selected folder. No VMs have been changed.')
+    if not paths:
+        return {'changed': False, 'vm_path': f'{folder.rstrip("/")}/{name}', 'destroyed': False}
+    vm = json.loads(run('vm.info', '-json', paths[0]))['virtualMachines'][0]
+    if vm['config'].get('template') or vm['config'].get('annotation') != marker:
+        raise ValueError('Existing VM is unmanaged or a template; refusing to delete it.')
+    if vm['runtime']['powerState'] == 'poweredOn':
+        run('vm.power', '-off', paths[0])
+    run('vm.destroy', paths[0])
+    return {'changed': True, 'vm_path': paths[0], 'destroyed': True}
+
+
+def mount_secrets(params, run):
+    name = params['name']
+    marker = params.get('marker') or MARKER
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}', name):
+        raise ValueError('VM name must contain 1-80 letters, digits, dots, underscores or hyphens.')
+    source = Path(params.get('secrets_iso') or '')
+    if not source.is_file() or source.is_symlink():
+        raise ValueError(f'Missing secrets ISO: {source}')
+    folder = params['folder'] or f"/{params['datacenter']}/vm"
+    paths = run('find', folder, '-type', 'm', '-name', name).splitlines()
+    if len(paths) > 1:
+        raise ValueError('Multiple VMs use this name in the selected folder. No VMs have been changed.')
+    if not paths:
+        raise ValueError(f"No managed vCenter VM named '{name}' was found.")
+    vm_path = paths[0]
+    vm = json.loads(run('vm.info', '-json', vm_path))['virtualMachines'][0]
+    if vm['config'].get('template') or vm['config'].get('annotation') != marker:
+        raise ValueError('Existing VM is unmanaged or a template; refusing to modify it.')
+
+    with source.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    filename = f'sophon-secrets-{digest[:8]}.iso'
+    size = source.stat().st_size
+
+    run('datastore.mkdir', '-p', 'sophon-isos')
+    listing = json.loads(run('datastore.ls', '-json', '-l', 'sophon-isos/'))
+    files = {entry['path']: entry for directory in listing for entry in directory.get('file', [])}
+    if filename in files:
+        if files[filename].get('fileSize') != size:
+            raise ValueError('A hash-named secrets ISO has an unexpected datastore size; refusing to overwrite it.')
+    else:
+        run('datastore.upload', str(source), f'sophon-isos/{filename}')
+
+    dev_listing = json.loads(run('device.info', '-json', '-vm', vm_path, 'cdrom-*') or '{"devices":[]}')
+    cdroms = dev_listing.get('devices') or []
+    chosen = ''
+    for dev in cdroms:
+        dev_name = dev.get('name', '')
+        backing_file = ((dev.get('backing') or {}).get('fileName') or '')
+        if 'sophon-secrets-' in backing_file:
+            chosen = dev_name
+            break
+    if not chosen:
+        for dev in cdroms:
+            dev_name = dev.get('name', '')
+            backing_file = ((dev.get('backing') or {}).get('fileName') or '')
+            if not backing_file:
+                chosen = dev_name
+                break
+    if not chosen:
+        for dev in cdroms:
+            dev_name = dev.get('name', '')
+            backing_file = ((dev.get('backing') or {}).get('fileName') or '')
+            if 'sophon-apps-' not in backing_file:
+                chosen = dev_name
+                break
+    if not chosen:
+        chosen = run('device.cdrom.add', '-vm', vm_path).strip()
+    if not chosen:
+        raise ValueError('Could not locate a CD/DVD drive on the vCenter VM for the secrets ISO.')
+
+    run('device.cdrom.insert', '-vm', vm_path, '-device', chosen, f'sophon-isos/{filename}')
+    if vm['runtime'].get('powerState') == 'poweredOn':
+        run('device.connect', '-vm', vm_path, chosen)
+
+    for existing_name in sorted(files):
+        if existing_name != filename and re.fullmatch(r'sophon-secrets-[0-9a-f]+\.iso', existing_name):
+            try:
+                run('datastore.rm', '-f', f'sophon-isos/{existing_name}')
+            except Exception:
+                pass
+    return {'changed': True, 'vm_path': vm_path, 'device': chosen, 'filename': filename}
+
+
 def main():
     module = AnsibleModule(argument_spec={
-        'action': {'choices': ['authenticate', 'provision'], 'default': 'provision'},
+        'action': {'choices': ['authenticate', 'provision', 'absent', 'mount_secrets'], 'default': 'provision'},
         'url': {'required': True}, 'username': {'required': True},
         'password': {'required': True, 'no_log': True},
         'ca_file': {'type': 'path', 'default': ''}, 'datacenter': {'required': True},
         'cluster': {}, 'datastore': {}, 'network': {}, 'folder': {'default': ''},
         'name': {'default': 'sophon-infravm'}, 'cores': {'type': 'int', 'default': 8},
-        'memory': {'type': 'int', 'default': 8192}, 'disk_gb': {'type': 'int', 'default': 100},
-        'coreos_iso': {'type': 'path'}, 'bundle_iso': {'type': 'path'},
-    }, required_if=[('action', 'provision', ['cluster', 'datastore', 'network', 'coreos_iso', 'bundle_iso'])])
+        'memory': {'type': 'int', 'default': 12288}, 'disk_gb': {'type': 'int', 'default': 1024},
+        'min_disk_gb': {'type': 'int', 'default': 40}, 'marker': {'default': MARKER},
+        'coreos_iso': {'type': 'path'}, 'bundle_iso': {'type': 'path', 'default': ''},
+        'secrets_iso': {'type': 'path', 'default': ''},
+    }, required_if=[
+        ('action', 'provision', ['cluster', 'datastore', 'network', 'coreos_iso']),
+        ('action', 'mount_secrets', ['datastore', 'secrets_iso']),
+    ])
     binary = module.get_bin_path('govc', required=True)
     try:
         environment = connection_environment(module.params)
@@ -187,8 +313,14 @@ def main():
         about = json.loads(run('about', '-json'))['about']
         if about['apiType'] != 'VirtualCenter':
             raise ValueError('Select a vCenter Server, not a standalone ESXi endpoint.')
-        result = ({'changed': False, 'server': about['fullName']}
-                  if module.params['action'] == 'authenticate' else provision(module.params, run))
+        if module.params['action'] == 'authenticate':
+            result = {'changed': False, 'server': about['fullName']}
+        elif module.params['action'] == 'absent':
+            result = destroy(module.params, run)
+        elif module.params['action'] == 'mount_secrets':
+            result = mount_secrets(module.params, run)
+        else:
+            result = provision(module.params, run)
     except (OSError, ValueError, KeyError) as error:
         module.fail_json(msg=str(error))
     module.exit_json(**result)

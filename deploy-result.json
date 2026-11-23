@@ -1,0 +1,6 @@
+{
+  "domain": "example.test",
+  "infravm_ip": "192.0.2.3",
+  "mode": "day1",
+  "prepare_restore": false
+}

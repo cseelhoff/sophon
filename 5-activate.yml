@@ -1,0 +1,134 @@
+---
+# Step 5 (optional) - promotes a standby-restored InfraVM into active production.
+# Switches Kopia from read-only standby to read-write scheduled backups (verifying an immediate snapshot)
+# and, when configured, publishes Cloudflare DNS records and connects cloudflared.
+- name: Promote standby-restored InfraVM to active production
+  hosts: localhost
+  gather_facts: false
+  vars:
+    previous_infravm_ip: "{{ lookup('env', 'SOPHON_PREVIOUS_INFRAVM_IP') | default('', true) }}"
+  pre_tasks:
+    - name: Require the InfraVM runner and completed write preflight
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'SOPHON_DEPLOYMENT_STEP') == 'configure'
+          - lookup('env', 'SOPHON_PROXMOX_PASSWORD') == ''
+          - lookup('env', 'SOPHON_VCENTER_PASSWORD') == ''
+          - lookup('env', 'SOPHON_KOPIA_PREFLIGHT_COMPLETE') == 'true'
+          - not (prepare_restore | bool)
+        fail_msg: "Start production promotion using sophon-activate on the restored InfraVM."
+      tags: [always]
+    - name: Validate domain, InfraVM address, and Kopia credentials
+      ansible.builtin.assert:
+        that:
+          - domain_name | length > 0
+          - infravm_ip is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
+          - kopia_password | trim | length > 0
+          - kopia_server_password | trim | length > 0
+          - kopia_sftp_private_key_b64 | trim | length > 0
+          - kopia_sftp_known_hosts_b64 | trim | length > 0
+        fail_msg: "Missing site or Kopia credentials required for production activation."
+      tags: [always]
+    - name: Point service names at InfraVM inside the runner
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} SOPHON SERVICE NAMES"
+        unsafe_writes: true
+        block: |
+          {% for name in ['', 'status', 'traefik', 'auth', 'ldap', 'git', 'nexus', 'registry', 'registry-push', 'arcane', 'dns', 'kopia'] %}
+          {{ infravm_ip }} {{ (name ~ '.' if name else '') ~ (domain_name | lower | regex_replace('\.$', '')) }}
+          {% endfor %}
+      tags: [always]
+  tasks:
+    - name: Reconcile CoreDNS on production IP (and publish Cloudflare tunnel DNS routes when enabled)
+      ansible.builtin.include_role:
+        name: coredns
+
+    - name: Update stack extra_hosts and container DNS resolvers when switching from dev IP to prod IP
+      when:
+        - previous_infravm_ip | length > 0
+        - previous_infravm_ip != infravm_ip
+      block:
+        - name: Rewrite previous dev IP in Gitea, Nexus, Arcane, and Status extra_hosts
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - -c
+              - |
+                import pathlib, sys
+                old_ip, new_ip, stacks_root = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
+                changed = False
+                for name in ("gitea", "nexus", "arcane", "status"):
+                    compose_file = stacks_root / name / "compose.yaml"
+                    if not compose_file.is_file():
+                        continue
+                    text = compose_file.read_text(encoding="utf-8")
+                    updated = text.replace(f":{old_ip}\n", f":{new_ip}\n")
+                    if updated != text:
+                        compose_file.write_text(updated, encoding="utf-8")
+                        changed = True
+                if changed:
+                    print("changed")
+              - "{{ previous_infravm_ip }}"
+              - "{{ infravm_ip }}"
+              - "{{ compose_stacks_dir | default('/var/lib/sophon/stacks') }}"
+          register: activate_extra_hosts
+          changed_when: "'changed' in (activate_extra_hosts.stdout | default(''))"
+
+        - name: Reconcile Gitea, Nexus, Arcane, and Status stacks with updated extra_hosts
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+              - compose
+              - --project-name
+              - "{{ item }}"
+              - --project-directory
+              - "{{ compose_stacks_dir | default('/var/lib/sophon/stacks') }}/{{ item }}"
+              - -f
+              - "{{ compose_stacks_dir | default('/var/lib/sophon/stacks') }}/{{ item }}/compose.yaml"
+              - up
+              - -d
+              - --pull
+              - never
+          loop:
+            - gitea
+            - nexus
+            - arcane
+            - status
+          when: "'changed' in (activate_extra_hosts.stdout | default(''))"
+
+        - name: Refresh DNS resolver on remaining proxy-networked containers
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - -c
+              - |
+                import subprocess, sys
+                host = sys.argv[1]
+                ids = subprocess.check_output(
+                    ["docker", "--host", host, "ps", "--filter", "network=proxy", "--format", "{{.Names}}"],
+                    text=True,
+                ).splitlines()
+                targets = [n for n in ids if n and n not in ("coredns", "gitea", "nexus", "arcane", "sophon-status", "kopia", "cloudflared")]
+                if targets:
+                    subprocess.run(["docker", "--host", host, "container", "restart", *targets], check=True)
+                    print("restarted")
+              - "{{ compose_engine_host | default('unix:///var/run/docker.sock') }}"
+          register: activate_proxy_restart
+          changed_when: "'restarted' in (activate_proxy_restart.stdout | default(''))"
+
+    - name: Reconcile Cloudflare tunnel connector
+      ansible.builtin.include_role:
+        name: cloudflared
+    - name: Promote Kopia to active read-write scheduled backups
+      ansible.builtin.include_role:
+        name: kopia
+    - name: Snapshot live acme.json after activation
+      ansible.builtin.include_role:
+        name: traefik
+        tasks_from: backup_acme
+    - name: Report production activation complete
+      ansible.builtin.debug:
+        msg: "Production activation complete for {{ domain_name }} ({{ infravm_ip }}). Scheduled backups are active."

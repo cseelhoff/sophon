@@ -18,13 +18,15 @@ param(
     [string]$Path = $env:SOPHON_HYPERV_PATH,
     [string]$Name = $(if ($env:SOPHON_INFRAVM_NAME) { $env:SOPHON_INFRAVM_NAME } else { 'sophon-infravm' }),
     [int]$Cores = $(if ($env:SOPHON_INFRAVM_CORES) { $env:SOPHON_INFRAVM_CORES } else { 8 }),
-    [int]$MemoryMB = $(if ($env:SOPHON_INFRAVM_MEMORY) { $env:SOPHON_INFRAVM_MEMORY } else { 8192 }),
-    [int]$DiskGB = $(if ($env:SOPHON_INFRAVM_DISK_GB) { $env:SOPHON_INFRAVM_DISK_GB } else { 100 }),
-    [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\sophon-installer.iso'),
-    [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-deployment.iso'),
-    [string]$CertificatesIso = (Join-Path $PSScriptRoot 'artifacts\secrets\sophon-certificates.iso'),
+    [int]$MemoryMB = $(if ($env:SOPHON_INFRAVM_MEMORY) { $env:SOPHON_INFRAVM_MEMORY } else { 12288 }),
+    [int]$DiskGB = $(if ($env:SOPHON_INFRAVM_DISK_GB) { $env:SOPHON_INFRAVM_DISK_GB } else { 1024 }),
+    [string]$CoreOsIso = (Join-Path $PSScriptRoot 'artifacts\coreos\sophon-coreos.iso'),
+    [string]$BundleIso = (Join-Path $PSScriptRoot 'artifacts\bootstrap\sophon-apps.iso'),
+    [string]$CertificatesIso = $(if ($env:SOPHON_SECRETS_ISO) { $env:SOPHON_SECRETS_ISO } else { Join-Path $PSScriptRoot 'artifacts\secrets\sophon-secrets.iso' }),
+    [switch]$Recreate,
     [switch]$AttachCertificates,
-    [switch]$DetachCertificates
+    [switch]$DetachCertificates,
+    [switch]$KeepLocal
 )
 $ErrorActionPreference = 'Stop'
 $marker = 'sophon-infravm-two-iso-v1'
@@ -52,53 +54,14 @@ if (-not $manageCertificates) {
 }
 
 try { $vmHost = Get-VMHost } catch { throw "Cannot use Hyper-V as this user ($($_.Exception.Message)). Run from an elevated PowerShell or join Hyper-V Administrators." }
-
-if ($manageCertificates) {
-    $vm = @(Get-VM | Where-Object { $_.Name -eq $Name -and $_.Notes -eq $marker })
-    if ($vm.Count -ne 1) { throw "No managed InfraVM named '$Name' was found; create it first." }
-    $vm = $vm[0]
-    $full = if (Test-Path -LiteralPath $CertificatesIso) { (Resolve-Path -LiteralPath $CertificatesIso).Path } else { $CertificatesIso }
-    $drives = @(Get-VMDvdDrive -VM $vm)
-    if ($DetachCertificates) {
-        foreach ($drive in $drives | Where-Object { $_.Path -eq $full }) { Set-VMDvdDrive -VMDvdDrive $drive -Path $null }
-        Write-Host 'Certificate disk ejected. Delete the ISO from this PC when you no longer need it.'
-        return
-    }
-    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing certificate ISO: $CertificatesIso (run: .\sophon-provision.ps1 certificates issue)." }
-    $empty = $drives | Where-Object { -not $_.Path } | Select-Object -First 1
-    if ($empty) { Set-VMDvdDrive -VMDvdDrive $empty -Path $full } else { $null = Add-VMDvdDrive -VM $vm -Path $full }
-    Write-Host "Certificate disk attached to '$Name'. On the VM run sophon-deploy and answer n to the internet access question."
-    return
-}
-
-if (-not $Switch) {
-    $names = @(Get-VMSwitch | ForEach-Object Name)
-    if (-not $names) { throw 'This host has no virtual switches; create one in Hyper-V Manager > Virtual Switch Manager.' }
-    Write-Host ('Virtual switches: ' + ($names -join ', '))
-    $default = if ($names -contains 'Default Switch') { 'Default Switch' } else { $names[0] }
-    $answer = Read-Host "Virtual switch [$default]"
-    $Switch = if ($answer) { $answer } else { $default }
-}
-if (-not (Get-VMSwitch | Where-Object { $_.Name -eq $Switch })) { throw "Virtual switch '$Switch' does not exist on this host." }
 if (-not $Path) { $Path = $vmHost.VirtualMachinePath }
-
-$existing = @(Get-VM | Where-Object { $_.Name -eq $Name })
-if ($existing.Count -gt 1) { throw 'Multiple VMs use this name. No VMs have been changed.' }
-if ($existing.Count -eq 1) {
-    $vm = $existing[0]
-    if ($vm.Notes -ne $marker) { throw 'Existing VM is unmanaged or an incomplete bootstrap. It has not been changed.' }
-    if ($vm.State -notin 'Running', 'Off') { throw "Existing VM state is $($vm.State); inspect it before continuing." }
-    if ($vm.State -eq 'Off') { Start-VM -VM $vm }
-    Write-Host "InfraVM '$Name' already exists ($($vm.State)); nothing else changed."
-    return
-}
-
-# ISOs are copied once, hash-named, so Hyper-V gets stable files it can read regardless of where the project lives.
 $isoDir = Join-Path $Path 'sophon-isos'
-New-Item -ItemType Directory -Force -Path $isoDir | Out-Null
+
 function Install-Iso([string]$Source, [string]$Label) {
+    New-Item -ItemType Directory -Force -Path $isoDir | Out-Null
     $hash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash.ToLower()
-    $target = Join-Path $isoDir "sophon-$Label-$hash.iso"
+    $short = $hash.Substring(0, 8)
+    $target = Join-Path $isoDir "sophon-$Label-$short.iso"
     $size = (Get-Item -LiteralPath $Source).Length
     if (Test-Path -LiteralPath $target) {
         if ((Get-Item -LiteralPath $target).Length -ne $size) { throw 'A hash-named ISO has an unexpected size on the host; refusing to overwrite it.' }
@@ -112,6 +75,70 @@ function Install-Iso([string]$Source, [string]$Label) {
     Move-Item -LiteralPath "$target.part" -Destination $target
     return $target
 }
+
+if ($manageCertificates) {
+    $vm = @(Get-VM | Where-Object { $_.Name -eq $Name -and $_.Notes -eq $marker })
+    if ($vm.Count -ne 1) { throw "No managed InfraVM named '$Name' was found; create it first." }
+    $vm = $vm[0]
+    $drives = @(Get-VMDvdDrive -VM $vm)
+    if ($DetachCertificates) {
+        $full = if (Test-Path -LiteralPath $CertificatesIso) { (Resolve-Path -LiteralPath $CertificatesIso).Path } else { $CertificatesIso }
+        foreach ($drive in $drives | Where-Object { $_.Path -eq $full -or ($_.Path -and ([IO.Path]::GetFileName($_.Path) -like 'sophon-secrets-*.iso')) }) {
+            Set-VMDvdDrive -VMDvdDrive $drive -Path $null
+        }
+        Get-ChildItem -LiteralPath $isoDir -Filter 'sophon-secrets-*.iso' -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        Write-Host 'Certificate disk ejected and superseded Hyper-V secrets ISOs pruned.'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $CertificatesIso -PathType Leaf)) { throw "Missing secrets ISO: $CertificatesIso (run: .\sophon-build-isos.ps1)." }
+    $staged = Install-Iso $CertificatesIso 'secrets'
+    $stagedLeaf = [IO.Path]::GetFileName($staged)
+    $targetDrive = $drives | Where-Object { $_.Path -and ([IO.Path]::GetFileName($_.Path) -like 'sophon-secrets-*.iso') } | Select-Object -First 1
+    if (-not $targetDrive) { $targetDrive = $drives | Where-Object { -not $_.Path } | Select-Object -First 1 }
+    if (-not $targetDrive) { $targetDrive = $drives | Where-Object { $_.Path -and ([IO.Path]::GetFileName($_.Path) -notlike 'sophon-deployment-*.iso') } | Select-Object -First 1 }
+    if ($targetDrive) { Set-VMDvdDrive -VMDvdDrive $targetDrive -Path $staged } else { $null = Add-VMDvdDrive -VM $vm -Path $staged }
+    Get-ChildItem -LiteralPath $isoDir -Filter 'sophon-secrets-*.iso' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $stagedLeaf } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    if (-not $KeepLocal) {
+        Remove-Item -LiteralPath $CertificatesIso -Force -ErrorAction SilentlyContinue
+        Write-Host "Certificate disk attached to '$Name' and local copy removed: $CertificatesIso"
+    } else {
+        Write-Host "Certificate disk attached to '$Name'."
+    }
+    Write-Host "Open https://<domain> and click 'Update Certificates' (or run sophon-refresh-certs on the InfraVM console)."
+    return
+}
+
+if (-not $Switch) {
+    $names = @(Get-VMSwitch | ForEach-Object Name)
+    if (-not $names) { throw 'This host has no virtual switches; create one in Hyper-V Manager > Virtual Switch Manager.' }
+    Write-Host ('Virtual switches: ' + ($names -join ', '))
+    $default = if ($names -contains 'Default Switch') { 'Default Switch' } else { $names[0] }
+    $answer = Read-Host "Virtual switch [$default]"
+    $Switch = if ($answer) { $answer } else { $default }
+}
+if (-not (Get-VMSwitch | Where-Object { $_.Name -eq $Switch })) { throw "Virtual switch '$Switch' does not exist on this host." }
+
+$existing = @(Get-VM | Where-Object { $_.Name -eq $Name })
+if ($existing.Count -gt 1) { throw 'Multiple VMs use this name. No VMs have been changed.' }
+if ($existing.Count -eq 1) {
+    $vm = $existing[0]
+    if ($vm.Notes -ne $marker) { throw 'Existing VM is unmanaged or an incomplete bootstrap. It has not been changed.' }
+    if ($Recreate) {
+        if ($vm.State -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
+        $disks = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object Path | Where-Object { $_ })
+        Remove-VM -VM $vm -Force
+        foreach ($vhd in $disks) { Remove-Item -LiteralPath $vhd -Force -ErrorAction SilentlyContinue }
+    } else {
+        if ($vm.State -notin 'Running', 'Off') { throw "Existing VM state is $($vm.State); inspect it before continuing." }
+        if ($vm.State -eq 'Off') { Start-VM -VM $vm }
+        Write-Host "InfraVM '$Name' already exists ($($vm.State)); nothing else changed."
+        return
+    }
+}
+
 $coreos = Install-Iso $CoreOsIso 'coreos'
 $bundle = Install-Iso $BundleIso 'deployment'
 
@@ -125,7 +152,7 @@ Set-VMFirmware -VM $vm -EnableSecureBoot Off
 $null = Add-VMDvdDrive -VM $vm -Path $coreos
 $null = Add-VMDvdDrive -VM $vm -Path $bundle
 # A third drive for the secret certificate ISO (air-gapped sites): inserted now if it exists, or later with -AttachCertificates.
-if (Test-Path -LiteralPath $CertificatesIso -PathType Leaf) { $null = Add-VMDvdDrive -VM $vm -Path (Resolve-Path -LiteralPath $CertificatesIso).Path }
+if (Test-Path -LiteralPath $CertificatesIso -PathType Leaf) { $null = Add-VMDvdDrive -VM $vm -Path (Install-Iso $CertificatesIso 'secrets') }
 else { $null = Add-VMDvdDrive -VM $vm }
 $disk = Get-VMHardDiskDrive -VM $vm
 $installer = Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $coreos }

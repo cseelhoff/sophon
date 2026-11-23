@@ -1,0 +1,125 @@
+# Sonatype Nexus Repository Community Edition + PostgreSQL datastore
+# Exposes three TLS-terminated single-label wildcard subdomains via Traefik:
+#   - https://nexus.<domain>         -> :8081 (UI, REST API, PyPI, npm, APT, Maven, Cargo, Raw)
+#   - https://registry.<domain>      -> :5000 (docker-group unified pull endpoint)
+#   - https://registry-push.<domain> -> :5001 (docker-hosted CI push endpoint)
+
+services:
+  nexus:
+    image: {{ nexus_image }}
+    pull_policy: never
+    container_name: nexus
+    restart: unless-stopped
+    security_opt:
+      - label=disable
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: {{ nexus_jvm_params | to_json }}
+      NEXUS_SECURITY_RANDOMPASSWORD: "true"
+      NEXUS_DATASTORE_ENABLED: "true"
+      NEXUS_DATASTORE_NEXUS_JDBCURL: "jdbc:postgresql://{{ nexus_db_host }}:{{ nexus_db_port }}/{{ nexus_db_name }}"
+      NEXUS_DATASTORE_NEXUS_USERNAME: {{ nexus_db_user | to_json }}
+      NEXUS_DATASTORE_NEXUS_PASSWORD: {{ nexus_db_password | replace('$', '$$') | to_json }}
+      NEXUS_SECRETS_KEY_FILE: "/nexus-data/etc/nexus.secrets.json"
+      SOPHON_NEXUS_SECRETS_KEY: {{ nexus_secrets_key | replace('$', '$$') | to_json }}
+      SOPHON_NEXUS_PULL_PASSWORD: {{ nexus_pull_password | replace('$', '$$') | to_json }}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mkdir -p /nexus-data/blobs/hosted /nexus-data/blobs/scratch /nexus-data/blobs/proxy-cache /nexus-data/keystores /nexus-data/etc /nexus-data/javaprefs
+        umask 077
+        if [ ! -s /nexus-data/etc/nexus.secrets.json ]; then
+          printf '{"active":"sophon-1","keys":[{"id":"sophon-1","key":"%s"}]}\n' "$$SOPHON_NEXUS_SECRETS_KEY" > /nexus-data/etc/nexus.secrets.json
+        fi
+        if [ ! -s /nexus-data/etc/sophon-pull.password ]; then
+          printf '%s' "$$SOPHON_NEXUS_PULL_PASSWORD" > /nexus-data/etc/sophon-pull.password
+        fi
+        unset SOPHON_NEXUS_SECRETS_KEY SOPHON_NEXUS_PULL_PASSWORD
+        exec /opt/sonatype/nexus/bin/nexus run
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:{{ nexus_port_http }}/service/rest/v1/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+    volumes:
+      - nexus_data:/nexus-data
+      - ldap_certs:/run/secrets/ldap:ro
+    networks:
+      - proxy
+{% if infravm_ip | default('', true) != '' %}
+    extra_hosts:
+      - "{{ nexus_ldap_host }}:{{ infravm_ip }}"
+{% endif %}
+    depends_on:
+      nexus-db:
+        condition: service_healthy
+    labels:
+      - 'sophon.backup.enable=true'
+      - 'sophon.backup.group=nexus'
+      - 'sophon.backup.paths=/nexus-data/blobs/hosted,/nexus-data/keystores,/nexus-data/etc'
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.nexus.entrypoints=websecure"
+      - "traefik.http.routers.nexus.rule=Host(`{{ nexus_hostname }}.{{ nexus_domain }}`)"
+      - "traefik.http.routers.nexus.tls=true"
+      - "traefik.http.routers.nexus.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.nexus.tls.domains[0].main={{ nexus_domain }}"
+      - "traefik.http.routers.nexus.tls.domains[0].sans=*.{{ nexus_domain }}"
+      - "traefik.http.routers.nexus.service=nexus"
+      - "traefik.http.services.nexus.loadbalancer.server.port={{ nexus_port_http }}"
+      - "traefik.http.routers.nexus-registry.entrypoints=websecure"
+      - "traefik.http.routers.nexus-registry.rule=Host(`{{ nexus_registry_hostname }}.{{ nexus_domain }}`)"
+      - "traefik.http.routers.nexus-registry.tls=true"
+      - "traefik.http.routers.nexus-registry.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.nexus-registry.tls.domains[0].main={{ nexus_domain }}"
+      - "traefik.http.routers.nexus-registry.tls.domains[0].sans=*.{{ nexus_domain }}"
+      - "traefik.http.routers.nexus-registry.service=nexus-registry"
+      - "traefik.http.services.nexus-registry.loadbalancer.server.port={{ nexus_port_docker_group }}"
+      - "traefik.http.routers.nexus-registry-push.entrypoints=websecure"
+      - "traefik.http.routers.nexus-registry-push.rule=Host(`{{ nexus_registry_push_hostname }}.{{ nexus_domain }}`)"
+      - "traefik.http.routers.nexus-registry-push.tls=true"
+      - "traefik.http.routers.nexus-registry-push.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.nexus-registry-push.tls.domains[0].main={{ nexus_domain }}"
+      - "traefik.http.routers.nexus-registry-push.tls.domains[0].sans=*.{{ nexus_domain }}"
+      - "traefik.http.routers.nexus-registry-push.service=nexus-registry-push"
+      - "traefik.http.services.nexus-registry-push.loadbalancer.server.port={{ nexus_port_docker_hosted }}"
+
+  nexus-db:
+    image: {{ nexus_postgres_image }}
+    pull_policy: never
+    container_name: nexus-db
+    command: ["postgres", "-c", "max_connections={{ nexus_db_max_connections }}"]
+    labels:
+      - 'sophon.backup.enable=true'
+      - 'sophon.backup.group=nexus'
+      - 'sophon.backup.dump=exec pg_dumpall -U "$$POSTGRES_USER" --clean --if-exists'
+      - 'sophon.backup.dump.name=postgres-cluster.sql'
+      - 'sophon.backup.dump.restore=postgres-cluster'
+    restart: unless-stopped
+    security_opt:
+      - label=disable
+    environment:
+      - POSTGRES_DB={{ nexus_db_name }}
+      - POSTGRES_USER={{ nexus_db_user }}
+      - POSTGRES_PASSWORD={{ nexus_db_password }}
+    volumes:
+      - nexus_db_data:/var/lib/postgresql
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ nexus_db_user }} -d {{ nexus_db_name }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  nexus_data:
+  nexus_db_data:
+  ldap_certs:
+    external: true
+    name: {{ nexus_ldap_certs_volume }}
+
+networks:
+  proxy:
+    external: true

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Host-side detached certificate refresh runner triggered by sophon-web-refresh-certs.path.
+# Runs outside Podman containers so stopping and restarting Traefik during acme.json rotation
+# never interrupts the refresh operation.
+set -euo pipefail
+
+CONTROL_DIR=${SOPHON_CONTROL_DIR:-/var/lib/sophon/control}
+REQ_FILE=$CONTROL_DIR/refresh-certs.request
+STATUS_FILE=$CONTROL_DIR/refresh-certs-status.json
+LOG_FILE=$CONTROL_DIR/refresh-certs.log
+
+[[ -f $REQ_FILE ]] || exit 0
+if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+    install -d -o core -g core -m 0700 "$CONTROL_DIR"
+else
+    install -d -m 0700 "$CONTROL_DIR"
+fi
+
+requested_by=$(jq -r '.requested_by // "admin"' "$REQ_FILE" 2>/dev/null || echo "admin")
+rm -f "$REQ_FILE"
+
+write_refresh_status() {
+    local state=$1 msg=$2 rc=${3:-0}
+    local tmp="${STATUS_FILE}.tmp.$$"
+    jq -n \
+        --arg state "$state" \
+        --arg requested_by "$requested_by" \
+        --arg message "$msg" \
+        --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson exit_code "$rc" \
+        '{state: $state, requested_by: $requested_by, message: $message, exit_code: $exit_code, updated_at: $updated_at}' \
+        > "$tmp"
+    chmod 0600 "$tmp"
+    if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+        chown core:core "$tmp"
+    fi
+    mv -f "$tmp" "$STATUS_FILE"
+}
+
+: > "$LOG_FILE"
+chmod 0600 "$LOG_FILE"
+if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+    chown core:core "$LOG_FILE"
+fi
+
+write_refresh_status "running" "Validating certificate disk, reloading Traefik & OpenLDAP, snapshotting Kopia, and ejecting ISO..." 0
+set +e
+if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
+    runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        /usr/local/bin/sophon-refresh-certs >> "$LOG_FILE" 2>&1
+    rc=$?
+else
+    /usr/local/bin/sophon-refresh-certs >> "$LOG_FILE" 2>&1
+    rc=$?
+fi
+set -e
+
+if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
+    /usr/local/libexec/sophon-control-sync --probe || true
+fi
+
+if [[ $rc -eq 0 ]]; then
+    summary=$(tail -n 1 "$LOG_FILE" 2>/dev/null || true)
+    write_refresh_status "succeeded" "${summary:-Wildcard TLS certificate updated, backed up to Kopia, and certificate ISO ejected.}" 0
+else
+    last_err=$(tail -n 5 "$LOG_FILE" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//' || true)
+    write_refresh_status "failed" "${last_err:-sophon-refresh-certs exited with status $rc}" "$rc"
+    exit "$rc"
+fi

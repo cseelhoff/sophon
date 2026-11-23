@@ -1,0 +1,15 @@
+[Unit]
+Description=Sophon weekly automated disaster-recovery restore drill (Proxmox, vCenter, or Hyper-V)
+Documentation=https://github.com/cseelhoff/sophon/blob/main/docs/operator-guide.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Edit WorkingDirectory to match where sophon is checked out on your workstation.
+WorkingDirectory=%h/sophon
+# Optional dedicated secrets/settings file (chmod 600) outside .env so production .env stays minimal:
+EnvironmentFile=-%h/.config/sophon/verify-restore.env
+ExecStart=/bin/sh ./sophon-provision-dev.sh
+TimeoutStartSec=2h
+Nice=10

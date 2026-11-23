@@ -1,0 +1,12 @@
+---
+- name: Destroy Sophon-managed VM on vCenter
+  vcenter_vm:
+    action: absent
+    url: "{{ vcenter_url }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    ca_file: "{{ vcenter_ca_file }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    folder: "{{ vcenter_folder }}"
+    name: "{{ destroy_vm_name }}"
+    marker: "{{ destroy_vm_marker }}"

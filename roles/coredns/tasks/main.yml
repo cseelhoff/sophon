@@ -186,6 +186,7 @@
           failed_when: false
           changed_when: false
           when:
+            - coredns_cf_tunnel_enabled | bool
             - coredns_cf_discovered_account_id | default('', true) != ''
             - coredns_cf_tunnel_id | default('', true) == ''
 
@@ -208,11 +209,15 @@
           failed_when: false
           changed_when: coredns_cf_tunnel_created.json.success | default(false)
           when:
+            - coredns_cf_tunnel_enabled | bool
+            - coredns_cf_tunnels.json is defined
             - coredns_cf_tunnels.json.success | default(false)
             - coredns_cf_tunnels.json.result | default([], true) | length == 0
 
         - name: Warn that the Cloudflare tunnel could not be created
           when:
+            - coredns_cf_tunnel_enabled | bool
+            - coredns_cf_tunnel_created is defined
             - coredns_cf_tunnel_created.json is defined
             - not (coredns_cf_tunnel_created.json.success | default(false))
           ansible.builtin.debug:
@@ -226,8 +231,8 @@
         # id is known, and both stay empty otherwise.
         - name: Adopt the tunnel and account ids only as a matched pair
           vars:
-            _tunnel: "{{ coredns_cf_tunnels.json.result | default([], true) | first | default(coredns_cf_tunnel_created.json.result | default({}, true), true) }}"
-            _tunnel_id: "{{ coredns_cf_tunnel_id if (coredns_cf_tunnel_id | default('', true) != '') else _tunnel.id | default('', true) }}"
+            _tunnel: "{{ (coredns_cf_tunnels.json.result | default([], true) | first) if (coredns_cf_tunnels is defined and coredns_cf_tunnels.json is defined and (coredns_cf_tunnels.json.result | default([], true) | length > 0)) else (coredns_cf_tunnel_created.json.result | default({}, true) if (coredns_cf_tunnel_created is defined and coredns_cf_tunnel_created.json is defined) else {}) }}"
+            _tunnel_id: "{{ (coredns_cf_tunnel_id if (coredns_cf_tunnel_id | default('', true) != '') else _tunnel.id | default('', true)) if (coredns_cf_tunnel_enabled | bool) else '' }}"
           ansible.builtin.set_fact:
             coredns_cf_tunnel_id: "{{ _tunnel_id }}"
             coredns_cf_account_id: "{{ coredns_cf_discovered_account_id if _tunnel_id != '' else '' }}"
@@ -251,7 +256,9 @@
           register: coredns_cf_existing_cnames
           failed_when: false
           changed_when: false
-          when: coredns_cf_tunnel_id | default('', true) != ''
+          when:
+            - coredns_cf_tunnel_enabled | bool
+            - coredns_cf_tunnel_id | default('', true) != ''
 
         - name: Repoint CNAMEs that still target another tunnel
           vars:
@@ -276,6 +283,7 @@
           failed_when: false
           changed_when: coredns_cf_repointed.json.success | default(false)
           when:
+            - coredns_cf_tunnel_enabled | bool
             - item.json is defined
             - item.json.result | default([], true) | length > 0
             - _record.content | lower is match('.*\.cfargotunnel\.com$')
@@ -290,6 +298,7 @@
           loop_control:
             label: "{{ item.item.item }}"
           when:
+            - coredns_cf_tunnel_enabled | bool
             - item.json is defined
             - not (item.json.success | default(false))
 
@@ -298,12 +307,14 @@
           ansible.builtin.debug:
             msg: >-
               Cloudflare zone {{ coredns_cf_zone_id }} for {{ coredns_domain_name }};
-              {{ 'tunnel ' ~ coredns_cf_tunnel_id ~ ' in account ' ~ coredns_cf_account_id
-                    ~ (' (created just now)' if coredns_cf_tunnel_created is changed else '')
-                 if coredns_cf_tunnel_id != ''
-                 else 'no tunnel named "' ~ coredns_cf_tunnel_name ~ '" exists or could be created, so public CNAMEs and
-                      ingress routes are not published and every name must be resolved from CoreDNS
-                      directly. Certificates are unaffected.' }}
+              {{ 'tunnel publishing is disabled (SOPHON_CF_TUNNEL_ENABLED=false), so public CNAMEs and ingress routes are left untouched and every name must be resolved from CoreDNS directly.'
+                 if not (coredns_cf_tunnel_enabled | bool)
+                 else ('tunnel ' ~ coredns_cf_tunnel_id ~ ' in account ' ~ coredns_cf_account_id
+                       ~ (' (created just now)' if coredns_cf_tunnel_created is changed else '')
+                       if coredns_cf_tunnel_id != ''
+                       else 'no tunnel named "' ~ coredns_cf_tunnel_name ~ '" exists or could be created, so public CNAMEs and
+                            ingress routes are not published and every name must be resolved from CoreDNS
+                            directly. Certificates are unaffected.') }}
 
         - name: Warn that the Cloudflare preflight could not run
           when: coredns_cf_zones.json is not defined

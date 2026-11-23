@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optional weekly zero-downtime read-only Btrfs volume snapshots (last-resort only)."""
+"""Optional weekly zero-downtime read-only Btrfs volume snapshots via Kopia native actions."""
 import argparse
 import ctypes
 import fcntl
@@ -8,7 +8,6 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-import signal
 import struct
 import subprocess
 import sys
@@ -18,7 +17,6 @@ import uuid
 import backup
 import runtime
 
-WEEK = 7 * 86400
 BTRFS_SUPER_MAGIC = 0x9123683E
 BTRFS_SUBVOL_INODE = 256
 BTRFS_SUBVOL_RDONLY = 2
@@ -27,6 +25,7 @@ BTRFS_IOC_SUBVOL_GETFLAGS = 0x80089419
 BTRFS_IOC_SUBVOL_SETFLAGS = 0x4008941A
 BTRFS_IOC_SNAP_DESTROY_V2 = 0x5000943F
 NAME_OFFSET = 56
+TARGET = "/sophon-coarse"
 
 
 class _Statfs(ctypes.Structure):
@@ -122,7 +121,7 @@ def capture(volumes, work, source, version):
         }
         backup.write_json(stage / "manifest.json", manifest)
         subprocess.run(["sync", "-f", str(stage)], check=True, timeout=300)
-        backup.write_json(work / "pending.json", {"version": 2, "run": run_id})
+        return stage, manifest
     except BaseException:
         cleanup_staging(work)
         raise
@@ -152,13 +151,7 @@ def initialize(work):
         backup.fail("Coarse working-directory marker is a symlink")
     expected = {"version": 2, "mode": "btrfs-readonly-subvolume"}
     if marker.exists():
-        current = json.loads(marker.read_text())
-        if current == {"version": 1} and not (work / "journal.json").exists():
-            if (work / "pending.json").exists():
-                (work / "pending.json").unlink()
-            cleanup_staging(work)
-            backup.write_json(marker, expected)
-        elif current != expected:
+        if json.loads(marker.read_text()) != expected:
             backup.fail("Unrecognized coarse working directory")
     else:
         if any(work.iterdir()):
@@ -166,81 +159,95 @@ def initialize(work):
         backup.write_json(marker, expected)
 
 
-def run(environment):
+def before_snapshot_action(environment):
     work = Path(environment.get("COARSE_ROOT", "/coarse"))
     source = Path(environment.get("SOURCE_ROOT", "/source"))
     volumes = Path(environment.get("COARSE_VOLUMES", "/volumes"))
     validate_mounts(volumes, work)
-    initialize(work)
     with backup.locked(work):
-        for name in ("config", "cache", "logs"):
-            backup.private_dir(work / name)
-        if not (work / "pending.json").exists():
-            if not any(not (entry / "_data").is_symlink() and (entry / "_data").is_dir()
-                       and (entry / "_data").samefile(source)
-                       for entry in volumes.iterdir() if entry.is_dir() and not entry.is_symlink()):
-                backup.fail("The selected source is not the Podman volumes subvolume containing backup coordination")
-            capture(volumes, work, source, runtime.required(environment, "SOPHON_VERSION"))
-        pending = json.loads((work / "pending.json").read_text())
-        manifest = json.loads((work / "staging/manifest.json").read_text())
-        if pending != {"version": 2, "run": manifest["run"]}:
-            backup.fail("Coarse upload staging does not match its durable ready record")
-        runtime.connect(environment)
-        identity = runtime.required(environment, "KOPIA_CLIENT_USERNAME") + "@" + runtime.required(
-            environment, "KOPIA_CLIENT_HOSTNAME") + ":/sophon-coarse"
-        runtime.kopia(environment, "policy", "set", identity, "--keep-latest=4", "--keep-hourly=0",
-                      "--keep-daily=0", "--keep-weekly=0", "--keep-monthly=0", "--keep-annual=0",
-                      "--snapshot-interval=0s", "--ignore-identical-snapshots=false")
-        result = json.loads(runtime.kopia(environment, "snapshot", "create", str(work / "staging"),
-                                         "--override-source=" + identity, "--json", "--fail-fast", timeout=86400))
-        if (not isinstance(result, dict) or not isinstance(result.get("id"), str)
-                or not re.fullmatch(r"[a-f0-9]{32}", result["id"])
-                or result.get("rootEntry", {}).get("summ", {}).get("numFailed") != 0):
-            backup.fail("Coarse snapshot was incomplete; immutable upload staging retained")
-        runtime.kopia(environment, "snapshot", "expire", identity, "--delete")
-        backup.write_json(work / "last-run.json", {"status": "complete", "snapshot": result["id"],
-                                                   "source": identity, "run": pending["run"]})
-        (work / "pending.json").unlink()
+        if not any(not (entry / "_data").is_symlink() and (entry / "_data").is_dir()
+                   and (entry / "_data").samefile(source)
+                   for entry in volumes.iterdir() if entry.is_dir() and not entry.is_symlink()):
+            backup.fail("The selected source is not the Podman volumes subvolume containing backup coordination")
+        stage, manifest = capture(volumes, work, source, runtime.required(environment, "SOPHON_VERSION"))
+        backup.write_json(work / "last-run.json", {"status": "complete", "upload_status": "pending",
+                                                   "failures": [], "run": manifest["run"]})
+        print("KOPIA_SNAPSHOT_PATH=" + str(stage), flush=True)
+
+
+def after_snapshot_action(environment):
+    work = Path(environment.get("COARSE_ROOT", "/coarse"))
+    with backup.locked(work):
         cleanup_staging(work)
-        print(json.dumps({"status": "complete", "snapshot": result["id"], "source": identity}), flush=True)
+        last_run = work / "last-run.json"
+        if last_run.exists() and not last_run.is_symlink():
+            record = json.loads(last_run.read_text())
+            record["upload_status"] = "complete"
+            backup.write_json(last_run, record)
+
+
+def serve(environment):
+    # ponytail: delegate weekly scheduling + 4-snapshot retention to Kopia's native server policy
+    work = Path(environment.get("COARSE_ROOT", "/coarse"))
+    volumes = Path(environment.get("COARSE_VOLUMES", "/volumes"))
+    validate_mounts(volumes, work)
+    initialize(work)
+    for name in ("config", "cache", "logs"):
+        backup.private_dir(work / name)
+    with backup.locked(work):
+        cleanup_staging(work)
+    server_env = runtime.control_env(environment)
+    server_env.setdefault("KOPIA_SERVER_ADDRESS", "http://127.0.0.1:51516")
+    runtime.connect(server_env, enable_actions=True)
+    client_user = runtime.required(server_env, "KOPIA_CLIENT_USERNAME")
+    client_host = runtime.required(server_env, "KOPIA_CLIENT_HOSTNAME")
+    runtime.kopia(server_env, "repository", "set-client", "--username=" + client_user, "--hostname=" + client_host)
+    runtime.kopia(
+        server_env, "policy", "set", TARGET,
+        "--keep-latest=4", "--keep-hourly=0", "--keep-daily=0",
+        "--keep-weekly=0", "--keep-monthly=0", "--keep-annual=0",
+        "--ignore-identical-snapshots=false",
+        "--before-snapshot-root-action=/app/coarse.py",
+        "--after-snapshot-root-action=/app/coarse.py",
+        "--no-persist-action-script",
+        "--action-command-mode=essential",
+        "--action-command-timeout=900s",
+        "--snapshot-interval=" + server_env.get("KOPIA_COARSE_INTERVAL", "168h"),
+    )
+    runtime.run_server(
+        ["kopia", "server", "start", "--address=" + server_env["KOPIA_SERVER_ADDRESS"],
+         "--insecure", "--control-api", "--enable-actions", "--shutdown-grace-period=180s"],
+        server_env, initial_target=TARGET, state_root=work,
+    )
+
+
+def run(environment):
+    work = Path(environment.get("COARSE_ROOT", "/coarse"))
+    env = dict(environment)
+    env.setdefault("KOPIA_SERVER_ADDRESS", "http://127.0.0.1:51516")
+    record = runtime.trigger_snapshot(env, work, TARGET)
+    print(json.dumps(record), flush=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("serve", "run"))
-    args = parser.parse_args()
     os.umask(0o077)
-
-    def interrupted(signum, frame):
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, interrupted)
-    signal.signal(signal.SIGINT, interrupted)
     environment = dict(os.environ)
+    kopia_action = environment.get("KOPIA_ACTION", "").strip()
     try:
+        if kopia_action == "before-snapshot-root":
+            before_snapshot_action(environment)
+            return 0
+        if kopia_action == "after-snapshot-root":
+            after_snapshot_action(environment)
+            return 0
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("action", choices=("serve", "run"))
+        args = parser.parse_args()
         if args.action == "run":
             run(environment)
-            return 0
-        work = Path(environment.get("COARSE_ROOT", "/coarse"))
-        volumes = Path(environment.get("COARSE_VOLUMES", "/volumes"))
-        validate_mounts(volumes, work)
-        initialize(work)
-        schedule = work / "schedule.json"
-        while True:
-            due = json.loads(schedule.read_text())["due"] if schedule.exists() else 0
-            if time.time() >= due:
-                backup.write_json(schedule, {"due": time.time() + WEEK})
-                try:
-                    run(environment)
-                except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
-                    diagnostic = runtime.startup_diagnostic(error, environment)
-                    print(diagnostic, file=sys.stderr, flush=True)
-                    backup.write_json(work / "last-run.json", {
-                        "status": "failed", "error": json.loads(diagnostic.split("=", 1)[1])["message"]})
-            time.sleep(30)
-    except KeyboardInterrupt:
-        print("Coarse snapshot service stopped; workloads were never paused", file=sys.stderr)
-        return 130
+        else:
+            serve(environment)
+        return 0
     except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(runtime.startup_diagnostic(error, environment), file=sys.stderr)
         return 1

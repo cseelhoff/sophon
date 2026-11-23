@@ -16,33 +16,54 @@
 **Runner**: the Ansible container on InfraVM. It reconciles Compose stacks in `/var/lib/sophon/stacks` over the rootless Podman socket and
 preflights the declared SFTP destination; it has no hypervisor/guest SSH or host root privileges.
 
-**Installer ISO**: `sophon-installer.iso`; the stock Fedora CoreOS live ISO with a small Ignition config baked in (`coreos-installer iso customize`) that runs the unattended install. Reusable, secret-free.
+**CoreOS Installer ISO**: `sophon-coreos.iso`; the stock Fedora CoreOS live ISO with a small Ignition config baked in (`coreos-installer iso customize`) that runs the unattended install. Reusable, secret-free.
 
-**Deployment ISO**: `sophon-deployment.iso`; project, runner image, container archives and installer. Reusable, secret-free.
+**Apps Bundle ISO**: `sophon-apps.iso`; project, runner image, container archives and installer. Reusable, secret-free.
+
+**SFTP Server ISO**: `sophon-sftp-server.iso`; standalone hybrid BIOS/UEFI Alpine 3.24 installer ISO built by Prepare that installs a turnkey, confined OpenSSH `internal-sftp` backup server onto a single blank disk (`sophon-backup-setup` / `sophon-authorize-key`). Reusable, secret-free.
 
 **Artifact**: a file Prepare produces and a later step consumes (image archive, ISO, runner image).
 
-**Service FQDN**: `<service>.<domain>`; how everything addresses a service. Raw IPs are used only for the hypervisor and Portainer's first contact.
+**Service FQDN**: `<service>.<domain>`; how everything addresses a service. Raw IPs are used only for hypervisor management APIs and SFTP backup endpoints.
 
 **Zone**: `<domain>` itself, public on Cloudflare for DNS-01 and served authoritatively on site by CoreDNS.
 
-**Certificate disk**: a small ISO (label `SOPHON_CERTS`) holding the `acme.json` of one wildcard certificate (`<domain>` and `*.<domain>`) with its full chain and private key, no ACME account. The one secret thing carried into a site without internet.
+**Secrets disk**: `artifacts/secrets/sophon-secrets.iso` (mode `0600`, label `SOPHON_CERTS`), unifying optional unattended seed configuration (`/sophon-seed.json`, including prod `SOPHON_NETWORK_CIDR`, dev `SOPHON_DEV_NETWORK_CIDR`, and paired `sophon-backup` + `sophon-restore` SFTP keys) and/or the pre-issued air-gapped wildcard certificate (`/acme.json`).
 
 **Site egress**: internet access available to services at runtime. Expected normally; its absence is a supported, degraded mode (no tunnel publishing, no self-renewal).
 
 **Reconstructible / irreplaceable state**: what a rerun rebuilds, versus what only a backup can restore.
 
-**Backup group**: v3-labelled workloads whose writers pause together while declared
-irreproducible paths are cloned and native dumps are captured. Writers resume before upload.
+**Backup group**: `sophon.backup.enable=true` workloads grouped together (defaulting
+to `com.docker.compose.project`) whose hot volume reflinks, `.kopiaignore` rules
+and native stdout database dumps are staged together by Kopia's before-snapshot
+action without stopping containers.
 
 **Primary snapshot**: real irreproducible files, native dumps and a v3 manifest
-with workload images and Sophon source version; not a system or GUI backup.
+with workload images and Sophon source version, scheduled natively by Kopia
+(`backup@sophon:/sophon-state`); not a system or GUI backup.
 
 **Coarse snapshot**: an optional weekly, last-resort crash-consistent Btrfs
 read-only subvolume snapshot of the rootless Podman `volumes` subvolume on `/var`.
 Zero containers stop and no engine socket is mounted; Kopia uploads the read-only
 snapshot from a disjoint working directory on `/var` and destroys the snapshot when complete.
 
-**Engine proxy**: the unpublished allowlisted socket proxy used by the backup
-container, separate from Arcane. The primary collector has named read-only
-volume mounts, not the engine socket or whole volumes directory.
+**Dump proxy**: the unpublished, zero-capability Python socket proxy (`dump-proxy`)
+used by `kopia`. It strips `Config.Env` from container inspection and executes
+only dump commands declared on the target container's own `sophon.backup.*` labels;
+arbitrary `/exec`, `/stop`, `/start` and `/archive` endpoints are rejected.
+
+**Artifact & container registry (Nexus)**: Core Sonatype Nexus Repository Community Edition (`nexus.<domain>`,
+`registry.<domain>` pull group, `registry-push.<domain>` hosted CI push) backed by PostgreSQL and OpenLDAP RBAC
+(`nexus-admins`, `nexus-developers`), with separated `hosted` (backed up by Kopia) and `proxy-cache` (reconstructible,
+excluded from backups) file blob stores. Gitea's built-in package registry is disabled (`GITEA__packages__ENABLED=false`).
+
+**Pure GitOps workload**: a Stage-2 application stack committed declaratively in Gitea (default `ops/workloads`)
+referencing immutable images in `registry.<domain>` and `sophon.backup.*` labels, reconciled onto InfraVM by Arcane
+inbound webhooks or `sophon-reconcile-gitops` during `standby_restore` drills without giving CI runners host socket
+access or long-lived Arcane admin credentials.
+
+**Appliance Status & Cutover UI (`sophon-status`)**: the LAN-only (`CF_EXCLUDE`), Keycloak PKCE OIDC-authenticated
+(`arcane-admins`) status and disaster-recovery cutover console served at `https://<domain>` and `https://status.<domain>`.
+Reads only non-secret state in `/var/lib/sophon/control`, disables promotion whenever `SOPHON_NETWORK_CIDR` is still
+occupied on the network, and triggers `sophon-activate` via the detached host `sophon-web-activate.path` systemd unit.

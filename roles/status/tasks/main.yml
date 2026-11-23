@@ -1,0 +1,12 @@
+---
+# Deploy the Appliance Status & Disaster-Recovery Cutover Web UI (https://<domain>)
+# Reuses localhost/sophon:latest (0 MB extra ISO footprint) behind Traefik TLS + Keycloak OIDC.
+
+- name: Deploy Appliance Status Compose stack
+  ansible.builtin.include_role:
+    name: compose_stack
+  vars:
+    compose_stack_name: "status"
+    compose_stack_content: "{{ lookup('template', 'docker-compose.yml.j2') }}"
+    compose_stack_image_tars: []
+    compose_stack_env_vars: "{{ status_environment }}"

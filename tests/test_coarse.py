@@ -47,16 +47,14 @@ class CoarseTests(unittest.TestCase):
                     patch.object(coarse, "is_btrfs_subvolume", return_value=True), \
                     patch.object(coarse, "create_readonly_snapshot", side_effect=fake_snapshot) as snap, \
                     patch.object(coarse.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
-                coarse.capture(volumes, work, source, "fixture-source")
+                stage, manifest = coarse.capture(volumes, work, source, "fixture-source")
 
             snap.assert_called_once_with(volumes, work / "staging", "volumes")
+            self.assertEqual(stage, work / "staging")
             self.assertEqual((work / "staging/volumes/gitea_data/state").read_text(), "live irreproducible state")
-            manifest = json.loads((work / "staging/manifest.json").read_text())
             self.assertEqual(manifest["format"], "sophon-coarse-2")
             self.assertEqual(manifest["mode"], "btrfs-readonly-subvolume")
             self.assertTrue(manifest["last_resort_only"])
-            self.assertEqual(json.loads((work / "pending.json").read_text()),
-                             {"version": 2, "run": manifest["run"]})
             self.assertFalse((work / "journal.json").exists())
             self.assertFalse((source / "coarse.json").exists())
 
@@ -100,29 +98,35 @@ class CoarseTests(unittest.TestCase):
             self.assertFalse((work / "pending.json").exists())
             self.assertFalse((work / "staging").exists())
 
-    def test_serve_initializes_empty_work_dir_before_schedule_and_leaves_nonempty_dir_untouched(self):
+    def test_serve_configures_native_kopia_policy_and_rejects_nonempty_uninitialized_dir(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             volumes, work, source = (root / name for name in ("volumes", "work", "source"))
             for path in (volumes, work, source):
                 path.mkdir()
-            env = {"COARSE_VOLUMES": str(volumes), "COARSE_ROOT": str(work), "SOURCE_ROOT": str(source)}
-            called = []
-
-            def fake_run(environment):
-                coarse.initialize(Path(environment["COARSE_ROOT"]))
-                called.append(True)
-
+            env = {
+                "COARSE_VOLUMES": str(volumes), "COARSE_ROOT": str(work), "SOURCE_ROOT": str(source),
+                "KOPIA_CLIENT_USERNAME": "backup", "KOPIA_CLIENT_HOSTNAME": "sophon",
+                "KOPIA_SERVER_PASSWORD": "secret",
+            }
+            kopia_calls = []
+            server_calls = []
             with patch.dict(coarse.os.environ, env, clear=False), \
                     patch.object(coarse, "validate_mounts"), \
-                    patch.object(coarse, "run", side_effect=fake_run), \
-                    patch.object(coarse.time, "sleep", side_effect=KeyboardInterrupt), \
+                    patch.object(coarse.runtime, "connect"), \
+                    patch.object(coarse.runtime, "kopia", side_effect=lambda _e, *a, **_k: kopia_calls.append(a) or b""), \
+                    patch.object(coarse.runtime, "run_server", side_effect=lambda *a, **k: server_calls.append((a, k))), \
                     patch.object(sys, "argv", ["coarse.py", "serve"]):
-                self.assertEqual(coarse.main(), 130)
-            self.assertEqual(called, [True])
+                self.assertEqual(coarse.main(), 0)
             self.assertTrue((work / ".sophon-coarse.json").exists())
-            self.assertTrue((work / "schedule.json").exists())
-            self.assertFalse((work / "last-run.json").exists())
+            self.assertFalse((work / "schedule.json").exists())
+            policy = next(args for args in kopia_calls if args[:3] == ("policy", "set", "/sophon-coarse"))
+            self.assertIn("--keep-latest=4", policy)
+            self.assertIn("--before-snapshot-root-action=/app/coarse.py", policy)
+            self.assertIn("--after-snapshot-root-action=/app/coarse.py", policy)
+            self.assertIn("--snapshot-interval=168h", policy)
+            self.assertEqual(len(server_calls), 1)
+            self.assertEqual(server_calls[0][1]["initial_target"], "/sophon-coarse")
 
             nonempty = root / "nonempty"
             nonempty.mkdir()
@@ -178,8 +182,9 @@ class CoarseTests(unittest.TestCase):
                     patch.object(coarse, "fs_magic", return_value=coarse.BTRFS_SUPER_MAGIC), \
                     patch.object(coarse, "create_readonly_snapshot", side_effect=lambda s, p, n="volumes": (Path(p) / n).mkdir()), \
                     patch.object(coarse.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
-                coarse.capture(volumes, work, source, "fixture-subvol-dev")
-            self.assertTrue((work / "pending.json").exists())
+                stage, manifest = coarse.capture(volumes, work, source, "fixture-subvol-dev")
+            self.assertTrue((stage / "manifest.json").exists())
+            self.assertEqual(manifest["sophon_version"], "fixture-subvol-dev")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,135 @@
+#!/bin/sh
+# Optional unattended first-boot seed applicator for the Sophon Backup Server.
+# Looks for a CD/DVD ISO with volume label SOPHON_BACKUP_CERTS (artifacts/secrets/sophon-sftp-secrets.iso).
+# When absent, exits 0 silently so interactive console setup runs unchanged.
+set -eu
+
+DONE_FLAG=/var/lib/sophon-backup-seed-done
+[ ! -e "$DONE_FLAG" ] || exit 0
+
+modprobe hv_storvsc 2>/dev/null || true
+modprobe virtio_scsi 2>/dev/null || true
+modprobe ata_piix 2>/dev/null || true
+modprobe cdrom 2>/dev/null || true
+modprobe sr_mod 2>/dev/null || true
+modprobe isofs 2>/dev/null || true
+mdev -s 2>/dev/null || true
+
+find_seed_device() {
+    for _ in 1 2 3 4 5; do
+        if [ -b /dev/disk/by-label/SOPHON_BACKUP_CERTS ]; then
+            printf '%s\n' /dev/disk/by-label/SOPHON_BACKUP_CERTS
+            return 0
+        fi
+        found_dev=$(blkid -L SOPHON_BACKUP_CERTS 2>/dev/null || true)
+        if [ -n "$found_dev" ] && [ -b "$found_dev" ]; then
+            printf '%s\n' "$found_dev"
+            return 0
+        fi
+        has_cd=0
+        for dev in /dev/sr0 /dev/sr1 /dev/sr2 /dev/cdrom; do
+            [ -b "$dev" ] || continue
+            has_cd=1
+            lbl=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
+            if [ "$lbl" = "SOPHON_BACKUP_CERTS" ]; then
+                printf '%s\n' "$dev"
+                return 0
+            fi
+        done
+        [ "$has_cd" -eq 1 ] || break
+        sleep 1
+        mdev -s 2>/dev/null || true
+    done
+    return 1
+}
+
+seed_dev=$(find_seed_device) || exit 0
+
+printf '\n== Applying unattended Sophon Backup Server seed (%s) ==\n' "$seed_dev" >/dev/console 2>&1 || true
+
+mnt=/run/sophon-backup-seed-mnt
+work=/run/sophon-backup-seed
+rm -rf "$mnt" "$work"
+install -d -m 0700 "$mnt" "$work"
+cleanup() {
+    umount "$mnt" 2>/dev/null || true
+    rm -rf "$mnt" "$work"
+}
+trap cleanup EXIT INT TERM
+
+mount -t iso9660 -o ro "$seed_dev" "$mnt"
+for req in admin.shadow network.env ssh_host_ed25519_key ssh_host_ed25519_key.pub authorized_keys_backup; do
+    if [ ! -f "$mnt/$req" ]; then
+        printf 'Error: missing %s on SOPHON_BACKUP_CERTS seed ISO.\n' "$req" >/dev/console 2>&1 || true
+        exit 1
+    fi
+    cp "$mnt/$req" "$work/$req"
+done
+if [ -f "$mnt/authorized_keys_restore" ]; then
+    cp "$mnt/authorized_keys_restore" "$work/authorized_keys_restore"
+fi
+chmod 0600 "$work"/*
+umount "$mnt" 2>/dev/null || true
+eject "$seed_dev" 2>/dev/null || true
+
+admin_hash=$(tr -d '\r\n' < "$work/admin.shadow")
+case "$admin_hash" in
+    '$6$'*) ;;
+    *) printf 'Error: invalid admin password hash in seed ISO.\n' >/dev/console 2>&1 || true; exit 1 ;;
+esac
+printf 'admin:%s\n' "$admin_hash" | chpasswd -e
+install -m 0644 /dev/null /var/lib/sophon-backup-password-set
+
+# Install deterministic pre-paired SSH host key and serve only pinned Ed25519 so StrictHostKeyChecking=yes matches 100%.
+rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+install -o root -g root -m 0600 "$work/ssh_host_ed25519_key" /etc/ssh/ssh_host_ed25519_key
+install -o root -g root -m 0644 "$work/ssh_host_ed25519_key.pub" /etc/ssh/ssh_host_ed25519_key.pub
+printf 'HostKey /etc/ssh/ssh_host_ed25519_key\n' > /etc/ssh/sshd_config.d/05-sophon-hostkey.conf
+chmod 0644 /etc/ssh/sshd_config.d/05-sophon-hostkey.conf
+
+/usr/local/sbin/sophon-backup-apply authorize-key < "$work/authorized_keys_backup"
+if [ -f "$work/authorized_keys_restore" ]; then
+    /usr/local/sbin/sophon-backup-apply authorize-key < "$work/authorized_keys_restore"
+fi
+
+net_mode="" net_ip="" net_prefix="" net_gw="" net_dns=""
+while IFS='=' read -r key val || [ -n "${key:-}" ]; do
+    val=$(printf '%s' "${val:-}" | tr -d '\r')
+    case "$key" in
+        MODE) net_mode=$val ;;
+        IP) net_ip=$val ;;
+        PREFIX) net_prefix=$val ;;
+        GATEWAY) net_gw=$val ;;
+        DNS) net_dns=$val ;;
+    esac
+done < "$work/network.env"
+
+if [ "$net_mode" = "static" ]; then
+    iface=""
+    for path in /sys/class/net/*; do
+        name=${path##*/}
+        [ "$name" != "lo" ] || continue
+        iface=$name
+        break
+    done
+    [ -n "$iface" ] || { printf 'Error: no Ethernet interface found.\n' >/dev/console 2>&1 || true; exit 1; }
+    /usr/local/sbin/sophon-backup-apply network "$iface" "$net_ip" "$net_prefix" "$net_gw" "${net_dns:-1.1.1.1}"
+fi
+
+/usr/sbin/sshd -t
+if rc-service sshd status >/dev/null 2>&1; then
+    rc-service sshd restart >/dev/null 2>&1 || true
+fi
+
+active_ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}' || true)
+host_fp=$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | awk '{print $2}')
+cat > /etc/issue <<EOF
+Sophon Backup Server (\l) — READY (unattended seed applied)
+  SFTP address : ${active_ip:-DHCP} (port 22, path /repository)
+  Hostkey      : ssh-ed25519 ${host_fp}
+  Accounts     : sophon-backup (rw), sophon-restore (ro)
+
+EOF
+
+install -m 0644 /dev/null "$DONE_FLAG"
+printf '== Sophon Backup Server ready at %s (ssh-ed25519 %s) ==\n\n' "${active_ip:-DHCP}" "$host_fp" >/dev/console 2>&1 || true

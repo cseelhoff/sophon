@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 
 from deployment import new_control, validate_settings
-from library.vcenter_vm import MARKER, connection_environment, provision
+from library.vcenter_vm import MARKER, connection_environment, mount_secrets, provision
 
 
 class VCenterTests(unittest.TestCase):
@@ -41,6 +41,8 @@ class VCenterTests(unittest.TestCase):
             return json.dumps({'virtualMachines': [self.vm]})
         if arguments[0] == 'datastore.ls':
             return json.dumps(self.listing)
+        if arguments[0] == 'device.info':
+            return json.dumps({'devices': getattr(self, 'cdroms', [])})
         if arguments[0] == 'device.cdrom.add':
             return 'cdrom-3001\n'
         return ''
@@ -154,6 +156,30 @@ class VCenterTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('thin-provisioned', result.stdout)
+
+    def test_mount_secrets_inserts_into_empty_drive_connects_and_prunes_old_secrets_isos(self):
+        secrets = Path(self.temporary.name) / 'sophon-secrets.iso'
+        secrets.write_bytes(b'fresh monthly certificate iso')
+        self.paths = ['/DC/vm/sophon-test']
+        self.listing = [{'file': [
+            {'path': 'sophon-secrets-deadbeef.iso', 'fileSize': 1234},
+            {'path': 'sophon-apps-11223344.iso', 'fileSize': 5678},
+        ]}]
+        self.cdroms = [
+            {'name': 'cdrom-3000', 'backing': {'fileName': '[Shared] sophon-isos/sophon-coreos-aaaa1111.iso'}},
+            {'name': 'cdrom-3001', 'backing': {'fileName': '[Shared] sophon-isos/sophon-apps-11223344.iso'}},
+            {'name': 'cdrom-3002', 'backing': {}},
+        ]
+        result = mount_secrets({**self.params, 'secrets_iso': str(secrets)}, self.run_govc)
+        self.assertTrue(result['changed'])
+        self.assertEqual(result['device'], 'cdrom-3002')
+        self.assertTrue(result['filename'].startswith('sophon-secrets-'))
+        self.assertIn(('device.cdrom.insert', '-vm', '/DC/vm/sophon-test', '-device', 'cdrom-3002',
+                       f"sophon-isos/{result['filename']}"), self.calls)
+        self.assertIn(('device.connect', '-vm', '/DC/vm/sophon-test', 'cdrom-3002'), self.calls)
+        self.assertIn(('datastore.rm', '-f', 'sophon-isos/sophon-secrets-deadbeef.iso'), self.calls)
+        self.assertNotIn(('datastore.rm', '-f', 'sophon-isos/sophon-apps-11223344.iso'), self.calls)
+
 
 
 if __name__ == '__main__':

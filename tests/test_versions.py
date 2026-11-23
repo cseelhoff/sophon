@@ -31,30 +31,27 @@ class VersionTests(unittest.TestCase):
 
     def test_prepare_caches_exactly_the_deployed_upstream_images(self):
         variables = yaml.safe_load((ROOT / 'group_vars/all.yml').read_text())
-        traefik, gitea, keycloak, ldap, tunnel = map(
-            defaults, ('traefik', 'gitea', 'keycloak', 'openldap', 'cloudflared'))
+        traefik, gitea, nexus, keycloak, ldap, tunnel = map(
+            defaults, ('traefik', 'gitea', 'nexus', 'keycloak', 'openldap', 'cloudflared'))
         images = {
             variables['arcane_image_repo'] + ':' + variables['arcane_image_tag'],
             'docker.io/library/traefik:' + traefik['traefik_image_tag'],
             'docker.io/cloudflare/cloudflared:' + tunnel['cloudflared_image_tag'],
             'docker.io/' + gitea['gitea_image_name'] + ':' + gitea['gitea_image_tag'],
             gitea['gitea_postgres_image'],
+            'docker.io/' + nexus['nexus_image_name'] + ':' + nexus['nexus_image_tag'],
+            nexus['nexus_postgres_image'],
             keycloak['keycloak_image_name'] + ':' + keycloak['keycloak_image_tag'],
             keycloak['keycloak_postgres_image'],
             'docker.io/' + ldap['openldap_image_name'] + ':' + ldap['openldap_image_tag'],
             'docker.io/' + ldap['openldap_certs_dumper_image_name'] + ':' + ldap['openldap_certs_dumper_image_tag'],
-            'docker.io/library/haproxy:' + variables['kopia_proxy_version'],
         }
         prepared = set(defaults('prepare')['prepare_container_images'])
         prepared.remove('{{ arcane_image }}')
-        prepared.remove('{{ kopia_proxy_image }}')
-        prepared.add('docker.io/library/haproxy:' + variables['kopia_proxy_version'])
         prepared.add(variables['arcane_image_repo'] + ':' + variables['arcane_image_tag'])
         self.assertEqual(prepared, images)
         for image in images:
-            pattern = (r'^\d+\.\d+\.\d+-alpine$' if '/haproxy:' in image else
-                       r'^\d+\.\d+-alpine\d+\.\d+$' if '/postgres:' in image
-                       else r'^v?\d+\.\d+\.\d+$')
+            pattern = r'^\d+\.\d+-alpine\d+\.\d+$' if '/postgres:' in image else r'^v?\d+\.\d+\.\d+$'
             self.assertRegex(image.rsplit(':', 1)[1], pattern)
 
     def test_toolchain_tags_are_exact_and_traefik_matches_the_service(self):
@@ -66,7 +63,7 @@ class VersionTests(unittest.TestCase):
         self.assertIn('docker.io/library/traefik:' + defaults('traefik')['traefik_image_tag'], images)
 
     def test_postgres_18_uses_the_supported_volume_root(self):
-        for role in ('gitea', 'keycloak'):
+        for role in ('gitea', 'keycloak', 'nexus'):
             text = (ROOT / 'roles' / role / 'templates/docker-compose.yml.j2').read_text()
             self.assertIn(f'{role}_db_data:/var/lib/postgresql\n', text)
             self.assertNotIn(':/var/lib/postgresql/data', text)
@@ -87,7 +84,7 @@ class VersionTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is required to resolve archive names')
     def test_every_deployed_archive_is_in_the_prepare_manifest(self):
         variables = yaml.safe_load((ROOT / 'group_vars/all.yml').read_text())
-        for role in ('prepare', 'arcane', 'traefik', 'cloudflared', 'gitea', 'keycloak', 'openldap', 'coredns', 'kopia'):
+        for role in ('prepare', 'arcane', 'traefik', 'cloudflared', 'gitea', 'nexus', 'keycloak', 'openldap', 'coredns', 'kopia'):
             variables.update(defaults(role))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -97,7 +94,7 @@ class VersionTests(unittest.TestCase):
                     'dest': str(output),
                     'content': "{{ {'prepared': prepare_image_tars + [prepare_coredns_tar | basename, prepare_kopia_tar | basename], "
                                "'deployed': arcane_image_tars + traefik_image_tars + cloudflared_image_tars + gitea_image_tars "
-                               "+ keycloak_image_tars + openldap_image_tars + coredns_image_tars + kopia_image_tars} | to_json }}",
+                               "+ nexus_image_tars + keycloak_image_tars + openldap_image_tars + coredns_image_tars + kopia_image_tars} | to_json }}",
                 },
                 'vars': variables,
             }])

@@ -101,7 +101,7 @@ def build(stock, output, force=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stock', type=Path, default=ROOT / 'artifacts/coreos/fedora-coreos-live.iso')
-    parser.add_argument('--output', type=Path, default=ROOT / 'artifacts/coreos/sophon-installer.iso')
+    parser.add_argument('--output', type=Path, default=ROOT / 'artifacts/coreos/sophon-coreos.iso')
     parser.add_argument('--force', action='store_true', help='Rebuild even when nothing changed')
     options = parser.parse_args(argv)
     try:

@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# Syncs CoreOS host registry auth/split-horizon resolution for Nexus (`registry.<domain>`)
+# and reconciles pure GitOps workload stacks from local Gitea (`ops/workloads` by default).
+set -euo pipefail
+
+if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
+    echo "Run sophon-reconcile-gitops as core (do not use sudo)." >&2
+    exit 1
+fi
+export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
+unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+
+sync_auth_only=0
+standby_mode=0
+restore_data=0
+gitops_repo=${SOPHON_GITOPS_REPO:-ops/workloads}
+
+while (( $# )); do
+    case $1 in
+        --sync-auth-only) sync_auth_only=1; shift ;;
+        --standby) standby_mode=1; shift ;;
+        --restore-data) restore_data=1; shift ;;
+        --repo)
+            (( $# >= 2 )) || { echo "--repo requires <owner/name>." >&2; exit 2; }
+            gitops_repo=$2; shift 2 ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: sophon-reconcile-gitops [--sync-auth-only] [--standby] [--restore-data] [--repo <owner/name>]
+
+Options:
+  --sync-auth-only  Configure local host /etc/hosts, TLS trust, and Podman auth.json for registry.<domain>, then exit.
+  --standby         Skip stacks marked with `x-sophon-standby: skip` or label `sophon.standby.skip=true` (e.g. CI runners).
+  --restore-data    Restore matching Kopia backup groups (`sophon-restore --group <stack> --snapshot latest --yes`).
+  --repo <org/repo> Local Gitea GitOps repository path (default: ops/workloads).
+EOF
+            exit 0 ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            exit 2 ;;
+    esac
+done
+
+[[ $gitops_repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+    echo "Invalid --repo '$gitops_repo'; expected <owner>/<name>." >&2
+    exit 2
+}
+
+project=/var/lib/sophon/project
+domain=$(jq -r '.domain // empty' "$project/deploy-result.json" 2>/dev/null || true)
+if [[ -z $domain && -f /var/lib/sophon/stacks/nexus/compose.yaml ]]; then
+    domain=$(sed -n 's/.*Host(`nexus\.\([^`]*\)`).*/\1/p' /var/lib/sophon/stacks/nexus/compose.yaml | head -n1 || true)
+fi
+domain=${domain%.}
+domain=${domain,,}
+ip=$(jq -r '.SOPHON_INFRAVM_IP // empty' "$project/site.json" 2>/dev/null || true)
+if [[ -z $ip ]]; then
+    ip=$(jq -r '.infravm_ip // empty' "$project/deploy-result.json" 2>/dev/null || true)
+fi
+
+if [[ -z $domain || -z $ip ]]; then
+    exit 0
+fi
+
+# 1. Point CoreOS host resolution for Sophon endpoints at this VM's local Traefik listener
+#    so host-level `podman pull registry.<domain>/...` stays 100% local in air-gapped and standby_restore modes.
+hosts_tmp=$(mktemp)
+awk '
+    /^# BEGIN SOPHON HOST SERVICES$/ { skip=1; next }
+    /^# END SOPHON HOST SERVICES$/ { skip=0; next }
+    !skip { print }
+' /etc/hosts > "$hosts_tmp"
+cat >> "$hosts_tmp" <<EOF
+# BEGIN SOPHON HOST SERVICES
+${ip} ${domain} status.${domain} nexus.${domain} registry.${domain} registry-push.${domain} git.${domain} auth.${domain} arcane.${domain} kopia.${domain}
+# END SOPHON HOST SERVICES
+EOF
+chmod 0644 "$hosts_tmp"
+sudo cp "$hosts_tmp" /etc/hosts
+rm -f "$hosts_tmp"
+
+# 2. Sync Nexus TLS chain (if dumped by traefik-certs-dumper) and `sophon-pull` credentials into Podman/Docker auth.
+if podman --remote=false container exists nexus; then
+    cert_pem=$(podman --remote=false exec nexus sh -c "cat '/run/secrets/ldap/certs/${domain}.crt' 2>/dev/null || true" || true)
+    if [[ $cert_pem == *"BEGIN CERTIFICATE"* ]]; then
+        for reg_host in "registry.${domain}" "registry-push.${domain}"; do
+            sudo install -d -m 0755 "/etc/containers/certs.d/${reg_host}"
+            printf '%s\n' "$cert_pem" | sudo tee "/etc/containers/certs.d/${reg_host}/ca.crt" >/dev/null
+            sudo chmod 0644 "/etc/containers/certs.d/${reg_host}/ca.crt"
+        done
+    fi
+
+    pull_pw=$(podman --remote=false exec nexus sh -c 'cat /nexus-data/etc/sophon-pull.password 2>/dev/null || true' || true)
+    if [[ -z $pull_pw && -f $project/credentials/nexus/pull_password ]]; then
+        pull_pw=$(tr -d '\r\n' < "$project/credentials/nexus/pull_password")
+    fi
+    if [[ -n $pull_pw ]]; then
+        token=$(printf 'sophon-pull:%s' "$pull_pw" | base64 -w0)
+        for auth_file in "$HOME/.config/containers/auth.json" "$HOME/.docker/config.json"; do
+            install -d -m 0700 "$(dirname "$auth_file")"
+            existing='{}'
+            if [[ -s $auth_file ]]; then
+                existing=$(cat "$auth_file" 2>/dev/null || printf '{}')
+            fi
+            jq --arg host "registry.${domain}" --arg auth "$token" \
+                '.auths = ((.auths // {}) + {($host): {"auth": $auth}})' <<< "$existing" > "${auth_file}.tmp"
+            chmod 0600 "${auth_file}.tmp"
+            mv "${auth_file}.tmp" "$auth_file"
+        done
+    fi
+fi
+
+# Ensure the sophon-status PKCE OIDC client exists in Keycloak even after restoring an older snapshot.
+if podman --remote=false container exists keycloak; then
+    kc_env=$(podman --remote=false inspect --format '{{range .Config.Env}}{{println .}}{{end}}' keycloak 2>/dev/null || true)
+    kc_user=$(awk -F= '$1=="KC_BOOTSTRAP_ADMIN_USERNAME"{sub(/^[^=]*=/,""); print; exit}' <<< "$kc_env")
+    kc_pass=$(awk -F= '$1=="KC_BOOTSTRAP_ADMIN_PASSWORD"{sub(/^[^=]*=/,""); print; exit}' <<< "$kc_env")
+    kc_realm="sophon"
+    if [[ -f /var/lib/sophon/stacks/status/.env ]]; then
+        r_val=$(sed -n 's/^SOPHON_STATUS_OIDC_REALM="\(.*\)"$/\1/p' /var/lib/sophon/stacks/status/.env | head -n1 || true)
+        [[ -z $r_val ]] || kc_realm=$r_val
+    fi
+    if [[ -n $kc_user && -n $kc_pass ]]; then
+        kc_tok=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+            -X POST "https://auth.${domain}/realms/master/protocol/openid-connect/token" \
+            --data-urlencode "grant_type=password" \
+            --data-urlencode "client_id=admin-cli" \
+            --data-urlencode "username=${kc_user}" \
+            --data-urlencode "password=${kc_pass}" 2>/dev/null | jq -r '.access_token // empty' || true)
+        if [[ -n $kc_tok ]]; then
+            existing_id=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+                -H "Authorization: Bearer ${kc_tok}" \
+                "https://auth.${domain}/admin/realms/${kc_realm}/clients?clientId=sophon-status" 2>/dev/null \
+                | jq -r '.[0].id // empty' || true)
+            if [[ -z $existing_id ]]; then
+                payload=$(jq -n --arg d "$domain" '{
+                    clientId: "sophon-status",
+                    name: "Sophon Appliance Status",
+                    enabled: true,
+                    protocol: "openid-connect",
+                    publicClient: true,
+                    standardFlowEnabled: true,
+                    implicitFlowEnabled: false,
+                    directAccessGrantsEnabled: false,
+                    serviceAccountsEnabled: false,
+                    frontchannelLogout: true,
+                    fullScopeAllowed: true,
+                    redirectUris: [("https://" + $d + "/oauth2/callback"), ("https://status." + $d + "/oauth2/callback")],
+                    webOrigins: [("https://" + $d), ("https://status." + $d)],
+                    attributes: {
+                        "pkce.code.challenge.method": "S256",
+                        "post.logout.redirect.uris": ("https://" + $d + "/*##https://status." + $d + "/*")
+                    }
+                }')
+                curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+                    -X POST "https://auth.${domain}/admin/realms/${kc_realm}/clients" \
+                    -H "Authorization: Bearer ${kc_tok}" -H "Content-Type: application/json" \
+                    -d "$payload" >/dev/null 2>&1 || true
+                existing_id=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+                    -H "Authorization: Bearer ${kc_tok}" \
+                    "https://auth.${domain}/admin/realms/${kc_realm}/clients?clientId=sophon-status" 2>/dev/null \
+                    | jq -r '.[0].id // empty' || true)
+            fi
+            if [[ -n $existing_id ]]; then
+                grp_scope=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+                    -H "Authorization: Bearer ${kc_tok}" \
+                    "https://auth.${domain}/admin/realms/${kc_realm}/client-scopes" 2>/dev/null \
+                    | jq -r '.[] | select(.name=="groups") | .id // empty' | head -n1 || true)
+                if [[ -n $grp_scope ]]; then
+                    curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+                        -X PUT "https://auth.${domain}/admin/realms/${kc_realm}/clients/${existing_id}/default-client-scopes/${grp_scope}" \
+                        -H "Authorization: Bearer ${kc_tok}" >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+    fi
+fi
+
+if (( sync_auth_only )); then
+    exit 0
+fi
+
+# 3. Export pure GitOps repository directly from local Gitea's `/data` bare repo if present.
+if ! podman --remote=false container exists gitea; then
+    echo "Gitea container is not deployed; skipping GitOps workload reconciliation."
+    exit 0
+fi
+
+bare_repo="/data/git/repositories/${gitops_repo,,}.git"
+resolved_ref=$(podman --remote=false exec -u 1000:1000 gitea sh -c "
+    test -d '$bare_repo' || exit 1
+    for ref in HEAD refs/heads/main refs/heads/master; do
+        if git --git-dir='$bare_repo' rev-parse --verify \"\$ref\" >/dev/null 2>&1; then
+            printf '%s' \"\$ref\"
+            exit 0
+        fi
+    done
+    exit 1
+" 2>/dev/null || true)
+if [[ -z $resolved_ref ]]; then
+    echo "No '${gitops_repo}' GitOps repository with commits found in local Gitea; skipping Stage-2 workload reconciliation."
+    exit 0
+fi
+
+work_dir=$(mktemp -d /tmp/sophon-gitops-XXXXXX)
+cleanup() { rm -rf "$work_dir"; }
+trap cleanup EXIT
+
+podman --remote=false exec -u 1000:1000 gitea git --git-dir="$bare_repo" archive --format=tar "$resolved_ref" | tar -xf - -C "$work_dir"
+
+declare -A core_stacks=(
+    [coredns]=1 [traefik]=1 [cloudflared]=1 [openldap]=1
+    [keycloak]=1 [gitea]=1 [nexus]=1 [arcane]=1 [kopia]=1
+)
+
+snapshot_groups=""
+if (( restore_data )) && podman --remote=false container exists kopia; then
+    snapshot_groups=$(/usr/local/bin/sophon-restore inspect --snapshot latest 2>/dev/null | jq -r '.groups[]?.name // empty' || true)
+fi
+
+candidate_dirs=()
+for dir in "$work_dir"/* "$work_dir"/stacks/*; do
+    [[ -d $dir && ! -L $dir ]] || continue
+    [[ $(basename "$dir") == "stacks" && $dir == "$work_dir/stacks" ]] && continue
+    candidate_dirs+=("$dir")
+done
+
+reconciled=()
+for dir in "${candidate_dirs[@]}"; do
+    [[ -d $dir && ! -L $dir ]] || continue
+    stack=$(basename "$dir")
+    [[ $stack =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || continue
+    if [[ -n ${core_stacks[$stack]:-} ]]; then
+        echo "Refusing to overwrite Sophon Core stack '$stack' from GitOps repository." >&2
+        continue
+    fi
+    compose_file=""
+    if [[ -f $dir/compose.yaml && ! -L $dir/compose.yaml ]]; then
+        compose_file="$dir/compose.yaml"
+    elif [[ -f $dir/docker-compose.yml && ! -L $dir/docker-compose.yml ]]; then
+        compose_file="$dir/docker-compose.yml"
+    else
+        continue
+    fi
+
+    if (( standby_mode )) && grep -Eq '(^|[[:space:]"'\''])(x-sophon-standby:[[:space:]]*skip|sophon\.standby\.skip=true)' "$compose_file"; then
+        echo "Skipping standby-excluded GitOps stack: $stack"
+        continue
+    fi
+
+    dest="/var/lib/sophon/stacks/${stack}"
+    rm -rf "${dest}.staging"
+    install -d -m 0700 "${dest}.staging"
+    cp -a "$dir"/. "${dest}.staging"/
+    rm -rf "$dest"
+    mv "${dest}.staging" "$dest"
+
+    compose_basename=$(basename "$compose_file")
+    echo "Deploying GitOps workload stack: $stack"
+    podman --remote=false run --rm --network host --pull never \
+        --security-opt label=disable \
+        -v /run/user/1000/podman/podman.sock:/var/run/docker.sock \
+        -v /var/lib/sophon/stacks:/var/lib/sophon/stacks \
+        sophon:latest docker compose \
+        --project-name "$stack" \
+        --project-directory "$dest" \
+        -f "$dest/$compose_basename" \
+        up -d
+
+    if (( restore_data )) && grep -Fqx "$stack" <<< "$snapshot_groups"; then
+        echo "Restoring Kopia application state for GitOps stack: $stack"
+        /usr/local/bin/sophon-restore --group "$stack" --snapshot latest --yes
+    fi
+    reconciled+=("$stack")
+done
+
+if (( ${#reconciled[@]} > 0 )); then
+    printf 'Reconciled GitOps stacks: %s\n' "${reconciled[*]}"
+else
+    echo "No deployable workload stack directories found in ${gitops_repo}."
+fi
