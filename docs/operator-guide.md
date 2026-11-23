@@ -40,7 +40,8 @@ install -m 600 .env.example .env  # Windows PowerShell: Copy-Item .env.example .
 
 - `sh sophon-provision.sh` interactively prompts for core hypervisor connection details (Proxmox / vCenter / Hyper-V, host/URL, node/cluster/datastore/switch, and password), while optional hypervisor overrides—such as Proxmox API tokens (`SOPHON_PROXMOX_TOKEN_*`), non-default Proxmox storage pools (`SOPHON_PROXMOX_ISO_STORAGE` / `SOPHON_PROXMOX_DISK_STORAGE`), custom bridges, or VLAN tags (`SOPHON_VNET_VLAN`)—are configured via `.env` (or exported in your shell).
 - Leave any password blank in `.env` if you prefer to enter it interactively; for air-gapped sites without internet on the VM network, leave `SOPHON_CF_TOKEN` blank (and see [Section 7](#7-monthly-certificate-renewal) for monthly certificate rotation).
-- See [`.env.example`](../.env.example) and [`docs/inputs.md`](./inputs.md) for all hypervisor-specific fields, and [README — Cloudflare API token](../README.md#cloudflare-api-token) for creating `SOPHON_CF_TOKEN`.
+- See [`.env.example`](../.env.example) and [`docs/inputs.md`](./inputs.md) for all hypervisor-specific fields.
+- **Creating `SOPHON_CF_TOKEN` (Cloudflare API token):** At <https://dash.cloudflare.com/profile/api-tokens> > **Create Custom Token**, grant `Zone / Zone / Read`, `Zone / DNS / Edit`, and (when `SOPHON_CF_TUNNEL_ENABLED=true`) `Account / Cloudflare Tunnel / Edit`, scoped to your specific zone and account. Set `SOPHON_CF_TUNNEL_ENABLED=false` for LAN-only, dev, or standby VMs that issue DNS-01 certificates without creating a Cloudflare Tunnel or repointing public DNS CNAMEs.
 
 </details>
 
@@ -95,7 +96,29 @@ Depending on how your hypervisor VLANs are segmented, the subnet where you deplo
 - Moving your workstation onto that VLAN / swapping network cables, or
 - Working from a privileged admin workstation VM inside that network.
 
-Once on a reachable network, point DNS for your Sophon domain (`*.<domain>`) at InfraVM's IPv4 address (`SOPHON_NETWORK_CIDR`, or `SOPHON_DEV_NETWORK_CIDR` when testing a dev/drill VM); see [split-horizon DNS setup](../README.md#using-the-services).
+Once on a reachable network, configure split-horizon DNS so queries for `<domain>` and `*.<domain>` go to InfraVM's IPv4 address (`SOPHON_NETWORK_CIDR`, or `SOPHON_DEV_NETWORK_CIDR` when testing a dev/drill VM) without sending all internet DNS through the VM:
+
+- **Windows (and WSL2):** Run in an elevated PowerShell (WSL2 tunnels DNS through the Windows DNS Client, so this configures both Windows and WSL2 at once):
+
+  ```powershell
+  Add-DnsClientNrptRule -Namespace '.example.com','example.com' -NameServers '<VM address>'; Clear-DnsClientCache
+  # undo: Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.example.com' -or $_.Namespace -contains 'example.com' } | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache
+  ```
+
+  Test with `Resolve-DnsName arcane.example.com` (`nslookup` on Windows ignores NRPT rules; inside WSL use `getent ahosts arcane.example.com`).
+
+- **Linux (`systemd-resolved` 258+):** Add a domain-scoped DNS delegate (use `/etc/systemd/dns-delegate.d` instead of `/run/...` to persist across reboots; on non-WSL NixOS, enable `services.resolved.enable = true;` first):
+
+  ```sh
+  sudo mkdir -p /run/systemd/dns-delegate.d
+  printf '[Delegate]\nDNS=<VM address>\nDomains=~example.com\n' | sudo tee /run/systemd/dns-delegate.d/sophon.dns-delegate >/dev/null
+  sudo systemctl reload systemd-resolved
+  # undo: sudo rm -f /run/systemd/dns-delegate.d/sophon.dns-delegate && sudo systemctl reload systemd-resolved
+  ```
+
+  Test with `resolvectl query arcane.example.com`.
+
+*(Never point a host's global DNS resolver at InfraVM if InfraVM's upstream DNS forwards back to that host—such as Hyper-V `Default Switch`—or lookups will loop.)*
 
 ### 4.2 Verify Arcane SSO & Gitea
 
