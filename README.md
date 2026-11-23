@@ -130,38 +130,29 @@ and sign in to Nexus (`https://nexus.<domain>`) with OpenLDAP credentials (`nexu
 `nexus-developers` -> publish/read across hosted, proxy, and group repositories). Pull container images through
 `https://registry.<domain>` (`docker-group`) and push internal CI images to `https://registry-push.<domain>` (`docker-hosted`).
 
-Point clients at CoreDNS on the VM for your domain only.
+Point clients at CoreDNS on the VM for your domain only:
 
-On **Windows**, in an elevated PowerShell:
+- **Windows (and WSL):** In an elevated PowerShell (WSL2 tunnels DNS through the Windows DNS Client, so this configures both Windows and WSL at once):
 
-```powershell
-Add-DnsClientNrptRule -Namespace '.example.com' -NameServers '<VM address>'; Clear-DnsClientCache
-# undo: Get-DnsClientNrptRule | Where-Object Namespace -eq '.example.com' | Remove-DnsClientNrptRule -Force
-```
+  ```powershell
+  Add-DnsClientNrptRule -Namespace '.example.com','example.com' -NameServers '<VM address>'; Clear-DnsClientCache
+  # undo: Get-DnsClientNrptRule | Where-Object Namespace -eq '.example.com' | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache
+  ```
 
-Test with `Resolve-DnsName` (`nslookup` ignores these rules).
+  Test with `Resolve-DnsName traefik.example.com` (`nslookup` on Windows ignores NRPT rules; inside WSL use `getent ahosts traefik.example.com`).
 
-On **Linux** (`systemd-resolved`), add a domain-scoped DNS delegate (`systemd` 258+; use `/etc/systemd/dns-delegate.d` instead of `/run/...` to persist across reboots) so other domains keep using your normal connection's DNS:
+- **Linux (`systemd-resolved` 258+):** Add a domain-scoped DNS delegate (use `/etc/systemd/dns-delegate.d` instead of `/run/...` to persist across reboots; on non-WSL NixOS, enable `services.resolved.enable = true;` first):
 
-```sh
-sudo mkdir -p /run/systemd/dns-delegate.d
-printf '[Delegate]\nDNS=<VM address>\nDomains=~example.com\n' | sudo tee /run/systemd/dns-delegate.d/sophon.dns-delegate >/dev/null
-sudo systemctl reload systemd-resolved
-# undo: sudo rm -f /run/systemd/dns-delegate.d/sophon.dns-delegate && sudo systemctl reload systemd-resolved
-```
+  ```sh
+  sudo mkdir -p /run/systemd/dns-delegate.d
+  printf '[Delegate]\nDNS=<VM address>\nDomains=~example.com\n' | sudo tee /run/systemd/dns-delegate.d/sophon.dns-delegate >/dev/null
+  sudo systemctl reload systemd-resolved
+  # undo: sudo rm -f /run/systemd/dns-delegate.d/sophon.dns-delegate && sudo systemctl reload systemd-resolved
+  ```
 
-On older `systemd` (< 258, such as Ubuntu 24.04), scope your VPN/overlay interface directly (`sudo resolvectl dns tun0 '<VM address>' && sudo resolvectl domain tun0 '~example.com' && sudo resolvectl default-route tun0 no && sudo resolvectl flush-caches`; undo with `sudo resolvectl revert tun0 && sudo resolvectl flush-caches`). If reaching the VM over your only LAN interface (`eth0`/`wlan0`), copy its current DNS into `/run/systemd/resolved.conf.d/` first so unrelated domains still resolve:
+  Test with `resolvectl query traefik.example.com`.
 
-```sh
-sudo mkdir -p /run/systemd/resolved.conf.d
-printf '[Resolve]\nDNS=%s\n' "$(resolvectl dns eth0 | sed 's/^[^:]*:[[:space:]]*//')" | sudo tee /run/systemd/resolved.conf.d/sophon-upstream.conf >/dev/null
-sudo systemctl reload-or-restart systemd-resolved
-sudo resolvectl dns eth0 '<VM address>' && sudo resolvectl domain eth0 '~example.com' && sudo resolvectl default-route eth0 no && sudo resolvectl flush-caches
-# undo: sudo rm -f /run/systemd/resolved.conf.d/sophon-upstream.conf && sudo systemctl reload-or-restart systemd-resolved && sudo resolvectl revert eth0 && { command -v nmcli >/dev/null && sudo nmcli device reapply eth0 || true; } && sudo resolvectl flush-caches
-```
-
-Test on Linux with `resolvectl query arcane.example.com`. Don't point a machine's whole DNS at the VM if the VM's
-upstream forwards back to it (for example the Hyper-V Default Switch address): lookups loop.
+Don't point a machine's whole DNS at the VM if the VM's upstream forwards back to it (for example the Hyper-V Default Switch address): lookups loop.
 
 ### Backups
 

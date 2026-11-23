@@ -23,13 +23,17 @@ RUN set -eu; \
       /rootfs/usr/local/sbin/sophon-backup-apply \
       /rootfs/usr/local/bin/sophon-backup-setup \
       /rootfs/usr/local/bin/sophon-authorize-key; \
-    echo 'features="ata base ide scsi usb virtio nvme ext4"' > /rootfs/etc/mkinitfs/mkinitfs.conf; \
+    echo 'features="ata base ide scsi cdrom usb virtio nvme ext4"' > /rootfs/etc/mkinitfs/mkinitfs.conf; \
     KVER=$(ls /rootfs/lib/modules | head -n 1); \
     chroot /rootfs mkinitfs "$KVER"; \
     mkdir -p /rootfs/boot/efi-template; \
     printf '%s\n' \
+      'insmod part_gpt' \
+      'insmod part_msdos' \
+      'insmod ext2' \
+      'insmod search_label' \
       'search --no-floppy --label --set=root SOPHON_BK_OS' \
-      'linux /boot/vmlinuz-virt root=LABEL=SOPHON_BK_OS modules=sd-mod,usb-storage,ext4,virtio_blk,virtio_scsi,nvme rootfstype=ext4 quiet console=ttyS0,115200n8 console=tty0' \
+      'linux /boot/vmlinuz-virt root=LABEL=SOPHON_BK_OS modules=sd-mod,usb-storage,ext4,virtio_blk,virtio_scsi,nvme,hv_storvsc rootfstype=ext4 quiet console=ttyS0,115200n8 console=tty0' \
       'initrd /boot/initramfs-virt' \
       'boot' > /tmp/build/grub.cfg; \
     grub-mkstandalone -O x86_64-efi -o /rootfs/boot/efi-template/BOOTX64.EFI "boot/grub/grub.cfg=/tmp/build/grub.cfg"; \
@@ -40,7 +44,7 @@ RUN set -eu; \
       'LABEL sophon' \
       '  LINUX /boot/vmlinuz-virt' \
       '  INITRD /boot/initramfs-virt' \
-      '  APPEND root=LABEL=SOPHON_BK_OS modules=sd-mod,usb-storage,ext4,virtio_blk,virtio_scsi,nvme rootfstype=ext4 quiet console=ttyS0,115200n8 console=tty0' \
+      '  APPEND root=LABEL=SOPHON_BK_OS modules=sd-mod,usb-storage,ext4,virtio_blk,virtio_scsi,nvme,hv_storvsc rootfstype=ext4 quiet console=ttyS0,115200n8 console=tty0' \
       > /rootfs/boot/extlinux.conf; \
     cp /rootfs/usr/share/syslinux/ldlinux.c32 /rootfs/boot/ 2>/dev/null || true; \
     echo 'sophon-backup' > /rootfs/etc/hostname; \

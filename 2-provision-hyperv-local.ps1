@@ -152,7 +152,7 @@ Set-VMFirmware -VM $vm -EnableSecureBoot Off
 $null = Add-VMDvdDrive -VM $vm -Path $coreos
 $null = Add-VMDvdDrive -VM $vm -Path $bundle
 # A third drive for the secret certificate ISO (air-gapped sites): inserted now if it exists, or later with -AttachCertificates.
-if (Test-Path -LiteralPath $CertificatesIso -PathType Leaf) { $null = Add-VMDvdDrive -VM $vm -Path (Resolve-Path -LiteralPath $CertificatesIso).Path }
+if (Test-Path -LiteralPath $CertificatesIso -PathType Leaf) { $null = Add-VMDvdDrive -VM $vm -Path (Install-Iso $CertificatesIso 'secrets') }
 else { $null = Add-VMDvdDrive -VM $vm }
 $disk = Get-VMHardDiskDrive -VM $vm
 $installer = Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $coreos }

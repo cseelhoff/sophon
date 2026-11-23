@@ -7,30 +7,38 @@ set -eu
 DONE_FLAG=/var/lib/sophon-backup-seed-done
 [ ! -e "$DONE_FLAG" ] || exit 0
 
+modprobe hv_storvsc 2>/dev/null || true
+modprobe virtio_scsi 2>/dev/null || true
+modprobe ata_piix 2>/dev/null || true
 modprobe cdrom 2>/dev/null || true
 modprobe sr_mod 2>/dev/null || true
 modprobe isofs 2>/dev/null || true
-modprobe ata_piix 2>/dev/null || true
-modprobe virtio_scsi 2>/dev/null || true
 mdev -s 2>/dev/null || true
 
 find_seed_device() {
-    if [ -b /dev/disk/by-label/SOPHON_BACKUP_CERTS ]; then
-        printf '%s\n' /dev/disk/by-label/SOPHON_BACKUP_CERTS
-        return 0
-    fi
-    found_dev=$(blkid -L SOPHON_BACKUP_CERTS 2>/dev/null || true)
-    if [ -n "$found_dev" ] && [ -b "$found_dev" ]; then
-        printf '%s\n' "$found_dev"
-        return 0
-    fi
-    for dev in /dev/sr0 /dev/sr1 /dev/sr2 /dev/cdrom; do
-        [ -b "$dev" ] || continue
-        lbl=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
-        if [ "$lbl" = "SOPHON_BACKUP_CERTS" ]; then
-            printf '%s\n' "$dev"
+    for _ in 1 2 3 4 5; do
+        if [ -b /dev/disk/by-label/SOPHON_BACKUP_CERTS ]; then
+            printf '%s\n' /dev/disk/by-label/SOPHON_BACKUP_CERTS
             return 0
         fi
+        found_dev=$(blkid -L SOPHON_BACKUP_CERTS 2>/dev/null || true)
+        if [ -n "$found_dev" ] && [ -b "$found_dev" ]; then
+            printf '%s\n' "$found_dev"
+            return 0
+        fi
+        has_cd=0
+        for dev in /dev/sr0 /dev/sr1 /dev/sr2 /dev/cdrom; do
+            [ -b "$dev" ] || continue
+            has_cd=1
+            lbl=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
+            if [ "$lbl" = "SOPHON_BACKUP_CERTS" ]; then
+                printf '%s\n' "$dev"
+                return 0
+            fi
+        done
+        [ "$has_cd" -eq 1 ] || break
+        sleep 1
+        mdev -s 2>/dev/null || true
     done
     return 1
 }

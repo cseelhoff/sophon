@@ -12,6 +12,7 @@ nexus_db_host: "nexus-db"
 nexus_db_port: 5432
 nexus_db_name: "nexus"
 nexus_db_user: "nexus"
+nexus_db_max_connections: 250
 
 # Prestaged image archives (<vendor>-<image>_<tag>.tar)
 nexus_image_tars:
@@ -27,7 +28,10 @@ nexus_port_docker_hosted: 5001
 nexus_hostname: "nexus"
 nexus_registry_hostname: "registry"
 nexus_registry_push_hostname: "registry-push"
-nexus_domain: "{{ domain_name | lower | regex_replace('\\.$', '') }}"
+nexus_domain: "{{ domain_name | lower | regex_replace('[.]$', '') }}"
+nexus_fqdn: "{{ nexus_hostname }}.{{ nexus_domain }}"
+nexus_registry_fqdn: "{{ nexus_registry_hostname }}.{{ nexus_domain }}"
+nexus_registry_push_fqdn: "{{ nexus_registry_push_hostname }}.{{ nexus_domain }}"
 
 # Bounded JVM memory so InfraVM runs Keycloak + Nexus + Gitea + Arcane comfortably in 12+ GiB RAM
 nexus_jvm_params: "-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=1536m -Djava.util.prefs.userRoot=/nexus-data/javaprefs"
@@ -39,10 +43,14 @@ nexus_anonymous_enabled: false
 nexus_credentials_dir: "{{ playbook_dir }}/credentials/nexus"
 
 # Native OpenLDAP integration (requires openldap role deployed first)
-openldap_domain: "{{ domain_name }}"
+openldap_domain: "{{ domain_name | lower | regex_replace('[.]$', '') }}"
 openldap_base_dn: "dc={{ openldap_domain.split('.')[0] }},dc={{ openldap_domain.split('.')[1] }}"
-nexus_ldap_host: "ldap.{{ openldap_domain | lower | regex_replace('\\.$', '') }}"
+nexus_ldap_name: "Sophon OpenLDAP"
+nexus_ldap_protocol: "ldaps"
+nexus_ldap_use_trust_store: true
+nexus_ldap_host: "ldap.{{ openldap_domain }}"
 nexus_ldap_port: 636
+nexus_ldap_base_dn: "{{ openldap_base_dn }}"
 nexus_ldap_bind_dn: "cn=keycloak-bind,ou=services,{{ openldap_base_dn }}"
 nexus_ldap_bind_password: "{{ openldap_admin_password }}"
 nexus_ldap_certs_volume: "openldap_ldap_certs"

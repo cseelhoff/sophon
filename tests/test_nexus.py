@@ -447,6 +447,72 @@ class NexusTests(unittest.TestCase):
             self.assertEqual(db_spec['group'], 'nexus')
             self.assertEqual(len(db_spec['dumps']), 1)
             self.assertEqual(db_spec['dumps'][0]['restore'], 'postgres-cluster')
+            # Nexus 3.98+ opens ~110 concurrent JDBC connections (HikariCP + Quartz); default 100 starves pg_dumpall.
+            self.assertEqual(nexus_db_svc.get('command'), ['postgres', '-c', 'max_connections=250'])
+
+    @unittest.skipUnless(shutil.which('ansible-playbook'), 'Ansible is required to evaluate role tasks')
+    def test_nexus_role_task_variables_resolve_from_role_defaults_only(self):
+        tasks_doc = yaml.safe_load((ROOT / 'roles/nexus/tasks/main.yml').read_text())
+        cfg_block = next(item['block'] for item in tasks_doc if 'block' in item)
+        cfg_task = next(t for t in cfg_block if t['name'] == 'Run idempotent Nexus REST API configurator')
+        status_task = next(t for t in tasks_doc if t['name'] == 'Display Nexus status')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            out_json = directory / 'payload.json'
+            playbook = [{
+                'hosts': 'localhost',
+                'gather_facts': False,
+                'vars_files': [
+                    str(ROOT / 'group_vars/all.yml'),
+                    str(ROOT / 'roles/nexus/defaults/main.yml'),
+                ],
+                'vars': {
+                    'nexus_pull_password': 'FixturePullPassword123!',
+                    'nexus_initial_pw_cmd': {'stdout': 'init-secret\n'},
+                    'nexus_ldap_ca_cmd': {'stdout': '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n'},
+                    'nexus_apt_key_stat': {'stat': {'exists': False}},
+                },
+                'tasks': [
+                    {
+                        'name': 'Render nexus_configure_payload from real task vars',
+                        'ansible.builtin.copy': {
+                            'dest': str(out_json),
+                            'content': '{{ nexus_configure_payload | to_json }}',
+                        },
+                        'vars': cfg_task['vars'],
+                    },
+                    status_task,
+                ],
+            }]
+            playbook_path = directory / 'check_nexus_vars.yml'
+            playbook_path.write_text(yaml.safe_dump(playbook))
+            env = {
+                **os.environ,
+                'SOPHON_DOMAIN': 'site.example',
+                'SOPHON_INFRAVM_IP': '10.0.60.107',
+                'SOPHON_NEXUS_ADMIN_PASSWORD': 'FixtureNexusPassword123!',
+                'SOPHON_NEXUS_DB_PASSWORD': 'FixtureNexusDbPassword123!',
+                'SOPHON_OPENLDAP_ADMIN_PASSWORD': 'FixtureLdapPassword123!',
+            }
+            res = subprocess.run(
+                ['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(playbook_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            rendered = json.loads(out_json.read_text())
+            self.assertEqual(rendered['base_url'], 'https://nexus.site.example')
+            self.assertEqual(rendered['domain'], 'site.example')
+            self.assertEqual(rendered['ldap']['name'], 'Sophon OpenLDAP')
+            self.assertEqual(rendered['ldap']['protocol'], 'ldaps')
+            self.assertIs(rendered['ldap']['use_trust_store'], True)
+            self.assertEqual(rendered['ldap']['host'], 'ldap.site.example')
+            self.assertEqual(rendered['ldap']['search_base'], 'dc=site,dc=example')
+            self.assertIn('https://nexus.site.example', res.stdout)
+            self.assertIn('https://registry.site.example', res.stdout)
+            self.assertIn('https://registry-push.site.example', res.stdout)
 
     def test_reconcile_gitops_exports_workloads_and_honors_standby_skip(self):
         if not shutil.which('git'):

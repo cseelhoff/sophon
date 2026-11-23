@@ -88,6 +88,7 @@ services:
     image: {{ nexus_postgres_image }}
     pull_policy: never
     container_name: nexus-db
+    command: ["postgres", "-c", "max_connections={{ nexus_db_max_connections }}"]
     labels:
       - 'sophon.backup.enable=true'
       - 'sophon.backup.group=nexus'

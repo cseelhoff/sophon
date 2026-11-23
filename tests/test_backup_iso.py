@@ -153,6 +153,13 @@ class BackupIsoTests(unittest.TestCase):
         proxmox_bk = (ROOT / 'roles/proxmox/tasks/backup_vm.yml').read_text()
         self.assertIn('virtio0: "{{ proxmox_disk_storage_id }}:{{ backup_vm_disk_gb }},discard=on"', proxmox_bk)
 
+    def test_backup_appliance_supports_uefi_gpt_and_hyperv_storage(self):
+        containerfile = (ROOT / 'roles/prepare/files/backup-appliance.Containerfile').read_text()
+        for required in ('insmod part_gpt', 'insmod ext2', 'insmod search_label', 'hv_storvsc'):
+            self.assertIn(required, containerfile)
+        autoseed = (ROOT / 'guest/backup-appliance/sophon-backup-autoseed').read_text()
+        self.assertIn('hv_storvsc', autoseed)
+
 
 if __name__ == '__main__':
     unittest.main()
