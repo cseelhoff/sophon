@@ -25,3 +25,11 @@ arcane_environment:
     value: "{{ keycloak_arcane_client_secret }}"
   - name: ARCANE_OIDC_ROLE_MAPPINGS
     value: "{{ arcane_oidc_role_mappings | to_json }}"
+
+# Stage-2 Gitea Actions GitOps CI bootstrap (least-privilege Keycloak + Arcane
+# credentials seeded into Gitea `ops` organization Actions secrets).
+arcane_gitops_ci_enabled: true
+arcane_gitops_ci_client_id: "ops-gitops-ci"
+arcane_gitops_gitea_org: "ops"
+arcane_gitops_gitea_repo: "workloads"
+

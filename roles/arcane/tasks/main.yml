@@ -29,6 +29,39 @@
   retries: 30
   delay: 3
 
+- name: Configure Stage-2 Gitea Actions GitOps CI credentials and runner sync
+  when:
+    - arcane_gitops_ci_enabled | default(true) | bool
+    - not (prepare_restore | default(false) | bool)
+    - (keycloak_admin_password | default('')) | length > 0
+    - (gitea_admin_password | default('')) | length > 0
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/configure_gitops_ci.py"
+    stdin: "{{ arcane_gitops_ci_payload | to_json }}"
+  vars:
+    arcane_gitops_ci_payload:
+      domain_name: "{{ domain_name | lower | regex_replace('\\.$', '') }}"
+      verify_tls: false
+      ci_client_id: "{{ arcane_gitops_ci_client_id }}"
+      keycloak_url: "https://{{ keycloak_hostname | default('auth') }}.{{ domain_name | lower | regex_replace('\\.$', '') }}"
+      keycloak_realm: "{{ keycloak_realm }}"
+      keycloak_admin_user: "{{ keycloak_admin_user | default('admin') }}"
+      keycloak_admin_password: "{{ keycloak_admin_password }}"
+      gitea_url: "https://{{ gitea_hostname | default('git') }}.{{ domain_name | lower | regex_replace('\\.$', '') }}"
+      gitea_org: "{{ arcane_gitops_gitea_org }}"
+      gitea_repo: "{{ arcane_gitops_gitea_repo }}"
+      gitea_admin_user: "{{ gitea_admin_user | default('siteadmin') }}"
+      gitea_admin_password: "{{ gitea_admin_password }}"
+      arcane_url: "https://{{ arcane_fqdn }}"
+      arcane_admin_user: "admin"
+      arcane_admin_password: "{{ arcane_admin_password }}"
+  delegate_to: localhost
+  register: arcane_gitops_ci_result
+  changed_when: (arcane_gitops_ci_result.stdout | from_json).changed | default(false)
+  no_log: true
+
 - name: Display Arcane status
   ansible.builtin.debug:
     msg: |
