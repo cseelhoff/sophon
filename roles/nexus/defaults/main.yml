@@ -39,7 +39,7 @@ nexus_jvm_params: "-Xms1024m -Xmx2048m -XX:MaxDirectMemorySize=1536m -Djava.util
 # Security & accounts
 nexus_admin_user: "admin"
 nexus_pull_user: "sophon-pull"
-nexus_anonymous_enabled: false
+nexus_anonymous_enabled: true
 nexus_credentials_dir: "{{ playbook_dir }}/credentials/nexus"
 
 # Native OpenLDAP integration (requires openldap role deployed first)

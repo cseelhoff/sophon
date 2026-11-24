@@ -7,7 +7,7 @@ if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
     echo "Run sophon-reconcile-gitops as core (do not use sudo)." >&2
     exit 1
 fi
-export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
+export HOME=${SOPHON_HOME_OVERRIDE:-/var/home/core} XDG_RUNTIME_DIR=${SOPHON_XDG_RUNTIME_OVERRIDE:-/run/user/1000}
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
 
 sync_auth_only=0
@@ -28,7 +28,7 @@ while (( $# )); do
 Usage: sophon-reconcile-gitops [--sync-auth-only] [--standby] [--restore-data] [--repo <owner/name>]
 
 Options:
-  --sync-auth-only  Configure local host /etc/hosts, TLS trust, and Podman auth.json for registry.<domain>, then exit.
+  --sync-auth-only  Configure local host /etc/hosts, TLS trust, Podman registries.conf.d mirror, and auth.json for registry.<domain>, then exit.
   --standby         Skip stacks marked with `x-sophon-standby: skip` or label `sophon.standby.skip=true` (e.g. CI runners).
   --restore-data    Restore matching Kopia backup groups (`sophon-restore --group <stack> --snapshot latest --yes`).
   --repo <org/repo> Local Gitea GitOps repository path (default: ops/workloads).
@@ -45,10 +45,13 @@ done
     exit 2
 }
 
-project=/var/lib/sophon/project
+project=${SOPHON_PROJECT_DIR:-/var/lib/sophon/project}
+stacks_dir=${SOPHON_STACKS_DIR:-/var/lib/sophon/stacks}
+hosts_file=${SOPHON_HOSTS_FILE:-/etc/hosts}
+containers_etc=${SOPHON_CONTAINERS_ETC:-/etc/containers}
 domain=$(jq -r '.domain // empty' "$project/deploy-result.json" 2>/dev/null || true)
-if [[ -z $domain && -f /var/lib/sophon/stacks/nexus/compose.yaml ]]; then
-    domain=$(sed -n 's/.*Host(`nexus\.\([^`]*\)`).*/\1/p' /var/lib/sophon/stacks/nexus/compose.yaml | head -n1 || true)
+if [[ -z $domain && -f $stacks_dir/nexus/compose.yaml ]]; then
+    domain=$(sed -n 's/.*Host(`nexus\.\([^`]*\)`).*/\1/p' "$stacks_dir/nexus/compose.yaml" | head -n1 || true)
 fi
 domain=${domain%.}
 domain=${domain,,}
@@ -68,25 +71,71 @@ awk '
     /^# BEGIN SOPHON HOST SERVICES$/ { skip=1; next }
     /^# END SOPHON HOST SERVICES$/ { skip=0; next }
     !skip { print }
-' /etc/hosts > "$hosts_tmp"
+' "$hosts_file" > "$hosts_tmp"
 cat >> "$hosts_tmp" <<EOF
 # BEGIN SOPHON HOST SERVICES
 ${ip} ${domain} status.${domain} nexus.${domain} registry.${domain} registry-push.${domain} git.${domain} auth.${domain} arcane.${domain} kopia.${domain}
 # END SOPHON HOST SERVICES
 EOF
 chmod 0644 "$hosts_tmp"
-sudo cp "$hosts_tmp" /etc/hosts
+sudo cp "$hosts_tmp" "$hosts_file"
 rm -f "$hosts_tmp"
 
-# 2. Sync Nexus TLS chain (if dumped by traefik-certs-dumper) and `sophon-pull` credentials into Podman/Docker auth.
+# 2. Sync Nexus TLS chain (if dumped by traefik-certs-dumper), Podman mirror registries.conf,
+#    and `sophon-pull` credentials into Podman/Docker auth.
 if podman --remote=false container exists nexus; then
+    podman_cfg_changed=0
     cert_pem=$(podman --remote=false exec nexus sh -c "cat '/run/secrets/ldap/certs/${domain}.crt' 2>/dev/null || true" || true)
     if [[ $cert_pem == *"BEGIN CERTIFICATE"* ]]; then
+        cert_expected=$(printf '%s\n' "$cert_pem")
         for reg_host in "registry.${domain}" "registry-push.${domain}"; do
-            sudo install -d -m 0755 "/etc/containers/certs.d/${reg_host}"
-            printf '%s\n' "$cert_pem" | sudo tee "/etc/containers/certs.d/${reg_host}/ca.crt" >/dev/null
-            sudo chmod 0644 "/etc/containers/certs.d/${reg_host}/ca.crt"
+            cert_target="${containers_etc}/certs.d/${reg_host}/ca.crt"
+            cert_current=$(cat "$cert_target" 2>/dev/null || true)
+            if [[ $cert_current != "$cert_expected" ]]; then
+                sudo install -d -m 0755 "${containers_etc}/certs.d/${reg_host}"
+                printf '%s\n' "$cert_pem" | sudo tee "$cert_target" >/dev/null
+                sudo chmod 0644 "$cert_target"
+                podman_cfg_changed=1
+            fi
         done
+    fi
+
+    mirror_target="${containers_etc}/registries.conf.d/sophon-nexus.conf"
+    mirror_tmp=$(mktemp)
+    cat > "$mirror_tmp" <<EOF
+# Managed by Sophon (sophon-reconcile-gitops) — routes upstream OCI pulls through local Nexus cache
+# while preserving automatic fallback to upstream registries when Nexus is temporarily unavailable.
+[[registry]]
+prefix = "docker.io"
+location = "docker.io"
+[[registry.mirror]]
+location = "registry.${domain}"
+
+[[registry]]
+prefix = "ghcr.io"
+location = "ghcr.io"
+[[registry.mirror]]
+location = "registry.${domain}"
+
+[[registry]]
+prefix = "quay.io"
+location = "quay.io"
+[[registry.mirror]]
+location = "registry.${domain}"
+EOF
+    if ! cmp -s "$mirror_tmp" "$mirror_target" 2>/dev/null; then
+        sudo install -d -m 0755 "${containers_etc}/registries.conf.d"
+        chmod 0644 "$mirror_tmp"
+        sudo cp "$mirror_tmp" "$mirror_target"
+        podman_cfg_changed=1
+    fi
+    rm -f "$mirror_tmp"
+
+    # Podman's daemonless API service (`podman.service` behind `podman.socket`) caches registries.conf
+    # in process memory; restarting only `podman.service` leaves running containers untouched via conmon
+    # while making Arcane (`podman.sock`) pick up the updated mirror/certs immediately.
+    if (( podman_cfg_changed == 1 )); then
+        systemctl --user try-restart podman.service 2>/dev/null || true
     fi
 
     pull_pw=$(podman --remote=false exec nexus sh -c 'cat /nexus-data/etc/sophon-pull.password 2>/dev/null || true' || true)

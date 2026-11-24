@@ -54,6 +54,8 @@ FIELDS = {
                          'Site', 'path', '', False),
     'SOPHON_CF_TUNNEL_ENABLED': ('Publish public Cloudflare tunnel and DNS records', 'Site', 'choice', 'true', False),
     'SOPHON_CF_TUNNEL_NAME': ('Cloudflare tunnel name', 'Site', 'text', 'sophon', False),
+    'SOPHON_CF_ACCESS_ENABLED': ('Require Cloudflare Zero Trust Access on newly created tunnels', 'Site', 'choice', 'true', False),
+    'SOPHON_CF_ACCESS_EMAILS': ('Cloudflare Access operator emails (comma-separated; empty uses ACME email)', 'Site', 'text', '', False),
     'SOPHON_ARCANE_ADMIN_PASSWORD': ('Arcane admin password (12+ characters)', 'Access', 'password', '', True),
     'SOPHON_KEYCLOAK_REALM': ('Keycloak realm', 'Access', 'text', 'sophon', False),
     'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME': ('Realm display name', 'Access', 'text', '', False),
@@ -62,6 +64,7 @@ FIELDS = {
     'SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET': ('Arcane OIDC client secret', 'Access', 'password', '', True),
     'SOPHON_GITEA_ADMIN_PASSWORD': ('Gitea admin password', 'Access', 'password', '', True),
     'SOPHON_NEXUS_ADMIN_PASSWORD': ('Nexus admin password', 'Access', 'password', '', True),
+    'SOPHON_NEXUS_ANONYMOUS_ENABLED': ('Enable read-only anonymous access across Nexus registries', 'Access', 'choice', 'true', False),
     'SOPHON_OPENLDAP_ADMIN_PASSWORD': ('LDAP admin password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_USER_PASSWORD': ('LDAP seed-user password', 'Access', 'password', '', True),
     'SOPHON_OPENLDAP_EXAMPLE_ADMIN_PASSWORD': ('LDAP seed-admin password', 'Access', 'password', '', True),
@@ -94,6 +97,8 @@ LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), '
 STEPS = ('provision', 'configure')
 CHOICES = {'SOPHON_HYPERVISOR': ('proxmox', 'vcenter', 'hyperv'),
            'SOPHON_CF_TUNNEL_ENABLED': ('false', 'true'),
+           'SOPHON_CF_ACCESS_ENABLED': ('false', 'true'),
+           'SOPHON_NEXUS_ANONYMOUS_ENABLED': ('false', 'true'),
            'SOPHON_KOPIA_BACKUPS_ENABLED': ('false', 'true'),
            'SOPHON_KOPIA_CREATE_REPOSITORY': ('false', 'true'),
            'SOPHON_KOPIA_COARSE_ENABLED': ('false', 'true')}
@@ -177,6 +182,10 @@ def validate_settings(current, changes, step='provision'):
                     return None, f'{label} must be a hostname or IPv4 address, without a URL scheme or port.'
             elif kind == 'email' and ('@' not in value or any(character.isspace() for character in value)):
                 return None, f'{label} must be an email address.'
+            elif name == 'SOPHON_CF_ACCESS_EMAILS':
+                parts = [part.strip() for part in value.split(',') if part.strip()]
+                if not parts or any('@' not in part or any(ch.isspace() for ch in part) for part in parts):
+                    return None, f'{label} ({name}) must be a comma-separated list of email addresses.'
             elif kind == 'url':
                 url = urlsplit(value)
                 if (url.scheme != 'https' or not url.hostname or url.username or url.password

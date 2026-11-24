@@ -198,9 +198,9 @@
   ansible.builtin.debug:
     msg: |
       Nexus Repository deployed at https://{{ nexus_fqdn }}
-      Container pull group:  https://{{ nexus_registry_fqdn }} (user: {{ nexus_pull_user }})
-      Container CI push:     https://{{ nexus_registry_push_fqdn }}
+      Container pull group:  https://{{ nexus_registry_fqdn }} ({{ 'anonymous pull enabled; ' if (nexus_anonymous_enabled | bool) else '' }}user: {{ nexus_pull_user }})
+      Container CI push:     https://{{ nexus_registry_push_fqdn }} (auth required)
       Local fallback admin:  {{ nexus_admin_user }}
       Admin password:        {{ nexus_admin_password }}
       OpenLDAP RBAC:         enabled (groups nexus-admins, nexus-developers)
-      Anonymous access:      {{ 'enabled' if (nexus_anonymous_enabled | bool) else 'disabled' }}
+      Anonymous access:      {{ 'enabled (read-only)' if (nexus_anonymous_enabled | bool) else 'disabled' }}

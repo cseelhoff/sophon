@@ -116,6 +116,10 @@ def main(argv=None) -> int:
     values['SOPHON_CF_TUNNEL_ENABLED'] = 'true' if want_tunnel else 'false'
     values['SOPHON_CF_TOKEN'] = cf_token if want_tunnel else ''
     values['SOPHON_CF_TUNNEL_NAME'] = values.get('SOPHON_CF_TUNNEL_NAME') or standby.get('desired_cf_tunnel_name', 'sophon')
+    if 'SOPHON_CF_ACCESS_ENABLED' not in values or not str(values['SOPHON_CF_ACCESS_ENABLED']).strip():
+        values['SOPHON_CF_ACCESS_ENABLED'] = 'true' if standby.get('desired_cf_access_enabled', True) else 'false'
+    if ('SOPHON_CF_ACCESS_EMAILS' not in values or not str(values['SOPHON_CF_ACCESS_EMAILS']).strip()) and standby.get('desired_cf_access_emails'):
+        values['SOPHON_CF_ACCESS_EMAILS'] = str(standby['desired_cf_access_emails']).strip()
     values['SOPHON_ACME_EMAIL'] = values.get('SOPHON_ACME_EMAIL') or standby.get('desired_acme_email', 'admin@example.com')
     values['SOPHON_KOPIA_BACKUPS_ENABLED'] = 'true'
     values['SOPHON_KOPIA_SNAPSHOT_INTERVAL'] = values.get('SOPHON_KOPIA_SNAPSHOT_INTERVAL') or standby.get('desired_snapshot_interval', '6h')

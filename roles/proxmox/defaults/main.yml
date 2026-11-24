@@ -4,4 +4,4 @@ proxmox_user: "{{ lookup('env', 'SOPHON_PROXMOX_USER') | default(proxmox_usernam
 # Set true (or SOPHON_PROXMOX_VALIDATE_CERTS=true) when the Proxmox API presents a trusted certificate.
 proxmox_validate_certs: "{{ (lookup('env', 'SOPHON_PROXMOX_VALIDATE_CERTS') | default('false', true) | lower) in ['1', 'true', 'yes', 'on'] }}"
 proxmox_onboot: "{{ (lookup('env', 'SOPHON_PROXMOX_ONBOOT') | default('true', true) | lower) in ['1', 'true', 'yes', 'on'] }}"
-proxmox_cpu_type: "x86-64-v2-AES"
+proxmox_cpu_type: "{{ lookup('env', 'SOPHON_PROXMOX_CPU_TYPE') | trim | default('auto', true) }}"

@@ -353,6 +353,9 @@ class NexusTests(unittest.TestCase):
             state.repositories['raw-group']['group']['memberNames'],
             ['raw-vault', 'raw-hosted', 'raw-scratch'],
         )
+        # When anonymous_enabled=False, every Docker endpoint enforces BasicAuth.
+        for docker_repo in ('docker-hosted', 'docker-hub-proxy', 'ghcr-proxy', 'quay-proxy', 'docker-group'):
+            self.assertTrue(state.repositories[docker_repo]['docker']['forceBasicAuth'], docker_repo)
 
         # Pass 2: rerun without initial_admin_password and with persisted APT key must be 100% idempotent
         cfg2 = dict(cfg, initial_admin_password='', apt_signing_keypair=res1['apt_signing_keypair'])
@@ -563,6 +566,148 @@ class NexusTests(unittest.TestCase):
                     continue
                 standby_deployed.append(entry.name)
             self.assertEqual(standby_deployed, ['webapp'])
+
+    def test_default_anonymous_read_enables_docker_pulls_while_keeping_pushes_authenticated(self):
+        defaults = yaml.safe_load((ROOT / 'roles/nexus/defaults/main.yml').read_text())
+        self.assertIs(defaults['nexus_anonymous_enabled'], True)
+
+        state = MockNexusState(bootstrap_pw='initial-bootstrap-secret')
+        server = HTTPServer(('127.0.0.1', 0), make_nexus_handler(state))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+
+        cfg = {
+            'base_url': f'http://127.0.0.1:{server.server_port}',
+            'verify_tls': False,
+            'admin_user': 'admin',
+            'admin_password': 'SophonAdminPassword123!',
+            'initial_admin_password': 'initial-bootstrap-secret',
+            # Omit anonymous_enabled so configure_all exercises its default (True).
+            'ldap_ca_pem': self._make_self_signed_pem(),
+            'ldap': {
+                'name': 'Sophon OpenLDAP',
+                'protocol': 'ldaps',
+                'use_trust_store': True,
+                'host': 'ldap.site.example',
+                'port': 636,
+                'search_base': 'dc=site,dc=example',
+                'bind_dn': 'cn=keycloak-bind,ou=services,dc=site,dc=example',
+                'bind_password': 'LdapBindPassword123!',
+            },
+            'pull_user': 'sophon-pull',
+            'pull_password': 'SophonPullPassword123!',
+            'domain': 'site.example',
+            'docker_group_port': 5000,
+            'docker_hosted_port': 5001,
+            'apt_signing_keypair': '',
+        }
+        configure_nexus.configure_all(cfg)
+        self.assertTrue(state.anonymous['enabled'])
+        self.assertEqual(state.anonymous['userId'], 'anonymous')
+        # Pull endpoints allow anonymous Docker Bearer token pulls; push endpoint still requires credentials.
+        for pull_repo in ('docker-group', 'docker-hub-proxy', 'ghcr-proxy', 'quay-proxy'):
+            self.assertFalse(state.repositories[pull_repo]['docker']['forceBasicAuth'], pull_repo)
+        self.assertTrue(state.repositories['docker-hosted']['docker']['forceBasicAuth'])
+
+    def test_reconcile_gitops_writes_podman_mirror_and_restarts_podman_service_only_on_change(self):
+        import tomllib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            bin_dir = tmp_dir / 'bin'
+            bin_dir.mkdir()
+            project_dir = tmp_dir / 'project'
+            project_dir.mkdir()
+            stacks_dir = tmp_dir / 'stacks'
+            stacks_dir.mkdir()
+            containers_etc = tmp_dir / 'etc-containers'
+            containers_etc.mkdir()
+            home_dir = tmp_dir / 'home-core'
+            home_dir.mkdir()
+            xdg_dir = tmp_dir / 'xdg'
+            xdg_dir.mkdir()
+            hosts_file = tmp_dir / 'hosts'
+            hosts_file.write_text('127.0.0.1 localhost\n')
+            systemctl_log = tmp_dir / 'systemctl.log'
+
+            (project_dir / 'deploy-result.json').write_text(
+                json.dumps({'domain': 'site.example', 'infravm_ip': '10.0.60.3'})
+            )
+            (project_dir / 'site.json').write_text(json.dumps({'SOPHON_INFRAVM_IP': '10.0.60.3'}))
+
+            fake_id = bin_dir / 'id'
+            fake_id.write_text(
+                '#!/usr/bin/env bash\n'
+                'if [[ "${1:-}" == "-u" ]]; then echo 1000; elif [[ "${1:-}" == "-un" ]]; then echo core; else /usr/bin/id "$@"; fi\n'
+            )
+            fake_id.chmod(0o755)
+
+            fake_sudo = bin_dir / 'sudo'
+            fake_sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+            fake_sudo.chmod(0o755)
+
+            fake_systemctl = bin_dir / 'systemctl'
+            fake_systemctl.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{systemctl_log}"\n')
+            fake_systemctl.chmod(0o755)
+
+            fake_podman = bin_dir / 'podman'
+            fake_podman.write_text(
+                '#!/usr/bin/env bash\n'
+                'if [[ "$*" == *"container exists nexus"* ]]; then exit 0; fi\n'
+                'if [[ "$*" == *"exec nexus"* && "$*" == *".crt"* ]]; then\n'
+                '  printf "%s\\n" "-----BEGIN CERTIFICATE-----" "TESTCERT" "-----END CERTIFICATE-----"\n'
+                '  exit 0\n'
+                'fi\n'
+                'if [[ "$*" == *"exec nexus"* && "$*" == *"sophon-pull.password"* ]]; then\n'
+                '  printf "%s" "PullSecret123!"\n'
+                '  exit 0\n'
+                'fi\n'
+                'exit 0\n'
+            )
+            fake_podman.chmod(0o755)
+
+            env = {
+                **os.environ,
+                'PATH': f'{bin_dir}:{os.environ.get("PATH", "")}',
+                'SOPHON_PROJECT_DIR': str(project_dir),
+                'SOPHON_STACKS_DIR': str(stacks_dir),
+                'SOPHON_HOSTS_FILE': str(hosts_file),
+                'SOPHON_CONTAINERS_ETC': str(containers_etc),
+                'SOPHON_HOME_OVERRIDE': str(home_dir),
+                'SOPHON_XDG_RUNTIME_OVERRIDE': str(xdg_dir),
+            }
+
+            run1 = subprocess.run(
+                ['bash', str(ROOT / 'guest/sophon-reconcile-gitops'), '--sync-auth-only'],
+                env=env, capture_output=True, text=True,
+            )
+            self.assertEqual(run1.returncode, 0, run1.stdout + run1.stderr)
+            mirror_conf = containers_etc / 'registries.conf.d/sophon-nexus.conf'
+            self.assertTrue(mirror_conf.is_file())
+            parsed = tomllib.loads(mirror_conf.read_text())
+            by_prefix = {entry['prefix']: entry for entry in parsed['registry']}
+            self.assertEqual(set(by_prefix), {'docker.io', 'ghcr.io', 'quay.io'})
+            for upstream, entry in by_prefix.items():
+                self.assertEqual(entry['location'], upstream)
+                self.assertEqual(entry['mirror'], [{'location': 'registry.site.example'}])
+            self.assertTrue((containers_etc / 'certs.d/registry.site.example/ca.crt').is_file())
+            self.assertEqual(
+                systemctl_log.read_text().strip().splitlines(),
+                ['--user try-restart podman.service'],
+            )
+
+            # Second run with unchanged config must NOT restart podman.service again.
+            run2 = subprocess.run(
+                ['bash', str(ROOT / 'guest/sophon-reconcile-gitops'), '--sync-auth-only'],
+                env=env, capture_output=True, text=True,
+            )
+            self.assertEqual(run2.returncode, 0, run2.stdout + run2.stderr)
+            self.assertEqual(
+                systemctl_log.read_text().strip().splitlines(),
+                ['--user try-restart podman.service'],
+            )
 
 
 if __name__ == '__main__':

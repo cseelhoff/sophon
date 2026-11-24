@@ -303,11 +303,16 @@ def build_repository_specs(
     docker_group_port: int,
     docker_hosted_port: int,
     apt_signing_keypair: str,
+    anonymous_enabled: bool = True,
 ) -> list[tuple[str, str, dict[str, Any], bool]]:
     """Return ordered `(api_format, repo_type, payload, optional_format)` definitions.
 
     Hosted and proxy repositories are ordered before the group repositories that reference them.
+    When `anonymous_enabled` is True, read-only Docker pulls via `docker-group` and the upstream
+    proxy repositories allow anonymous Docker Bearer token exchange (`forceBasicAuth: False`),
+    while `docker-hosted` keeps `forceBasicAuth: True` so pushes always require credentials.
     """
+    pull_force_basic_auth = not bool(anonymous_enabled)
     specs: list[tuple[str, str, dict[str, Any], bool]] = [
         # --- Docker / OCI ---
         (
@@ -330,7 +335,7 @@ def build_repository_specs(
             {
                 "name": "docker-hub-proxy",
                 **_proxy_common("https://registry-1.docker.io"),
-                "docker": {"v1Enabled": False, "forceBasicAuth": True},
+                "docker": {"v1Enabled": False, "forceBasicAuth": pull_force_basic_auth},
                 "dockerProxy": {"indexType": "HUB", "cacheForeignLayers": True},
             },
             False,
@@ -341,7 +346,7 @@ def build_repository_specs(
             {
                 "name": "ghcr-proxy",
                 **_proxy_common("https://ghcr.io"),
-                "docker": {"v1Enabled": False, "forceBasicAuth": True},
+                "docker": {"v1Enabled": False, "forceBasicAuth": pull_force_basic_auth},
                 "dockerProxy": {"indexType": "REGISTRY", "cacheForeignLayers": True},
             },
             False,
@@ -352,7 +357,7 @@ def build_repository_specs(
             {
                 "name": "quay-proxy",
                 **_proxy_common("https://quay.io"),
-                "docker": {"v1Enabled": False, "forceBasicAuth": True},
+                "docker": {"v1Enabled": False, "forceBasicAuth": pull_force_basic_auth},
                 "dockerProxy": {"indexType": "REGISTRY", "cacheForeignLayers": True},
             },
             False,
@@ -365,7 +370,7 @@ def build_repository_specs(
                 **_group_common(["docker-hosted", "docker-hub-proxy", "ghcr-proxy", "quay-proxy"]),
                 "docker": {
                     "v1Enabled": False,
-                    "forceBasicAuth": True,
+                    "forceBasicAuth": pull_force_basic_auth,
                     "httpPort": int(docker_group_port),
                 },
             },
@@ -928,8 +933,9 @@ def configure_all(cfg: dict[str, Any]) -> dict[str, Any]:
         cfg["admin_password"],
         cfg.get("initial_admin_password", ""),
     )
+    anonymous_enabled = bool(cfg.get("anonymous_enabled", True))
     accepted_eula = ensure_eula_accepted(client)
-    changed_anon = ensure_anonymous_setting(client, bool(cfg.get("anonymous_enabled", False)))
+    changed_anon = ensure_anonymous_setting(client, anonymous_enabled)
     imported_certs = ensure_truststore_certificates(client, cfg.get("ldap_ca_pem", ""))
     created_ldap = ensure_ldap_server(client, cfg["ldap"])
     ensure_roles_and_pull_user(
@@ -952,6 +958,7 @@ def configure_all(cfg: dict[str, Any]) -> dict[str, Any]:
         docker_group_port=int(cfg.get("docker_group_port", 5000)),
         docker_hosted_port=int(cfg.get("docker_hosted_port", 5001)),
         apt_signing_keypair=apt_keypair,
+        anonymous_enabled=anonymous_enabled,
     )
     repo_outcomes = ensure_repositories(client, specs)
 

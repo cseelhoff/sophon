@@ -79,9 +79,10 @@
                   https://dash.cloudflare.com/profile/api-tokens
               via "Create Token" -> "Create Custom Token", granting:
 
-                  Zone    / Zone              / Read    (zone lookup, needed by lego)
-                  Zone    / DNS               / Edit    (_acme-challenge TXT and CNAMEs)
-                  Account / Cloudflare Tunnel / Edit    (tunnel ingress routes)
+                  Zone    / Zone                        / Read    (zone lookup, needed by lego)
+                  Zone    / DNS                         / Edit    (_acme-challenge TXT and CNAMEs)
+                  Account / Cloudflare Tunnel           / Edit    (tunnel ingress routes)
+                  Account / Access: Apps and Policies   / Edit    (when creating a new tunnel with SOPHON_CF_ACCESS_ENABLED=true)
 
               Zone Resources:    Include -> Specific zone -> {{ coredns_domain_name }}
               Account Resources: Include -> the account that owns that zone
@@ -167,9 +168,10 @@
                   https://dash.cloudflare.com/profile/api-tokens
               so the token holds all of:
 
-                  Zone    / Zone              / Read    (zone lookup)
-                  Zone    / DNS               / Edit    (_acme-challenge TXT and CNAMEs)
-                  Account / Cloudflare Tunnel / Edit    (only if using tunnels)
+                  Zone    / Zone                        / Read    (zone lookup)
+                  Zone    / DNS                         / Edit    (_acme-challenge TXT and CNAMEs)
+                  Account / Cloudflare Tunnel           / Edit    (only if using tunnels)
+                  Account / Access: Apps and Policies   / Edit    (when creating a new tunnel with SOPHON_CF_ACCESS_ENABLED=true)
 
               Then re-run with the new token in place:
 
@@ -178,7 +180,7 @@
         - name: Look up the Cloudflare tunnel by name
           ansible.builtin.uri:
             url: >-
-              https://api.cloudflare.com/client/v4/accounts/{{ coredns_cf_discovered_account_id }}/cfd_tunnel?is_deleted=false&name={{ coredns_cf_tunnel_name }}
+              {{ coredns_cf_api_base }}/accounts/{{ coredns_cf_discovered_account_id }}/cfd_tunnel?is_deleted=false&name={{ coredns_cf_tunnel_name }}
             headers:
               Authorization: "Bearer {{ coredns_cf_token }}"
             timeout: 10
@@ -190,13 +192,181 @@
             - coredns_cf_discovered_account_id | default('', true) != ''
             - coredns_cf_tunnel_id | default('', true) == ''
 
+        # Whenever Sophon creates a brand-new Cloudflare Tunnel, require Cloudflare
+        # Zero Trust Access protection by default (fail-closed BEFORE tunnel creation)
+        # so anonymous-read services (like Nexus registries) cannot go public without
+        # authentication. Existing tunnels are never altered.
+        - name: Require Cloudflare Access policies before creating a new tunnel
+          when:
+            - coredns_cf_tunnel_enabled | bool
+            - coredns_cf_access_enabled | bool
+            - coredns_cf_tunnels.json is defined
+            - coredns_cf_tunnels.json.success | default(false)
+            - coredns_cf_tunnels.json.result | default([], true) | length == 0
+          vars:
+            _clean_domain: >-
+              {{ coredns_domain_name | lower | regex_replace('\.$', '') }}
+            _wildcard_fqdn: "*.{{ _clean_domain }}"
+            _oidc_fqdn: "{{ (coredns_cf_oidc_hostname | lower | trim) }}.{{ _clean_domain }}"
+          block:
+            - name: Resolve operator email allowlist for Cloudflare Access
+              ansible.builtin.set_fact:
+                coredns_cf_access_emails: >-
+                  {%- set out = [] -%}
+                  {%- for raw in (coredns_cf_access_emails_raw | default('', true) | string).split(',') -%}
+                  {%-   set item = raw | trim | lower -%}
+                  {%-   if item != '' and '@' in item and item != 'admin@example.com' -%}
+                  {%-     set _ = out.append(item) -%}
+                  {%-   endif -%}
+                  {%- endfor -%}
+                  {{ out | unique | list }}
+                coredns_cf_access_include_rules: >-
+                  {%- set rules = [] -%}
+                  {%- for raw in (coredns_cf_access_emails_raw | default('', true) | string).split(',') -%}
+                  {%-   set item = raw | trim | lower -%}
+                  {%-   if item != '' and '@' in item and item != 'admin@example.com' -%}
+                  {%-     set _ = rules.append({'email': {'email': item}}) -%}
+                  {%-   endif -%}
+                  {%- endfor -%}
+                  {{ rules }}
+
+            - name: Fail when Cloudflare Access has no valid operator email allowlist
+              when: coredns_cf_access_emails | length == 0
+              ansible.builtin.fail:
+                msg: |
+                  Refusing to create new Cloudflare tunnel "{{ coredns_cf_tunnel_name }}" without a valid
+                  operator email allowlist for Cloudflare Zero Trust Access.
+
+                  Supply a real email via SOPHON_ACME_EMAIL (or comma-separated SOPHON_CF_ACCESS_EMAILS),
+                  or explicitly opt out of Access protection with SOPHON_CF_ACCESS_ENABLED=false.
+
+            - name: List existing Cloudflare Access applications before creating a new tunnel
+              ansible.builtin.uri:
+                url: "{{ coredns_cf_api_base }}/accounts/{{ coredns_cf_discovered_account_id }}/access/apps"
+                headers:
+                  Authorization: "Bearer {{ coredns_cf_token }}"
+                timeout: 10
+              register: coredns_cf_access_apps
+              failed_when: false
+              changed_when: false
+
+            - name: Fail when Cloudflare Access cannot be verified for a new tunnel
+              when: not (coredns_cf_access_apps.json.success | default(false))
+              ansible.builtin.fail:
+                msg: |
+                  Refusing to create new Cloudflare tunnel "{{ coredns_cf_tunnel_name }}" because Cloudflare
+                  Zero Trust Access could not be verified (fail-closed default):
+
+                  {{ coredns_cf_access_apps.json.errors | default([], true) | map(attribute='message') | join('; ') | default('HTTP ' ~ (coredns_cf_access_apps.status | default('unknown') | string), true) }}
+
+                  Ensure Cloudflare Zero Trust is initialized on your account (https://one.dash.cloudflare.com/)
+                  and grant your SOPHON_CF_TOKEN:
+
+                      Account / Access: Apps and Policies / Edit
+
+                  Or set SOPHON_CF_ACCESS_ENABLED=false if you intentionally want an unauthenticated tunnel
+                  (or SOPHON_CF_TUNNEL_ENABLED=false for LAN/Tailscale-only access).
+
+            - name: Inspect existing Cloudflare Access hostname coverage
+              ansible.builtin.set_fact:
+                coredns_cf_access_covered_hosts: >-
+                  {%- set covered = [] -%}
+                  {%- for app in (coredns_cf_access_apps.json.result | default([], true)) -%}
+                  {%-   if app is mapping -%}
+                  {%-     if app.get('domain') %}{% set _ = covered.append((app.get('domain') | string | lower)) %}{% endif -%}
+                  {%-     for d in (app.get('self_hosted_domains') or []) -%}
+                  {%-       if d is string %}{% set _ = covered.append((d | lower)) %}{% endif -%}
+                  {%-     endfor -%}
+                  {%-     for dest in (app.get('destinations') or []) -%}
+                  {%-       if dest is mapping and dest.get('uri') %}{% set _ = covered.append((dest.get('uri') | string | lower)) %}{% endif -%}
+                  {%-     endfor -%}
+                  {%-   endif -%}
+                  {%- endfor -%}
+                  {{ covered | unique | list }}
+
+            - name: Create Cloudflare Access wildcard policy for new tunnel
+              ansible.builtin.uri:
+                url: "{{ coredns_cf_api_base }}/accounts/{{ coredns_cf_discovered_account_id }}/access/apps"
+                method: POST
+                headers:
+                  Authorization: "Bearer {{ coredns_cf_token }}"
+                body_format: json
+                body:
+                  type: self_hosted
+                  name: "Sophon ({{ _wildcard_fqdn }})"
+                  domain: "{{ _wildcard_fqdn }}"
+                  destinations:
+                    - type: public
+                      uri: "{{ _wildcard_fqdn }}"
+                  session_duration: "{{ coredns_cf_access_session_duration }}"
+                  policies:
+                    - name: "Sophon Operators ({{ _clean_domain }})"
+                      decision: allow
+                      include: "{{ coredns_cf_access_include_rules }}"
+                timeout: 15
+              register: coredns_cf_access_wildcard_created
+              failed_when: false
+              changed_when: coredns_cf_access_wildcard_created.json.success | default(false)
+              when: _wildcard_fqdn not in coredns_cf_access_covered_hosts
+
+            - name: Fail when Cloudflare Access wildcard policy could not be created
+              when:
+                - _wildcard_fqdn not in coredns_cf_access_covered_hosts
+                - not (coredns_cf_access_wildcard_created.json.success | default(false))
+              ansible.builtin.fail:
+                msg: |
+                  Refusing to create new Cloudflare tunnel "{{ coredns_cf_tunnel_name }}" because the
+                  Cloudflare Access policy for {{ _wildcard_fqdn }} could not be created:
+
+                  {{ coredns_cf_access_wildcard_created.json.errors | default([], true) | map(attribute='message') | join('; ') | default('HTTP ' ~ (coredns_cf_access_wildcard_created.status | default('unknown') | string), true) }}
+
+                  Grant Account / Access: Apps and Policies / Edit on SOPHON_CF_TOKEN (and ensure
+                  Cloudflare Zero Trust is enabled with One-Time Pin or an IdP), or set
+                  SOPHON_CF_ACCESS_ENABLED=false to opt out.
+
+            - name: Create Cloudflare Access OIDC bypass policy for new tunnel
+              ansible.builtin.uri:
+                url: "{{ coredns_cf_api_base }}/accounts/{{ coredns_cf_discovered_account_id }}/access/apps"
+                method: POST
+                headers:
+                  Authorization: "Bearer {{ coredns_cf_token }}"
+                body_format: json
+                body:
+                  type: self_hosted
+                  name: "Sophon OIDC ({{ _oidc_fqdn }})"
+                  domain: "{{ _oidc_fqdn }}"
+                  destinations:
+                    - type: public
+                      uri: "{{ _oidc_fqdn }}"
+                  policies:
+                    - name: "Sophon OIDC Public Bypass ({{ _oidc_fqdn }})"
+                      decision: bypass
+                      include:
+                        - everyone: {}
+                timeout: 15
+              register: coredns_cf_access_oidc_created
+              failed_when: false
+              changed_when: coredns_cf_access_oidc_created.json.success | default(false)
+              when: _oidc_fqdn not in coredns_cf_access_covered_hosts
+
+            - name: Fail when Cloudflare Access OIDC bypass policy could not be created
+              when:
+                - _oidc_fqdn not in coredns_cf_access_covered_hosts
+                - not (coredns_cf_access_oidc_created.json.success | default(false))
+              ansible.builtin.fail:
+                msg: |
+                  Refusing to create new Cloudflare tunnel "{{ coredns_cf_tunnel_name }}" because the
+                  Cloudflare Access OIDC bypass policy for {{ _oidc_fqdn }} could not be created:
+
+                  {{ coredns_cf_access_oidc_created.json.errors | default([], true) | map(attribute='message') | join('; ') | default('HTTP ' ~ (coredns_cf_access_oidc_created.status | default('unknown') | string), true) }}
+
         # Only a lookup Cloudflare answered successfully with no match creates a
         # tunnel; an API error must never make a duplicate. config_src=cloudflare
         # makes it remotely managed, which the ingress routes CoreDNS publishes
         # and the connector token both require.
         - name: Create the Cloudflare tunnel when none has that name
           ansible.builtin.uri:
-            url: "https://api.cloudflare.com/client/v4/accounts/{{ coredns_cf_discovered_account_id }}/cfd_tunnel"
+            url: "{{ coredns_cf_api_base }}/accounts/{{ coredns_cf_discovered_account_id }}/cfd_tunnel"
             method: POST
             headers:
               Authorization: "Bearer {{ coredns_cf_token }}"

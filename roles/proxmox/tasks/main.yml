@@ -38,3 +38,47 @@
       Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
     validate_certs: "{{ proxmox_validate_certs }}"
   register: proxmox_iso_content
+
+- name: Resolve optimal Proxmox VM CPU type across online cluster nodes
+  when: (proxmox_cpu_type | trim | lower) == 'auto'
+  block:
+    - name: List Proxmox cluster nodes
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: proxmox_cluster_nodes
+
+    - name: Read CPU capabilities of online Proxmox cluster nodes
+      ansible.builtin.uri:
+        url: "{{ proxmox_api }}/nodes/{{ item }}/status"
+        headers:
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+      loop: >-
+        {{ (proxmox_cluster_nodes.json.data
+            | selectattr('status', 'defined')
+            | selectattr('status', 'eq', 'online')
+            | map(attribute='node')
+            | list) or [proxmox_node] }}
+      register: proxmox_node_statuses
+
+    - name: Select optimal cluster-compatible QEMU CPU model
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ role_path }}/files/cpu.py"
+        stdin: >-
+          {{ {
+               'override': proxmox_cpu_type,
+               'nodes': proxmox_node_statuses.results
+                        | map(attribute='json.data.cpuinfo', default={})
+                        | list
+             } | to_json }}
+      register: proxmox_cpu_selection
+      changed_when: false
+
+    - name: Set resolved Proxmox VM CPU type
+      ansible.builtin.set_fact:
+        proxmox_cpu_type: "{{ (proxmox_cpu_selection.stdout | from_json).cpu_type }}"

@@ -16,7 +16,10 @@ import backup_destination
 
 NOT_SHARED = {'SOPHON_CF_TOKEN', 'SOPHON_KOPIA_PASSWORD',
               'SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64', 'SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64'}
-INTERNET_ONLY = {'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_ENABLED', 'SOPHON_CF_TUNNEL_NAME'}
+INTERNET_ONLY = {
+    'SOPHON_ACME_EMAIL', 'SOPHON_CF_TOKEN', 'SOPHON_CF_TUNNEL_ENABLED', 'SOPHON_CF_TUNNEL_NAME',
+    'SOPHON_CF_ACCESS_ENABLED', 'SOPHON_CF_ACCESS_EMAILS',
+}
 
 
 def read_secret(prompt):
@@ -185,6 +188,8 @@ def main(argv=None):
         'desired_cf_tunnel_enabled': values.get('SOPHON_CF_TUNNEL_ENABLED', 'true') == 'true' and bool(values.get('SOPHON_CF_TOKEN', '').strip()),
         'desired_cf_token': values.get('SOPHON_CF_TOKEN', '').strip(),
         'desired_cf_tunnel_name': values.get('SOPHON_CF_TUNNEL_NAME', 'sophon'),
+        'desired_cf_access_enabled': values.get('SOPHON_CF_ACCESS_ENABLED', 'true') == 'true',
+        'desired_cf_access_emails': values.get('SOPHON_CF_ACCESS_EMAILS', '').strip(),
         'desired_acme_email': values.get('SOPHON_ACME_EMAIL', 'admin@example.com'),
         'desired_backups_enabled': values.get('SOPHON_KOPIA_BACKUPS_ENABLED', 'true') == 'true',
         'desired_snapshot_interval': values.get('SOPHON_KOPIA_SNAPSHOT_INTERVAL', '6h'),
@@ -241,7 +246,13 @@ def main(argv=None):
                     continue
                 if name == 'SOPHON_CF_TUNNEL_NAME' and values.get('SOPHON_CF_TUNNEL_ENABLED') != 'true':
                     continue
-                if name in (*backup_destination.MATERIAL, 'SOPHON_KOPIA_CREATE_REPOSITORY'):
+                if name in (
+                    *backup_destination.MATERIAL,
+                    'SOPHON_KOPIA_CREATE_REPOSITORY',
+                    'SOPHON_CF_ACCESS_ENABLED',
+                    'SOPHON_CF_ACCESS_EMAILS',
+                    'SOPHON_NEXUS_ANONYMOUS_ENABLED',
+                ):
                     continue
                 if name in ('SOPHON_KOPIA_COARSE_VOLUMES_DIR', 'SOPHON_KOPIA_COARSE_WORK_DIR') and values['SOPHON_KOPIA_COARSE_ENABLED'] != 'true':
                     continue

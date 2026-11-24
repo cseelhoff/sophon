@@ -363,7 +363,148 @@ def test_stale_tunnel_cnames_are_repointed_but_other_records_are_not():
     assert 'cfargotunnel' in conditions and '!=' in conditions
     defaults = yaml.safe_load((ROOT / 'roles/coredns/defaults/main.yml').read_text())
     assert defaults['coredns_cf_owner_comment'] == 'managed by coredns-dockerdiscovery'
-    assert {'traefik', 'auth', 'ldap', 'git', 'arcane', 'dns'} <= set(defaults['coredns_published_hosts'])
+    assert {'traefik', 'auth', 'ldap', 'git', 'nexus', 'registry', 'registry-push', 'arcane', 'dns', 'kopia'} <= set(
+        defaults['coredns_published_hosts']
+    )
+
+
+def test_new_cloudflare_tunnel_enforces_fail_closed_access_policies():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    tasks = yaml.safe_load((ROOT / 'roles/coredns/tasks/main.yml').read_text())
+    preflight = tasks[0]['block'][0]['block']
+    names = [task['name'] for task in preflight]
+    access_idx = names.index('Require Cloudflare Access policies before creating a new tunnel')
+    assert names.index('Look up the Cloudflare tunnel by name') < access_idx \
+        < names.index('Create the Cloudflare tunnel when none has that name')
+
+    # Extract [Look up tunnel, Require Access, Create tunnel, Adopt ids] to run via ansible-playbook
+    slice_tasks = [
+        preflight[names.index('Look up the Cloudflare tunnel by name')],
+        preflight[access_idx],
+        preflight[names.index('Create the Cloudflare tunnel when none has that name')],
+        preflight[names.index('Adopt the tunnel and account ids only as a matched pair')],
+    ]
+    defaults = yaml.safe_load((ROOT / 'roles/coredns/defaults/main.yml').read_text())
+
+    state = {'tunnels': [], 'access_ok': False, 'access_apps': [], 'calls': []}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def _reply(self, code, payload):
+            raw = json.dumps(payload).encode('utf-8')
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            state['calls'].append(('GET', self.path, None))
+            if '/cfd_tunnel?' in self.path:
+                self._reply(200, {'success': True, 'result': list(state['tunnels']), 'errors': []})
+            elif self.path.endswith('/access/apps'):
+                if not state['access_ok']:
+                    self._reply(403, {'success': False, 'result': None, 'errors': [{'message': 'Authentication error'}]})
+                else:
+                    self._reply(200, {'success': True, 'result': list(state['access_apps']), 'errors': []})
+            else:
+                self._reply(404, {'success': False, 'errors': [{'message': 'not found'}]})
+
+        def do_POST(self):
+            length = int(self.headers.get('Content-Length', '0'))
+            body = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+            state['calls'].append(('POST', self.path, body))
+            if self.path.endswith('/access/apps'):
+                if not state['access_ok']:
+                    self._reply(403, {'success': False, 'errors': [{'message': 'Access denied'}]})
+                else:
+                    created = {'id': f"app-{len(state['access_apps']) + 1}", **body}
+                    state['access_apps'].append(created)
+                    self._reply(201, {'success': True, 'result': created, 'errors': []})
+            elif self.path.endswith('/cfd_tunnel'):
+                created_tun = {'id': 'tun-created-123', 'name': body.get('name', 'sophon')}
+                state['tunnels'].append(created_tun)
+                self._reply(200, {'success': True, 'result': created_tun, 'errors': []})
+            else:
+                self._reply(404, {'success': False, 'errors': [{'message': 'not found'}]})
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+
+            def run_case(**overrides):
+                vars_payload = {
+                    **defaults,
+                    'coredns_cf_api_base': f'http://127.0.0.1:{server.server_port}/client/v4',
+                    'coredns_cf_token': 'cf-secret-token',
+                    'coredns_domain_name': 'site.example',
+                    'coredns_cf_discovered_account_id': 'acct-1',
+                    'coredns_cf_zones': {'json': {'success': True}},
+                    'coredns_cf_tunnel_enabled': True,
+                    'coredns_cf_tunnel_name': 'sophon',
+                    'coredns_cf_access_enabled': True,
+                    'coredns_cf_access_emails_raw': 'ops@site.example',
+                    'coredns_cf_oidc_hostname': 'auth',
+                    **overrides,
+                }
+                pb = [{
+                    'hosts': 'localhost',
+                    'gather_facts': False,
+                    'vars': vars_payload,
+                    'tasks': slice_tasks,
+                }]
+                pb_path = tmp_dir / 'cf_access_case.yml'
+                pb_path.write_text(yaml.safe_dump(pb))
+                return subprocess.run(
+                    ['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(pb_path)],
+                    capture_output=True, text=True,
+                )
+
+            # Case 1: New tunnel + missing Access permission MUST fail closed BEFORE POST /cfd_tunnel.
+            state.update(tunnels=[], access_ok=False, access_apps=[], calls=[])
+            res_fail = run_case()
+            assert res_fail.returncode != 0
+            assert 'Access: Apps and Policies' in (res_fail.stdout + res_fail.stderr)
+            assert not any(m == 'POST' and p.endswith('/cfd_tunnel') for m, p, _ in state['calls'])
+
+            # Case 2: New tunnel + Access enabled (even with an unrelated private CIDR app present) creates
+            # wildcard allow + auth OIDC bypass BEFORE creating the tunnel.
+            state.update(
+                tunnels=[],
+                access_ok=True,
+                access_apps=[{'id': 'private-net', 'type': 'private_net', 'destinations': [{'type': 'private', 'cidr': '10.0.0.0/8'}]}],
+                calls=[],
+            )
+            res_ok = run_case(coredns_cf_access_emails_raw='ops@site.example, SecOps@Site.Example ')
+            assert res_ok.returncode == 0, res_ok.stdout + res_ok.stderr
+            post_paths = [(p, b) for m, p, b in state['calls'] if m == 'POST']
+            assert [p.split('/')[-1] for p, _ in post_paths] == ['apps', 'apps', 'cfd_tunnel']
+            wildcard_body, oidc_body, _ = [b for _, b in post_paths]
+            assert wildcard_body['domain'] == '*.site.example'
+            assert wildcard_body['policies'][0]['decision'] == 'allow'
+            assert wildcard_body['policies'][0]['include'] == [
+                {'email': {'email': 'ops@site.example'}},
+                {'email': {'email': 'secops@site.example'}},
+            ]
+            assert oidc_body['domain'] == 'auth.site.example'
+            assert oidc_body['policies'][0]['decision'] == 'bypass'
+            assert oidc_body['policies'][0]['include'] == [{'everyone': {}}]
+
+            # Case 3: Existing tunnel skips Access checks completely so pre-existing setups never break.
+            state.update(tunnels=[{'id': 'tun-existing-1', 'name': 'sophon'}], access_ok=False, calls=[])
+            res_existing = run_case()
+            assert res_existing.returncode == 0, res_existing.stdout + res_existing.stderr
+            assert not any('/access/apps' in p for _, p, _ in state['calls'])
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_gitea_initializer_reports_cli_failures():
@@ -544,6 +685,7 @@ if __name__ == '__main__':
     test_gitea_initializer_reports_cli_failures()
     test_cloudflared_connects_only_when_a_tunnel_was_found()
     test_missing_tunnel_is_created_only_after_a_successful_empty_lookup()
+    test_new_cloudflare_tunnel_enforces_fail_closed_access_policies()
     test_stale_tunnel_cnames_are_repointed_but_other_records_are_not()
     test_acme_backup_retries_container_replacement_race()
     test_arcane_routing_configured_with_traefik()
