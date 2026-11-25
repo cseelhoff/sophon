@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Runs on the installed disk as core, never in the live ISO.
+# Runs on the installed disk as unprivileged sophon (uid 1001), never in the live ISO.
 set -euo pipefail
-export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
-export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+export HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
 
 main() {
-    [[ $(id -u) == 1000 && $(id -un) == core ]] || {
-        echo "Host bootstrap must run as core." >&2; return 1;
+    [[ $(id -u) == 1001 && $(id -un) == sophon ]] || {
+        echo "Host bootstrap must run as sophon." >&2; return 1;
     }
     local project=/var/lib/sophon/project infravm_ip dns_server dns_frontend_ids attempt
     local -a dns_frontends
-    rm -f /run/user/1000/sophon-ready
+    rm -f /run/sophon/ready
     # The address arrives later, when sophon-deploy asks for the network; until then proxy needs no DNS server.
     infravm_ip=$(jq -er '.SOPHON_INFRAVM_IP | select(type == "string" and length > 0)' "$project/site.json" 2>/dev/null) || infravm_ip=
     [[ -f /var/lib/sophon/runner.tar ]]
@@ -57,8 +57,8 @@ main() {
             --label com.docker.compose.network=proxy proxy
     fi
     for attempt in {1..30}; do
-        if [[ -S /run/user/1000/podman/podman.sock ]] && podman --remote=false info >/dev/null 2>&1; then
-            touch /run/user/1000/sophon-ready
+        if [[ -S /run/user/1001/podman/podman.sock ]] && podman --remote=false info >/dev/null 2>&1; then
+            touch /run/sophon/ready
             printf '%s\n' 'Sophon is ready. Log in as core and run: sophon-deploy'
             return 0
         fi

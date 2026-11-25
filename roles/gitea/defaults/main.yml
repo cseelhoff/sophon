@@ -54,3 +54,7 @@ gitea_oauth_client_id: "gitea"
 gitea_oauth_client_secret: "{{ keycloak_gitea_client_secret | default('') }}"
 gitea_oauth_discovery_url: "https://{{ keycloak_hostname }}.{{ keycloak_domain }}/realms/{{ keycloak_realm }}/.well-known/openid-configuration"
 gitea_oauth_scopes: "openid profile email groups"
+gitea_oauth_group_claim_name: "groups"
+gitea_oauth_admin_group: "gitea-admins"
+gitea_oauth_ops_org: "ops"
+gitea_oauth_group_team_map: '{"{{ gitea_oauth_admin_group }}":{"{{ gitea_oauth_ops_org }}":["Owners"]}}'

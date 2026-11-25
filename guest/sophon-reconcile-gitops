@@ -7,8 +7,17 @@ if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
     echo "Run sophon-reconcile-gitops as core (do not use sudo)." >&2
     exit 1
 fi
-export HOME=${SOPHON_HOME_OVERRIDE:-/var/home/core} XDG_RUNTIME_DIR=${SOPHON_XDG_RUNTIME_OVERRIDE:-/run/user/1000}
+sophon_home=${SOPHON_HOME_OVERRIDE:-/var/home/sophon}
+sophon_xdg=${SOPHON_XDG_RUNTIME_OVERRIDE:-/run/user/1001}
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+
+as_sophon() {
+    if [[ -n ${SOPHON_HOME_OVERRIDE:-} || -n ${SOPHON_XDG_RUNTIME_OVERRIDE:-} ]] || [[ $(id -u) == 1001 ]]; then
+        env HOME="$sophon_home" XDG_RUNTIME_DIR="$sophon_xdg" DBUS_SESSION_BUS_ADDRESS="unix:path=${sophon_xdg}/bus" "$@"
+    else
+        sudo -u sophon -- env HOME="$sophon_home" XDG_RUNTIME_DIR="$sophon_xdg" DBUS_SESSION_BUS_ADDRESS="unix:path=${sophon_xdg}/bus" "$@"
+    fi
+}
 
 sync_auth_only=0
 standby_mode=0
@@ -49,15 +58,15 @@ project=${SOPHON_PROJECT_DIR:-/var/lib/sophon/project}
 stacks_dir=${SOPHON_STACKS_DIR:-/var/lib/sophon/stacks}
 hosts_file=${SOPHON_HOSTS_FILE:-/etc/hosts}
 containers_etc=${SOPHON_CONTAINERS_ETC:-/etc/containers}
-domain=$(jq -r '.domain // empty' "$project/deploy-result.json" 2>/dev/null || true)
-if [[ -z $domain && -f $stacks_dir/nexus/compose.yaml ]]; then
-    domain=$(sed -n 's/.*Host(`nexus\.\([^`]*\)`).*/\1/p' "$stacks_dir/nexus/compose.yaml" | head -n1 || true)
+domain=$(as_sophon jq -r '.domain // empty' "$project/deploy-result.json" 2>/dev/null || true)
+if [[ -z $domain ]] && as_sophon test -f "$stacks_dir/nexus/compose.yaml"; then
+    domain=$(as_sophon sed -n 's/.*Host(`nexus\.\([^`]*\)`).*/\1/p' "$stacks_dir/nexus/compose.yaml" | head -n1 || true)
 fi
 domain=${domain%.}
 domain=${domain,,}
-ip=$(jq -r '.SOPHON_INFRAVM_IP // empty' "$project/site.json" 2>/dev/null || true)
+ip=$(as_sophon jq -r '.SOPHON_INFRAVM_IP // empty' "$project/site.json" 2>/dev/null || true)
 if [[ -z $ip ]]; then
-    ip=$(jq -r '.infravm_ip // empty' "$project/deploy-result.json" 2>/dev/null || true)
+    ip=$(as_sophon jq -r '.infravm_ip // empty' "$project/deploy-result.json" 2>/dev/null || true)
 fi
 
 if [[ -z $domain || -z $ip ]]; then
@@ -83,9 +92,9 @@ rm -f "$hosts_tmp"
 
 # 2. Sync Nexus TLS chain (if dumped by traefik-certs-dumper), Podman mirror registries.conf,
 #    and `sophon-pull` credentials into Podman/Docker auth.
-if podman --remote=false container exists nexus; then
+if as_sophon podman --remote=false container exists nexus; then
     podman_cfg_changed=0
-    cert_pem=$(podman --remote=false exec nexus sh -c "cat '/run/secrets/ldap/certs/${domain}.crt' 2>/dev/null || true" || true)
+    cert_pem=$(as_sophon podman --remote=false exec nexus sh -c "cat '/run/secrets/ldap/certs/${domain}.crt' 2>/dev/null || true" || true)
     if [[ $cert_pem == *"BEGIN CERTIFICATE"* ]]; then
         cert_expected=$(printf '%s\n' "$cert_pem")
         for reg_host in "registry.${domain}" "registry-push.${domain}"; do
@@ -135,37 +144,36 @@ EOF
     # in process memory; restarting only `podman.service` leaves running containers untouched via conmon
     # while making Arcane (`podman.sock`) pick up the updated mirror/certs immediately.
     if (( podman_cfg_changed == 1 )); then
-        systemctl --user try-restart podman.service 2>/dev/null || true
+        as_sophon systemctl --user try-restart podman.service 2>/dev/null || true
     fi
 
-    pull_pw=$(podman --remote=false exec nexus sh -c 'cat /nexus-data/etc/sophon-pull.password 2>/dev/null || true' || true)
-    if [[ -z $pull_pw && -f $project/credentials/nexus/pull_password ]]; then
-        pull_pw=$(tr -d '\r\n' < "$project/credentials/nexus/pull_password")
+    pull_pw=$(as_sophon podman --remote=false exec nexus sh -c 'cat /nexus-data/etc/sophon-pull.password 2>/dev/null || true' || true)
+    if [[ -z $pull_pw ]] && as_sophon test -f "$project/credentials/nexus/pull_password"; then
+        pull_pw=$(as_sophon tr -d '\r\n' < <(as_sophon cat "$project/credentials/nexus/pull_password"))
     fi
     if [[ -n $pull_pw ]]; then
         token=$(printf 'sophon-pull:%s' "$pull_pw" | base64 -w0)
-        for auth_file in "$HOME/.config/containers/auth.json" "$HOME/.docker/config.json"; do
-            install -d -m 0700 "$(dirname "$auth_file")"
+        for auth_file in "$sophon_home/.config/containers/auth.json" "$sophon_home/.docker/config.json"; do
+            as_sophon install -d -m 0700 "$(dirname "$auth_file")"
             existing='{}'
-            if [[ -s $auth_file ]]; then
-                existing=$(cat "$auth_file" 2>/dev/null || printf '{}')
+            if as_sophon test -s "$auth_file"; then
+                existing=$(as_sophon cat "$auth_file" 2>/dev/null || printf '{}')
             fi
             jq --arg host "registry.${domain}" --arg auth "$token" \
-                '.auths = ((.auths // {}) + {($host): {"auth": $auth}})' <<< "$existing" > "${auth_file}.tmp"
-            chmod 0600 "${auth_file}.tmp"
-            mv "${auth_file}.tmp" "$auth_file"
+                '.auths = ((.auths // {}) + {($host): {"auth": $auth}})' <<< "$existing" \
+                | as_sophon sh -c 'umask 077; cat > "$1.tmp" && mv "$1.tmp" "$1"' _ "$auth_file"
         done
     fi
 fi
 
 # Ensure the sophon-status PKCE OIDC client exists in Keycloak even after restoring an older snapshot.
-if podman --remote=false container exists keycloak; then
-    kc_env=$(podman --remote=false inspect --format '{{range .Config.Env}}{{println .}}{{end}}' keycloak 2>/dev/null || true)
+if as_sophon podman --remote=false container exists keycloak; then
+    kc_env=$(as_sophon podman --remote=false inspect --format '{{range .Config.Env}}{{println .}}{{end}}' keycloak 2>/dev/null || true)
     kc_user=$(awk -F= '$1=="KC_BOOTSTRAP_ADMIN_USERNAME"{sub(/^[^=]*=/,""); print; exit}' <<< "$kc_env")
     kc_pass=$(awk -F= '$1=="KC_BOOTSTRAP_ADMIN_PASSWORD"{sub(/^[^=]*=/,""); print; exit}' <<< "$kc_env")
     kc_realm="sophon"
-    if [[ -f /var/lib/sophon/stacks/status/.env ]]; then
-        r_val=$(sed -n 's/^SOPHON_STATUS_OIDC_REALM="\(.*\)"$/\1/p' /var/lib/sophon/stacks/status/.env | head -n1 || true)
+    if as_sophon test -f /var/lib/sophon/stacks/status/.env; then
+        r_val=$(as_sophon sed -n 's/^SOPHON_STATUS_OIDC_REALM="\(.*\)"$/\1/p' /var/lib/sophon/stacks/status/.env | head -n1 || true)
         [[ -z $r_val ]] || kc_realm=$r_val
     fi
     if [[ -n $kc_user && -n $kc_pass ]]; then
@@ -229,13 +237,13 @@ if (( sync_auth_only )); then
 fi
 
 # 3. Export pure GitOps repository directly from local Gitea's `/data` bare repo if present.
-if ! podman --remote=false container exists gitea; then
+if ! as_sophon podman --remote=false container exists gitea; then
     echo "Gitea container is not deployed; skipping GitOps workload reconciliation."
     exit 0
 fi
 
 bare_repo="/data/git/repositories/${gitops_repo,,}.git"
-resolved_ref=$(podman --remote=false exec -u 1000:1000 gitea sh -c "
+resolved_ref=$(as_sophon podman --remote=false exec -u 1000:1000 gitea sh -c "
     test -d '$bare_repo' || exit 1
     for ref in HEAD refs/heads/main refs/heads/master; do
         if git --git-dir='$bare_repo' rev-parse --verify \"\$ref\" >/dev/null 2>&1; then
@@ -251,10 +259,12 @@ if [[ -z $resolved_ref ]]; then
 fi
 
 work_dir=$(mktemp -d /tmp/sophon-gitops-XXXXXX)
+chmod 0755 "$work_dir"
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
 
-podman --remote=false exec -u 1000:1000 gitea git --git-dir="$bare_repo" archive --format=tar "$resolved_ref" | tar -xf - -C "$work_dir"
+as_sophon podman --remote=false exec -u 1000:1000 gitea git --git-dir="$bare_repo" archive --format=tar "$resolved_ref" | tar -xf - -C "$work_dir"
+chmod -R a+rX "$work_dir"
 
 declare -A core_stacks=(
     [coredns]=1 [traefik]=1 [cloudflared]=1 [openldap]=1
@@ -262,7 +272,7 @@ declare -A core_stacks=(
 )
 
 snapshot_groups=""
-if (( restore_data )) && podman --remote=false container exists kopia; then
+if (( restore_data )) && as_sophon podman --remote=false container exists kopia; then
     snapshot_groups=$(/usr/local/bin/sophon-restore inspect --snapshot latest 2>/dev/null | jq -r '.groups[]?.name // empty' || true)
 fi
 
@@ -296,19 +306,15 @@ for dir in "${candidate_dirs[@]}"; do
         continue
     fi
 
-    dest="/var/lib/sophon/stacks/${stack}"
-    rm -rf "${dest}.staging"
-    install -d -m 0700 "${dest}.staging"
-    cp -a "$dir"/. "${dest}.staging"/
-    rm -rf "$dest"
-    mv "${dest}.staging" "$dest"
+    dest="${stacks_dir}/${stack}"
+    as_sophon sh -c 'rm -rf "$1.staging" && install -d -m 0700 "$1.staging" && cp -a "$2"/. "$1.staging"/ && rm -rf "$1" && mv "$1.staging" "$1"' _ "$dest" "$dir"
 
     compose_basename=$(basename "$compose_file")
     echo "Deploying GitOps workload stack: $stack"
-    podman --remote=false run --rm --network host --pull never \
+    as_sophon podman --remote=false run --rm --network host --pull never \
         --security-opt label=disable \
-        -v /run/user/1000/podman/podman.sock:/var/run/docker.sock \
-        -v /var/lib/sophon/stacks:/var/lib/sophon/stacks \
+        -v "${sophon_xdg}/podman/podman.sock:/var/run/docker.sock" \
+        -v "${stacks_dir}:${stacks_dir}" \
         sophon:latest docker compose \
         --project-name "$stack" \
         --project-directory "$dest" \

@@ -86,9 +86,9 @@ FIELDS = {
     'SOPHON_KOPIA_SNAPSHOT_INTERVAL': ('Snapshot interval', 'Backup', 'text', '6h', True),
     'SOPHON_KOPIA_COARSE_ENABLED': ('Enable weekly live Btrfs volume snapshots (true/false)', 'Backup', 'choice', 'false', False),
     'SOPHON_KOPIA_COARSE_VOLUMES_DIR': ('Host Btrfs Podman volumes subvolume (read-only source)', 'Backup', 'text',
-                                        '/var/home/core/.local/share/containers/storage/volumes', False),
+                                        '/var/home/sophon/.local/share/containers/storage/volumes', False),
     'SOPHON_KOPIA_COARSE_WORK_DIR': ('Dedicated host Btrfs working directory outside the volumes subvolume',
-                                     'Backup', 'text', '/var/home/core/sophon-coarse', False),
+                                     'Backup', 'text', '/var/home/sophon/sophon-coarse', False),
 }
 LIMITS = {'SOPHON_PROXMOX_PORT': (1, 65535), 'SOPHON_HYPERV_PORT': (1, 65535), 'SOPHON_VNET_VLAN': (1, 4094),
           'SOPHON_INFRAVM_CORES': (1, 256), 'SOPHON_INFRAVM_MEMORY': (1024, 1048576),

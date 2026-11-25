@@ -32,7 +32,7 @@ write_status() {
 seed_domain=$(jq -r '.env.SOPHON_DOMAIN // "sophon"' "$STAGE/sophon-seed.json")
 on_error() {
     local rc=$?
-    rm -rf "$STAGE" /run/user/1000/sophon-seed
+    rm -rf "$STAGE" /run/user/1001/sophon-seed
     write_status "failed" "unknown" "$seed_domain" "" "" "sophon-autodeploy exited with status $rc"
     /usr/local/libexec/sophon-update-issue failed "$seed_domain" "" "" || true
     exit "$rc"
@@ -53,20 +53,20 @@ else
     deploy_net_args=(--accept-dhcp --dns "$net_dns")
 fi
 
-core_seed_dir=/run/user/1000/sophon-seed
-rm -rf "$core_seed_dir"
-install -d -o core -g core -m 0700 "$core_seed_dir"
-install -o core -g core -m 0600 "$STAGE/sophon-seed.json" "$core_seed_dir/sophon-seed.json"
+sophon_seed_dir=/run/user/1001/sophon-seed
+rm -rf "$sophon_seed_dir"
+install -d -o sophon -g sophon -m 0700 "$sophon_seed_dir"
+install -o sophon -g sophon -m 0600 "$STAGE/sophon-seed.json" "$sophon_seed_dir/sophon-seed.json"
 
 if [[ -f $STAGE/acme.json ]]; then
-    install -d -o core -g core -m 0700 /var/lib/sophon/project/imports
-    install -o core -g core -m 0600 "$STAGE/acme.json" /var/lib/sophon/project/imports/acme.json
+    install -d -o sophon -g sophon -m 0700 /var/lib/sophon/project/imports
+    install -o sophon -g sophon -m 0600 "$STAGE/acme.json" /var/lib/sophon/project/imports/acme.json
 fi
 rm -rf "$STAGE"
 
-runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 SOPHON_AUTODEPLOY=1 \
+runuser -u core -- env HOME=/var/home/core SOPHON_AUTODEPLOY=1 \
     /usr/local/bin/sophon-deploy "${deploy_net_args[@]}" --auto
-rm -rf "$core_seed_dir"
+rm -rf "$sophon_seed_dir"
 
 mode=$(jq -er '.mode' /var/lib/sophon/project/deploy-result.json)
 domain=$(jq -er '.domain' /var/lib/sophon/project/deploy-result.json)
@@ -76,12 +76,12 @@ restored_snapshot=""
 if [[ $mode == "standby_restore" ]]; then
     echo "== Existing backup repository detected: restoring latest snapshot in safe standby mode =="
     write_status "restoring" "standby_restore" "$domain" "$ip"
-    runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    runuser -u sophon -- env HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001 \
         /usr/local/bin/sophon-restore --snapshot latest --yes
-    restored_snapshot=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    restored_snapshot=$(runuser -u sophon -- env HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001 \
         podman --remote=false exec kopia sh -c 'kopia snapshot list --all --json | jq -r "sort_by(.startTime) | last | .id[0:12] // empty"' 2>/dev/null || true)
     if [[ -x /usr/local/bin/sophon-reconcile-gitops ]]; then
-        runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        runuser -u core -- env HOME=/var/home/core \
             /usr/local/bin/sophon-reconcile-gitops --standby --restore-data
     fi
 fi
@@ -90,7 +90,7 @@ echo "== Verifying Sophon containers and HTTPS endpoints inside guest =="
 for svc in coredns traefik ldap keycloak gitea nexus arcane kopia sophon-status; do
     ok=0
     for _ in $(seq 1 60); do
-        state=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+        state=$(runuser -u sophon -- env HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001 \
             podman --remote=false inspect --format '{{.State.Status}}:{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$svc" 2>/dev/null || true)
         if [[ $state == "running:healthy" || $state == "running:none" ]]; then
             ok=1
@@ -105,12 +105,12 @@ for svc in coredns traefik ldap keycloak gitea nexus arcane kopia sophon-status;
 done
 
 if [[ $mode == "standby_restore" ]]; then
-    if runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    if runuser -u sophon -- env HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001 \
         podman --remote=false container exists cloudflared; then
         echo "Safety check failed: cloudflared must not be running in standby_restore mode." >&2
         exit 1
     fi
-    kopia_ro=$(runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    kopia_ro=$(runuser -u sophon -- env HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001 \
         podman --remote=false inspect --format '{{range .Config.Env}}{{println .}}{{end}}' kopia | awk -F= '$1=="KOPIA_READONLY"{print $2}')
     if [[ $kopia_ro != "true" ]]; then
         echo "Safety check failed: kopia must have KOPIA_READONLY=true in standby_restore mode." >&2

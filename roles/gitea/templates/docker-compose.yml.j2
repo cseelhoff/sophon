@@ -168,7 +168,11 @@ services:
             --key '{{ gitea_oauth_client_id }}' \
             --secret '{{ gitea_oauth_client_secret }}' \
             --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
-            --scopes '{{ gitea_oauth_scopes }}'
+            --scopes '{{ gitea_oauth_scopes }}' \
+            --group-claim-name '{{ gitea_oauth_group_claim_name }}' \
+            --admin-group '{{ gitea_oauth_admin_group }}' \
+            --group-team-map '{{ gitea_oauth_group_team_map }}' \
+            --group-team-map-removal
         else
           echo "gitea-init: creating new OIDC auth source."
           gitea admin auth add-oauth \
@@ -177,7 +181,11 @@ services:
             --key '{{ gitea_oauth_client_id }}' \
             --secret '{{ gitea_oauth_client_secret }}' \
             --auto-discover-url '{{ gitea_oauth_discovery_url }}' \
-            --scopes '{{ gitea_oauth_scopes }}'
+            --scopes '{{ gitea_oauth_scopes }}' \
+            --group-claim-name '{{ gitea_oauth_group_claim_name }}' \
+            --admin-group '{{ gitea_oauth_admin_group }}' \
+            --group-team-map '{{ gitea_oauth_group_team_map }}' \
+            --group-team-map-removal
         fi
 {% endif %}
 

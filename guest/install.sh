@@ -112,18 +112,22 @@ render_ignition() {
     local web_refresh_certs_path_unit web_refresh_certs_service_unit
     unit='[Unit]
 Description=Sophon offline host bootstrap
-After=network-online.target user@1000.service
+After=network-online.target user@1001.service
 Wants=network-online.target
-Requires=user@1000.service
+Requires=user@1001.service
 ConditionPathExists=/var/lib/sophon/runner.tar
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-User=core
-Environment=HOME=/var/home/core
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+User=sophon
+RuntimeDirectory=sophon
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+Environment=HOME=/var/home/sophon
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
+ExecStartPre=+/usr/bin/sh -ceu '\''grep -q "^sophon:" /etc/subuid || usermod --add-subuids 165536-231071 --add-subgids 165536-231071 sophon'\''
 ExecStartPre=+/usr/sbin/restorecon -RF /var/lib/sophon
 ExecStart=/usr/local/libexec/sophon-host-bootstrap
 StandardOutput=journal+console
@@ -151,9 +155,9 @@ WantedBy=multi-user.target
 Description=Sophon unattended deployment and safe standby auto-restore
 ConditionPathExists=!/var/lib/sophon/autodeploy.done
 ConditionPathExists=/run/sophon-seed/sophon-seed.json
-After=sophon-seed-early.service sophon-host-bootstrap.service network-online.target user@1000.service
+After=sophon-seed-early.service sophon-host-bootstrap.service network-online.target user@1001.service
 Wants=network-online.target sophon-host-bootstrap.service
-Requires=user@1000.service
+Requires=user@1001.service
 
 [Service]
 Type=oneshot
@@ -250,9 +254,9 @@ WantedBy=multi-user.target
 '
     web_activate_service_unit='[Unit]
 Description=Promote Sophon standby appliance to active production
-After=network-online.target user@1000.service
+After=network-online.target user@1001.service
 Wants=network-online.target
-Requires=user@1000.service
+Requires=user@1001.service
 
 [Service]
 Type=oneshot
@@ -274,9 +278,9 @@ WantedBy=multi-user.target
 '
     web_refresh_certs_service_unit='[Unit]
 Description=Rotate Sophon wildcard TLS certificates from attached SOPHON_CERTS disk
-After=network-online.target user@1000.service
+After=network-online.target user@1001.service
 Wants=network-online.target
-Requires=user@1000.service
+Requires=user@1001.service
 
 [Service]
 Type=oneshot
@@ -285,14 +289,14 @@ StandardOutput=journal+console
 StandardError=journal+console
 TimeoutStartSec=0
 '
-    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]}]},"storage":{"filesystems":[{"path":"/var","device":"/dev/disk/by-label/sophon-var","format":"btrfs","label":"sophon-var","wipeFilesystem":false,"mountOptions":["noatime","discard=async","user_subvol_rm_allowed"]}],"files":['
+    printf '{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core","uid":1000,"groups":["sudo","wheel"]},{"name":"sophon","uid":1001}]},"storage":{"filesystems":[{"path":"/var","device":"/dev/disk/by-label/sophon-var","format":"btrfs","label":"sophon-var","wipeFilesystem":false,"mountOptions":["noatime","discard=async","user_subvol_rm_allowed"]}],"files":['
     ignition_file /etc/hostname 420 sophon-infravm; printf ','
     ignition_file /etc/sysctl.d/99-sophon-lowports.conf 420 $'net.ipv4.ip_unprivileged_port_start=0\n'; printf ','
     ignition_file /etc/udev/rules.d/99-sophon-certs.rules 420 $'SUBSYSTEM=="block", ACTION=="add|change", ENV{ID_FS_LABEL}=="SOPHON_CERTS", TAG+="systemd", ENV{SYSTEMD_WANTS}+="sophon-ip-probe.service"\n'; printf ','
     ignition_file /etc/systemd/resolved.conf.d/nostub.conf 420 $'[Resolve]\nDNSStubListener=no\n'; printf ','
     ignition_file /etc/zincati/config.d/90-disable-auto-reboot.toml 420 $'[updates]\nenabled = false\n'; printf ','
     ignition_file /etc/ssh/sshd_config.d/40-sophon-console-only.conf 420 $'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'; printf ','
-    ignition_file /var/lib/systemd/linger/core 420 ''; printf ','
+    ignition_file /var/lib/systemd/linger/sophon 420 ''; printf ','
     ignition_file /etc/issue.d/sophon.issue 420 $'Sophon: log in as core, then run sophon-deploy (it asks for the network).\nIf setup failed: sudo systemctl restart sophon-host-bootstrap\nIf firmware boots the live ISO again, select the installed disk; do not reinstall.\n'; printf ','
     ignition_file /usr/local/bin/sophon-deploy 493 "$(cat "$media/guest/sophon-deploy")"; printf ','
     ignition_file /usr/local/bin/sophon-restore 493 "$(cat "$media/guest/sophon-restore")"; printf ','
@@ -378,7 +382,7 @@ copy_artifacts() {
     cp -- "$media/runner.tar" "$var/lib/sophon/runner.tar"
     # ISO files are read-only; the runner must be able to write its bind mount.
     chmod -R u+rwX "$var/lib/sophon"
-    chown -R 1000:1000 "$var/lib/sophon"
+    chown -R 1001:1001 "$var/lib/sophon"
     # The first-boot service restores these labels with the installed policy.
     sync
 }

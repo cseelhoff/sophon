@@ -106,7 +106,7 @@ root = Path(os.environ["STUB_ROOT"])
 with (root / "calls").open("a") as log:
     log.write(json.dumps([name, *args]) + "\n")
 if name == "id":
-    print(os.environ.get("STUB_UID", "1000") if args == ["-u"] else "core")
+    print(os.environ.get("STUB_UID", "1000") if args == ["-u"] else os.environ.get("STUB_UNAME", "core"))
 elif name == "systemctl":
     if args == ["--user", "start", "podman.socket"] and os.environ.get("SOCKET_FAIL") != "1":
         sock = root / "podman.sock"
@@ -116,6 +116,9 @@ elif name == "systemctl":
             s.bind(str(sock))
             s.close()
 elif name == "podman":
+    with (root / "podman-env").open("a") as elog:
+        elog.write(json.dumps({k: v for k, v in os.environ.items()
+                               if k.startswith(("SOPHON_", "CONTAINER_", "DOCKER_"))}) + "\n")
     assert args.pop(0) == "--remote=false"
     statefile = root / "state"
     state = json.loads(statefile.read_text()) if statefile.exists() else {
@@ -442,8 +445,14 @@ sudo() {{ if [[ $1 == sh ]]; then cat > {shlex.quote(str(keyfile))}; fi; }}
             ignition = json.loads(result.stdout)
             self.assertEqual(ignition["ignition"]["version"], "3.4.0")
             # No password and no network are baked in: the first boot and step 4 ask for them.
-            user, = ignition["passwd"]["users"]
-            self.assertEqual(user, dict(name="core", uid=1000, groups=["sudo", "wheel"]))
+            # Rootless Podman runs as unprivileged `sophon` (uid 1001, no sudo/wheel) while `core` (uid 1000) stays host admin.
+            self.assertEqual(
+                ignition["passwd"]["users"],
+                [
+                    dict(name="core", uid=1000, groups=["sudo", "wheel"]),
+                    dict(name="sophon", uid=1001),
+                ],
+            )
             files = {
                 item["path"]: (item["mode"], base64.b64decode(item["contents"]["source"].split(",", 1)[1]).decode())
                 for item in ignition["storage"]["files"]
@@ -456,7 +465,8 @@ sudo() {{ if [[ $1 == sh ]]; then cat > {shlex.quote(str(keyfile))}; fi; }}
             self.assertEqual(files["/usr/local/libexec/sophon-set-password"][0], 0o755)
             self.assertIn("PasswordAuthentication no", files["/etc/ssh/sshd_config.d/40-sophon-console-only.conf"][1])
             self.assertIn("enabled = false", files["/etc/zincati/config.d/90-disable-auto-reboot.toml"][1])
-            self.assertIn("/var/lib/systemd/linger/core", files)
+            self.assertIn("/var/lib/systemd/linger/sophon", files)
+            self.assertNotIn("/var/lib/systemd/linger/core", files)
             filesystems = ignition["storage"]["filesystems"]
             self.assertEqual(filesystems, [{
                 "path": "/var",
@@ -506,8 +516,9 @@ sudo() {{ if [[ $1 == sh ]]; then cat > {shlex.quote(str(keyfile))}; fi; }}
             self.assertIn("Options=noatime,discard=async,user_subvol_rm_allowed", var_mount["contents"])
             bootstrap = units["sophon-host-bootstrap.service"]
             self.assertTrue(bootstrap["enabled"])
-            self.assertIn("User=core", bootstrap["contents"])
-            self.assertIn("Requires=user@1000.service", bootstrap["contents"])
+            self.assertIn("User=sophon", bootstrap["contents"])
+            self.assertIn("Requires=user@1001.service", bootstrap["contents"])
+            self.assertIn("RuntimeDirectory=sophon", bootstrap["contents"])
             self.assertIn("ExecStartPre=+/usr/sbin/restorecon -RF /var/lib/sophon", bootstrap["contents"])
             self.assertIn("StandardOutput=journal+console", bootstrap["contents"])
             password = units["sophon-set-password.service"]
@@ -628,7 +639,7 @@ udevadm() {{ [[ $1 == settle ]]; }}
             self.assertEqual((data / "runner.tar").read_bytes(), (media / "runner.tar").read_bytes())
             # The address is chosen later by sophon-deploy; the installer saves none.
             self.assertFalse((data / "project/site.json").exists())
-            self.assertEqual(calls(directory, "chown"), [["chown", "-R", "1000:1000", str(data)]])
+            self.assertEqual(calls(directory, "chown"), [["chown", "-R", "1001:1001", str(data)]])
             result = shell('copy_artifacts "$@"', media, var, env=env)
             self.assertIn("already exists", result.stderr)
 
@@ -644,11 +655,16 @@ udevadm() {{ [[ $1 == settle ]]; }}
             ready = directory / "ready"
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
-                              .replace("/var/home/core", str(home))
+                              .replace("/var/home/sophon", str(home))
                               .replace("/var/lib/sophon", str(data))
-                              .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
-                              .replace("/run/user/1000/sophon-ready", str(ready)))
+                              .replace("/run/user/1001/podman/podman.sock", str(directory / "podman.sock"))
+                              .replace("/run/sophon/ready", str(ready)))
             env = tools(directory)
+            # Refuses to run as core (uid 1000); must run as unprivileged sophon (uid 1001).
+            wrong_user = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
+            self.assertNotEqual(wrong_user.returncode, 0)
+            self.assertIn("must run as sophon", wrong_user.stderr)
+            env.update(STUB_UID="1001", STUB_UNAME="sophon")
             self.assert_success(subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True))
             self.assertTrue(ready.is_file())
             self.assertEqual(stat.S_IMODE((data / "stacks").stat().st_mode), 0o700)
@@ -677,11 +693,12 @@ udevadm() {{ [[ $1 == settle ]]; }}
             ready = directory / "ready"
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
-                              .replace("/var/home/core", str(home))
+                              .replace("/var/home/sophon", str(home))
                               .replace("/var/lib/sophon", str(data))
-                              .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
-                              .replace("/run/user/1000/sophon-ready", str(ready)))
+                              .replace("/run/user/1001/podman/podman.sock", str(directory / "podman.sock"))
+                              .replace("/run/sophon/ready", str(ready)))
             env = tools(directory)
+            env.update(STUB_UID="1001", STUB_UNAME="sophon")
             for _ in range(2):
                 result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
                 self.assert_success(result)
@@ -709,11 +726,12 @@ udevadm() {{ [[ $1 == settle ]]; }}
             ready.touch()
             script = directory / "host-bootstrap"
             script.write_text((SCRIPTS / "host-bootstrap.sh").read_text()
-                              .replace("/var/home/core", str(home))
+                              .replace("/var/home/sophon", str(home))
                               .replace("/var/lib/sophon", str(data))
-                              .replace("/run/user/1000/podman/podman.sock", str(directory / "podman.sock"))
-                              .replace("/run/user/1000/sophon-ready", str(ready)))
+                              .replace("/run/user/1001/podman/podman.sock", str(directory / "podman.sock"))
+                              .replace("/run/sophon/ready", str(ready)))
             env = tools(directory)
+            env.update(STUB_UID="1001", STUB_UNAME="sophon")
             env["PODMAN_INFO_FAIL"] = "1"
             result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
@@ -725,6 +743,40 @@ udevadm() {{ [[ $1 == settle ]]; }}
                                        text=True, capture_output=True)
             self.assertNotEqual(non_btrfs.returncode, 0)
             self.assertIn("Btrfs", non_btrfs.stderr)
+
+    def write_sudo_stub(self, directory, ready, mount_copy=False):
+        sudo = directory / "bin/sudo"
+        sudo.write_text(
+            f"#!{sys.executable}\n"
+            "import os, shutil, sys\n"
+            "from pathlib import Path\n"
+            "args = sys.argv[1:]\n"
+            "root = Path(os.environ['STUB_ROOT'])\n"
+            "if args[:2] == ['-u', 'sophon']:\n"
+            "    idx = 2\n"
+            "    keep = set()\n"
+            "    while idx < len(args) and args[idx] != '--':\n"
+            "        if args[idx].startswith('--preserve-env='):\n"
+            "            keep.update(x for x in args[idx].split('=', 1)[1].split(',') if x)\n"
+            "        idx += 1\n"
+            "    if idx < len(args) and args[idx] == '--':\n"
+            "        idx += 1\n"
+            "    cmd = args[idx:]\n"
+            "    clean_env = {k: os.environ[k] for k in ('PATH', 'STUB_ROOT', 'PODMAN_INFO_FAIL', 'STUB_FSTYPE') if k in os.environ}\n"
+            "    clean_env['STUB_UID'] = '1001'\n"
+            "    clean_env['STUB_UNAME'] = 'sophon'\n"
+            "    for k in keep:\n"
+            "        if k in os.environ:\n"
+            "            clean_env[k] = os.environ[k]\n"
+            "    os.execvpe(cmd[0], cmd, clean_env)\n"
+            "with (root / 'sudo-calls').open('a') as fh:\n"
+            "    fh.write('sudo ' + ' '.join(args) + '\\n')\n"
+            f"if args[:2] == ['systemctl', 'restart']:\n"
+            f"    Path({str(ready)!r}).touch()\n"
+            f"if {bool(mount_copy)!r} and args and args[0] == 'mount':\n"
+            "    shutil.copytree(args[-2], args[-1], dirs_exist_ok=True)\n"
+        )
+        sudo.chmod(0o755)
 
     def controller(self, directory, saved=True, relocate=False):
         """A copy of sophon-deploy whose paths point into `directory`; returns (script, ready file, data dir, env)."""
@@ -742,17 +794,14 @@ udevadm() {{ [[ $1 == settle ]]; }}
         text = (SCRIPTS / "sophon-deploy").read_text()
         text = (text.replace("/var/lib/sophon", str(data)) if relocate
                 else text.replace("site=/var/lib/sophon/project/site.json", f"site={site}")
-                         .replace("install -d -m 0700 /var/lib/sophon/stacks",
-                                  f"install -d -m 0700 {shlex.quote(str(data / 'stacks'))}"))
+                         .replace("install -d -m 0700 /var/lib/sophon/stacks /var/lib/sophon/control",
+                                  f"install -d -m 0700 {shlex.quote(str(data / 'stacks'))} {shlex.quote(str(data / 'control'))}"))
         script = directory / "controller"
-        script.write_text(text.replace("/run/user/1000/sophon-ready", str(ready))
+        script.write_text(text.replace("/run/sophon/ready", str(ready))
                           .replace("/usr/local/libexec/sophon-network", str(helper)))
         env = tools(directory)
         # Starting or restarting host setup is what makes it ready.
-        sudo = directory / "bin/sudo"
-        sudo.write_text(f'#!/bin/sh\necho "sudo $*" >> "$STUB_ROOT/sudo-calls"\n'
-                        f'[ "$1 $2" != "systemctl restart" ] || touch {shlex.quote(str(ready))}\n')
-        sudo.chmod(0o755)
+        self.write_sudo_stub(directory, ready, mount_copy=False)
         return script, ready, data, env
 
     def sudo_calls(self, directory):
@@ -777,6 +826,7 @@ udevadm() {{ [[ $1 == settle ]]; }}
                 result = subprocess.run(["bash", str(script), *args], env=env, text=True, capture_output=True)
                 self.assert_success(result)
                 command = calls(directory, "podman")[-1]
+                podman_env = json.loads((directory / "podman-env").read_text().splitlines()[-1])
                 boundary = command.index("sophon:latest")
                 self.assertEqual(command[boundary + 1:], ["python3", "src/console.py", *args])
                 self.assertIn("SOPHON_DEPLOYMENT_STEP=configure", command[:boundary])
@@ -784,10 +834,13 @@ udevadm() {{ [[ $1 == settle ]]; }}
                 self.assertIn("SOPHON_INFRAVM_IP", command[:boundary])
                 self.assertNotIn("SOPHON_PORTAINER_SETUP_TOKEN", command[:boundary])
                 self.assertNotIn("secret with spaces", " ".join(command))
+                self.assertEqual(podman_env.get("SOPHON_CF_TOKEN"), "secret with spaces")
+                self.assertNotIn("SOPHON_PROXMOX_PASSWORD", podman_env)
+                self.assertNotIn("CONTAINER_HOST", podman_env)
                 self.assertFalse(any("forbidden" in arg or "=bootstrap" in arg for arg in command))
                 self.assertIn("/var/lib/sophon/project:/workspace:Z", command)
                 self.assertIn("/var/lib/sophon/stacks:/var/lib/sophon/stacks", command)
-                self.assertIn("/run/user/1000/podman/podman.sock:/var/run/docker.sock", command)
+                self.assertIn("/run/user/1001/podman/podman.sock:/var/run/docker.sock", command)
                 self.assertIn("--pull", command)
                 self.assertIn("never", command)
                 self.assertNotIn("-it", command)
@@ -801,11 +854,7 @@ udevadm() {{ [[ $1 == settle ]]; }}
             disk = directory / "disk"
             disk.mkdir()
             (disk / "acme.json").write_text('{"letsencrypt":{}}')
-            sudo = directory / "bin/sudo"
-            sudo.write_text('#!/usr/bin/env bash\n'
-                            'echo "sudo $*" >> "$STUB_ROOT/sudo-calls"\n'
-                            '[[ $1 != mount ]] || cp -r "${@: -2:1}"/. "${@: -1}"\n')
-            sudo.chmod(0o755)
+            self.write_sudo_stub(directory, ready, mount_copy=True)
             env["SOPHON_CERTS_DEVICE"] = str(disk)
             result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
             self.assert_success(result)
@@ -836,7 +885,7 @@ udevadm() {{ [[ $1 == settle ]]; }}
             self.assert_success(result)
             site = data / "project/site.json"
             self.assertEqual(json.loads(site.read_text())["SOPHON_INFRAVM_IP"], "10.0.60.9")
-            self.assertEqual((directory / "helper-calls").read_text().split(), [str(site)])
+            self.assertEqual(len((directory / "helper-calls").read_text().split()), 1)
             # Wait for the host setup that began at boot, then redo it so DNS points at the saved address.
             self.assertEqual(self.sudo_calls(directory), ["sudo systemctl start sophon-host-bootstrap",
                                                           "sudo systemctl restart sophon-host-bootstrap"])
@@ -854,8 +903,9 @@ udevadm() {{ [[ $1 == settle ]]; }}
             result = subprocess.run(["bash", str(script), "--network", "--accept-dhcp", "--prepare-restore", "--run"],
                                     env=env, text=True, capture_output=True)
             self.assert_success(result)
-            self.assertEqual((directory / "helper-calls").read_text().strip(),
-                             f"--accept-dhcp {data / 'project/site.json'}")
+            helper_args = (directory / "helper-calls").read_text().split()
+            self.assertEqual(helper_args[:-1], ["--accept-dhcp"])
+            self.assertEqual(json.loads((data / "project/site.json").read_text())["SOPHON_INFRAVM_IP"], "10.0.60.9")
             command = calls(directory, "podman")[-1]
             self.assertEqual(command[command.index("sophon:latest") + 1:],
                              ["python3", "src/console.py", "--prepare-restore", "--run"])

@@ -87,6 +87,7 @@ service accounts** (default no), then asks for:
 | Input | Notes |
 |---|---|
 | Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
+| Keycloak realm display name (`SOPHON_KEYCLOAK_REALM_DISPLAY_NAME`) | Optional label for the Keycloak login page title and heading, e.g. `Slow Jedi`. If unset, Keycloak shows the realm ID (`sophon` by default). Changing the display name does not change login URLs. |
 | ACME email | Connected sites only. A real address. |
 | Cloudflare token | Connected sites only, required unless running `sophon-deploy --prepare-restore`. A custom token with Zone / Zone / Read, Zone / DNS / Edit, and—when `SOPHON_CF_TUNNEL_ENABLED=true`—Account / Cloudflare Tunnel / Edit plus (when creating a brand-new tunnel with `SOPHON_CF_ACCESS_ENABLED=true`) Account / Access: Apps and Policies / Edit, scoped to your zone and account. Steps: [Operations Guide](operator-guide.md#21-pre-configure-env-optional). |
 | Publish Cloudflare tunnel (`SOPHON_CF_TUNNEL_ENABLED`) | Default `true`. Set `false` on non-production, lab, or restore-verification instances so `coredns` never creates/updates Cloudflare tunnels or public CNAMEs and `cloudflared` is not deployed, even if a Cloudflare token is supplied for Let's Encrypt DNS-01. |
@@ -130,8 +131,8 @@ These are Configure inputs on InfraVM, not laptop `.env` settings:
 | `SOPHON_KOPIA_BACKUPS_ENABLED` | Default `true` (Configure triggers and verifies the initial primary snapshot automatically and leaves Kopia's native `--snapshot-interval` schedule active in one step; interactive pairing of a new VM to an existing repository offers to pause until `sophon-restore` runs). |
 | `SOPHON_KOPIA_SNAPSHOT_INTERVAL` | Default `6h`; positive integer with `s`, `m`, `h` or `d` suffix, applied directly to Kopia's native snapshot policy (`--snapshot-interval`). |
 | `SOPHON_KOPIA_COARSE_ENABLED` | Optional last-resort weekly live Btrfs subvolume snapshot layer, default `false`, independent of the primary schedule. |
-| `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | Host rootless Podman Btrfs `volumes` subvolume (default `/var/home/core/.local/share/containers/storage/volumes`), mounted read-only. |
-| `SOPHON_KOPIA_COARSE_WORK_DIR` | Disjoint host Btrfs working directory outside the volumes subvolume (default `/var/home/core/sophon-coarse`). Holds temporary read-only snapshot staging, config/cache/logs. |
+| `SOPHON_KOPIA_COARSE_VOLUMES_DIR` | Host rootless Podman Btrfs `volumes` subvolume (default `/var/home/sophon/.local/share/containers/storage/volumes`), mounted read-only. |
+| `SOPHON_KOPIA_COARSE_WORK_DIR` | Disjoint host Btrfs working directory outside the volumes subvolume (default `/var/home/sophon/sophon-coarse`). Holds temporary read-only snapshot staging, config/cache/logs. |
 
 Keep supplying the same destination, password, source identity and policy
 when reconfiguring an existing instance. The role reuses the `kopia` stack and

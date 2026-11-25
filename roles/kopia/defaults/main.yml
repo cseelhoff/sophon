@@ -1,6 +1,6 @@
 ---
 kopia_fqdn: "kopia.{{ domain_name }}"
-kopia_volumes_dir: "/var/home/core/.local/share/containers/storage/volumes"
+kopia_volumes_dir: "/var/home/sophon/.local/share/containers/storage/volumes"
 kopia_image_tars:
   - "{{ sophon_containers_dir }}/{{ kopia_image_tarname }}"
 kopia_environment:

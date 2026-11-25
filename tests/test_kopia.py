@@ -175,7 +175,7 @@ class KopiaRoleTests(unittest.TestCase):
                 self.assertFalse(any("podman.sock" in str(mount) for mount in kopia["volumes"]))
                 self.assertIn({
                     "type": "bind",
-                    "source": "/var/home/core/.local/share/containers/storage/volumes",
+                    "source": "/var/home/sophon/.local/share/containers/storage/volumes",
                     "target": "/volumes",
                     "read_only": True,
                 }, kopia["volumes"])

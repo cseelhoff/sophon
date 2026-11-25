@@ -96,9 +96,9 @@ The choices the design rests on, newest understanding first. Each is cheap to st
     Step 3 allocates an 8 GiB XFS immutable OS root and formats the remaining disk as a
     persistent Btrfs `/var` (`LABEL=sophon-var`, mounted `noatime,discard=async,user_subvol_rm_allowed`
     with `fstrim.timer` enabled),
-    and host bootstrap creates `/var/home/core/.local/share/containers/storage/volumes` as
-    a Btrfs subvolume before Podman starts. The opt-in weekly `coarse` service mounts that
-    subvolume read-only alongside `/var/home/core/sophon-coarse`, mounts no Podman socket
+    and host bootstrap creates `/var/home/sophon/.local/share/containers/storage/volumes` as
+    a Btrfs subvolume before Podman starts under the unprivileged `sophon` (`uid 1001`, no `sudo`/`wheel`) user. The opt-in weekly `coarse` service mounts that
+    subvolume read-only alongside `/var/home/sophon/sophon-coarse`, mounts no Podman socket
     and holds only `DAC_OVERRIDE`. Driven by Kopia's native `--snapshot-interval=168h` and
     before/after snapshot actions (`/app/coarse.py`), it invokes `BTRFS_IOC_SNAP_CREATE_V2`
     (`RDONLY`) to capture an atomic crash-consistent snapshot without pausing any workload,

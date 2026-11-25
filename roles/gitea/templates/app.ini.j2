@@ -104,7 +104,7 @@ ENABLED = true
 ENABLE = true
 
 [oauth2_client]
-OPENID_CONNECT_SCOPES = openid profile email
+OPENID_CONNECT_SCOPES = {{ gitea_oauth_scopes }}
 ENABLE_AUTO_REGISTRATION = true
 ACCOUNT_LINKING = auto
 USERNAME = nickname

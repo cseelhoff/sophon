@@ -88,8 +88,8 @@ if [[ ${1:-} == "--probe" || -f $PROBE_REQ ]]; then
     do_probe=1
 fi
 
-if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-    install -d -o core -g core -m 0700 "$CONTROL_DIR"
+if [[ $(id -u) -eq 0 ]] && id -u sophon >/dev/null 2>&1; then
+    install -d -o sophon -g sophon -m 0700 "$CONTROL_DIR"
 else
     install -d -m 0700 "$CONTROL_DIR"
 fi
@@ -164,9 +164,9 @@ run_cert_check() {
         $SOPHON_CERT_CHECK_CMD "$acme_file" "$target_domain"
         return $?
     fi
-    if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-        chown core:core "$acme_file" 2>/dev/null || true
-        runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    if [[ $(id -u) -eq 0 ]] && id -u sophon >/dev/null 2>&1; then
+        chown sophon:sophon "$acme_file" 2>/dev/null || true
+        runuser -u sophon -- env HOME=/var/home/sophon XDG_RUNTIME_DIR=/run/user/1001 \
             podman --remote=false run --rm --network=none --pull=never --security-opt label=disable \
             -v "$PROJECT_DIR/src:/src:ro" -v "$acme_file:/acme.json:ro" \
             sophon:latest python3 /src/certificates.py check --source /acme.json --domain "$target_domain"
@@ -331,7 +331,7 @@ jq -n \
         updated_at: $updated_at
     }' > "$tmp_file"
 chmod 0600 "$tmp_file"
-if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-    chown core:core "$tmp_file"
+if [[ $(id -u) -eq 0 ]] && id -u sophon >/dev/null 2>&1; then
+    chown sophon:sophon "$tmp_file"
 fi
 mv -f "$tmp_file" "$STATE_FILE"

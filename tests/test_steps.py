@@ -523,6 +523,10 @@ def test_gitea_initializer_reports_cli_failures():
         }])
         assert result.returncode == 0, result.stdout + result.stderr
         script = yaml.safe_load(compose.read_text())['services']['gitea-init']['command'][0]
+        assert "--group-claim-name 'groups'" in script
+        assert "--admin-group 'gitea-admins'" in script
+        assert '--group-team-map \'{"gitea-admins":{"ops":["Owners"]}}\'' in script
+        assert '--group-team-map-removal' in script
         config = directory / 'app.ini'
         config.touch()
         script = script.replace('$$', '$').replace('/data/gitea/conf/app.ini', str(config))

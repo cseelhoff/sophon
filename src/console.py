@@ -194,8 +194,8 @@ def main(argv=None):
         'desired_backups_enabled': values.get('SOPHON_KOPIA_BACKUPS_ENABLED', 'true') == 'true',
         'desired_snapshot_interval': values.get('SOPHON_KOPIA_SNAPSHOT_INTERVAL', '6h'),
         'desired_coarse_enabled': values.get('SOPHON_KOPIA_COARSE_ENABLED', 'false') == 'true',
-        'desired_coarse_volumes_dir': values.get('SOPHON_KOPIA_COARSE_VOLUMES_DIR', '/var/home/core/.local/share/containers/storage/volumes'),
-        'desired_coarse_work_dir': values.get('SOPHON_KOPIA_COARSE_WORK_DIR', '/var/home/core/sophon-coarse'),
+        'desired_coarse_volumes_dir': values.get('SOPHON_KOPIA_COARSE_VOLUMES_DIR', '/var/home/sophon/.local/share/containers/storage/volumes'),
+        'desired_coarse_work_dir': values.get('SOPHON_KOPIA_COARSE_WORK_DIR', '/var/home/sophon/sophon-coarse'),
     }
     if seed_prod_network is not None:
         desired_standby['prod_network'] = seed_prod_network

@@ -125,9 +125,9 @@ def main(argv=None) -> int:
     values['SOPHON_KOPIA_SNAPSHOT_INTERVAL'] = values.get('SOPHON_KOPIA_SNAPSHOT_INTERVAL') or standby.get('desired_snapshot_interval', '6h')
     values['SOPHON_KOPIA_COARSE_ENABLED'] = 'true' if standby.get('desired_coarse_enabled', False) else values.get('SOPHON_KOPIA_COARSE_ENABLED', 'false')
     values['SOPHON_KOPIA_COARSE_VOLUMES_DIR'] = standby.get(
-        'desired_coarse_volumes_dir', '/var/home/core/.local/share/containers/storage/volumes'
+        'desired_coarse_volumes_dir', '/var/home/sophon/.local/share/containers/storage/volumes'
     )
-    values['SOPHON_KOPIA_COARSE_WORK_DIR'] = standby.get('desired_coarse_work_dir', '/var/home/core/sophon-coarse')
+    values['SOPHON_KOPIA_COARSE_WORK_DIR'] = standby.get('desired_coarse_work_dir', '/var/home/sophon/sophon-coarse')
 
     if not options.yes:
         if not sys.stdin.isatty():

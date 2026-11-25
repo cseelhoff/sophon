@@ -23,7 +23,7 @@ services:
     networks:
       - proxy
     volumes:
-      - /run/user/1000/podman/podman.sock:/var/run/docker.sock:ro
+      - /run/user/1001/podman/podman.sock:/var/run/docker.sock:ro
     environment:
       - TRAEFIK_CNAME=traefik.{{ coredns_domain_name }}
       - HOST_IP={{ infravm_ip }}

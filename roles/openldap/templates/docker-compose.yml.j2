@@ -212,6 +212,12 @@ services:
         member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
         member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
 
+        dn: cn=gitea-admins,ou=groups,{{ openldap_base_dn }}
+        objectClass: groupOfNames
+        cn: gitea-admins
+        member: cn=keycloak-bind,ou=services,{{ openldap_base_dn }}
+        member: uid={{ openldap_example_admin_uid }},ou=people,{{ openldap_base_dn }}
+
         dn: cn=nexus-admins,ou=groups,{{ openldap_base_dn }}
         objectClass: groupOfNames
         cn: nexus-admins

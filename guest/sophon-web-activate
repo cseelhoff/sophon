@@ -10,7 +10,7 @@ STATUS_FILE=$CONTROL_DIR/activate-status.json
 LOG_FILE=$CONTROL_DIR/activate.log
 
 [[ -f $REQ_FILE ]] || exit 0
-install -d -o core -g core -m 0700 "$CONTROL_DIR"
+install -d -o sophon -g sophon -m 0700 "$CONTROL_DIR"
 
 requested_by=$(jq -r '.requested_by // "admin"' "$REQ_FILE" 2>/dev/null || echo "admin")
 tunnel_mode=$(jq -r '.tunnel_mode // "default"' "$REQ_FILE" 2>/dev/null || echo "default")
@@ -28,13 +28,13 @@ write_activate_status() {
         '{state: $state, requested_by: $requested_by, message: $message, exit_code: $exit_code, updated_at: $updated_at}' \
         > "$tmp"
     chmod 0600 "$tmp"
-    chown core:core "$tmp"
+    chown sophon:sophon "$tmp"
     mv -f "$tmp" "$STATUS_FILE"
 }
 
 : > "$LOG_FILE"
 chmod 0600 "$LOG_FILE"
-chown core:core "$LOG_FILE"
+chown sophon:sophon "$LOG_FILE"
 
 activate_args=(--yes)
 case "$tunnel_mode" in
@@ -49,7 +49,7 @@ esac
 
 write_activate_status "running" "Promoting appliance to active production..." 0
 set +e
-runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+runuser -u core -- env HOME=/var/home/core \
     /usr/local/bin/sophon-activate "${activate_args[@]}" >> "$LOG_FILE" 2>&1
 rc=$?
 set -e

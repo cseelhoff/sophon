@@ -10,8 +10,8 @@ STATUS_FILE=$CONTROL_DIR/refresh-certs-status.json
 LOG_FILE=$CONTROL_DIR/refresh-certs.log
 
 [[ -f $REQ_FILE ]] || exit 0
-if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-    install -d -o core -g core -m 0700 "$CONTROL_DIR"
+if [[ $(id -u) -eq 0 ]] && id -u sophon >/dev/null 2>&1; then
+    install -d -o sophon -g sophon -m 0700 "$CONTROL_DIR"
 else
     install -d -m 0700 "$CONTROL_DIR"
 fi
@@ -31,22 +31,22 @@ write_refresh_status() {
         '{state: $state, requested_by: $requested_by, message: $message, exit_code: $exit_code, updated_at: $updated_at}' \
         > "$tmp"
     chmod 0600 "$tmp"
-    if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-        chown core:core "$tmp"
+    if [[ $(id -u) -eq 0 ]] && id -u sophon >/dev/null 2>&1; then
+        chown sophon:sophon "$tmp"
     fi
     mv -f "$tmp" "$STATUS_FILE"
 }
 
 : > "$LOG_FILE"
 chmod 0600 "$LOG_FILE"
-if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-    chown core:core "$LOG_FILE"
+if [[ $(id -u) -eq 0 ]] && id -u sophon >/dev/null 2>&1; then
+    chown sophon:sophon "$LOG_FILE"
 fi
 
 write_refresh_status "running" "Validating certificate disk, reloading Traefik & OpenLDAP, snapshotting Kopia, and ejecting ISO..." 0
 set +e
 if [[ $(id -u) -eq 0 ]] && id -u core >/dev/null 2>&1; then
-    runuser -u core -- env HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000 \
+    runuser -u core -- env HOME=/var/home/core \
         /usr/local/bin/sophon-refresh-certs >> "$LOG_FILE" 2>&1
     rc=$?
 else

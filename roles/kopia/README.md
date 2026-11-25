@@ -18,8 +18,8 @@ normal Compose stack (`kopia` + `dump-proxy`); no host backup service or timer i
 Use the newly prepared runner when installing/updating this version: pairing
 needs its Kopia binary, OpenSSH client and Paramiko. Preparing media alone does
 not update an installed VM. For an explicitly managed in-place update, carry the
-new runner archive and load it as `core` with
-`podman load -i /path/to/updated/runner.tar` before running the updated console;
+new runner archive and load it into the rootless `sophon` Podman store with
+`sudo -u sophon podman load -i /path/to/updated/runner.tar` before running the updated console;
 an existing `sophon:latest` tag is not proof that its dependencies are current.
 
 Supply the SFTP host/account/path, repository password and UI credentials through
@@ -75,12 +75,12 @@ on `/sophon-state` in the Kopia Web UI or runs `podman exec kopia python3 /app/b
 2. **After-snapshot action (`KOPIA_ACTION=after-snapshot-root`):** `backup.py` deletes
    `/source/runs/<run_id>` and marks `/source/last-run.json` `upload_status: "complete"`.
 
-Run or inspect backups from the InfraVM console as `core`:
+Run or inspect backups from the InfraVM console:
 
 ```sh
-podman exec kopia python3 /app/backup.py run
-podman exec kopia cat /source/last-run.json
-podman logs kopia
+sudo -u sophon podman exec kopia python3 /app/backup.py run
+sudo -u sophon podman exec kopia cat /source/last-run.json
+sudo -u sophon podman logs kopia
 ```
 
 Snapshots use stable identity `backup@sophon:/sophon-state` by default (`zstd`
@@ -115,8 +115,8 @@ It is not a VM/system backup and does not include unrelated host bind mounts.
 
 It is off by default. Step 3 formats `/var` as Btrfs (`sophon-var`, mounted
 `noatime,user_subvol_rm_allowed`) and `host-bootstrap.sh` creates
-`/var/home/core/.local/share/containers/storage/volumes` as a Btrfs subvolume and
-`/var/home/core/sophon-coarse` as its disjoint working directory. Both paths are
+`/var/home/sophon/.local/share/containers/storage/volumes` as a Btrfs subvolume and
+`/var/home/sophon/sophon-coarse` as its disjoint working directory. Both paths are
 the defaults when enabling:
 
 ```sh
@@ -239,7 +239,7 @@ volumes:
 
 ## Dynamic volume discovery and undeclared volumes
 
-Kopia mounts `/var/home/core/.local/share/containers/storage/volumes` read-only at
+Kopia mounts `/var/home/sophon/.local/share/containers/storage/volumes` read-only at
 `/volumes:ro`. Whenever a container with `sophon.backup.enable=true` declares a
 named volume or path, `backup.py` resolves `<volume>/_data` automatically—no
 `SOPHON_KOPIA_EXTRA_VOLUMES` list or Kopia stack redeploy is required.
@@ -310,8 +310,9 @@ restoring volume data across rebuilt app images. Stop any independently deployed
 writers sharing the group's state and do not run Configure or other engine
 mutations concurrently with recovery.
 
-On the console, as the rootless Podman owner (`core`, never `sudo`), restore all
-stateful groups interactively with a single command (or pass `--group gitea` /
+On the console, as `core` (never `sudo`; `sophon-restore` delegates automatically
+to the unprivileged `sophon` Podman owner), restore all stateful groups
+interactively with a single command (or pass `--group gitea` /
 `--snapshot SNAPSHOT_ID` / `--yes`):
 
 ```sh

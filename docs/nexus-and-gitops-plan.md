@@ -21,7 +21,7 @@ Integrating Nexus directly into Sophon Core (`4-configure.yml` and `sophon-apps.
 ---
 
 ### 1.2 Why Kopia Does Not Receive Host Podman or Arcane Admin Access
-Kopia (`https://kopia.<domain>`) remains strictly isolated from `/run/user/1000/podman/podman.sock` and Arcane admin credentials:
+Kopia (`https://kopia.<domain>`) remains strictly isolated from `/run/user/1001/podman/podman.sock` and Arcane admin credentials:
 
 1. **No restore hooks in Kopia:** Kopia Actions only execute `before-snapshot-root` / `after-snapshot-root` hooks during backups; Kopia has no `before-restore` or `after-restore` action lifecycle.
 2. **Logical hot exports require ordered host-side orchestration:** Sophon v3 snapshots intentionally capture online logical exports (`pg_dumpall`, `slapcat`, selective INI keys, and `sophon.backup.paths` Btrfs reflinks) via the narrow `dump-proxy` sidecar rather than raw live database files. Restoring them requires `sophon-restore` on the InfraVM host to stop target peers, import SQL/LDIF dumps against verified image digests, restore volume paths atomically, and restart stacks in dependency order.
@@ -71,7 +71,7 @@ Because `nexus.<domain>` and `registry.<domain>` may be reachable via Cloudflare
 3. **RBAC Mapping:**
    - Nexus role with ID `nexus-admins` (matching LDAP group `cn=nexus-admins`) grants `nx-admin`.
    - Nexus role with ID `nexus-developers` (matching LDAP group `cn=nexus-developers`) grants `nx-repository-view-*-*-browse`, `nx-repository-view-*-*-read`, `nx-repository-view-*-*-add`, `nx-repository-view-*-*-edit`, `nx-search-read`, and `nx-apikey-all` (allowing developers and CI tokens to read all group/proxy repos and publish to hosted repos without administrative privileges).
-   - Nexus role `sophon-reader` + local service user `sophon-pull` (with generated random password saved in `/var/lib/sophon/project/credentials/nexus/pull_password` and written into `/var/home/core/.config/containers/auth.json` and `/var/home/core/.docker/config.json` for `registry.<domain>`) gives InfraVM's rootless Podman and Arcane zero-touch authenticated pulls from `https://registry.<domain>` without enabling public anonymous access.
+   - Nexus role `sophon-reader` + local service user `sophon-pull` (with generated random password saved in `/var/lib/sophon/project/credentials/nexus/pull_password` and written into `/var/home/sophon/.config/containers/auth.json` and `/var/home/sophon/.docker/config.json` for `registry.<domain>`) gives InfraVM's rootless Podman and Arcane zero-touch authenticated pulls from `https://registry.<domain>` without enabling public anonymous access.
 4. **Active Security Realms (`/v1/security/realms/active`):**
    `["NexusAuthenticatingRealm", "LdapRealm", "DockerToken", "NpmToken"]`.
 

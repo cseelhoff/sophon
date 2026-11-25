@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ $(id -u) == 1000 && $(id -un) == core ]] && id -u sophon >/dev/null 2>&1; then
+    preserve_vars=()
+    for name in SOPHON_KOPIA_RESTORE_IMAGE SOPHON_RESTORE_SOURCE_VOLUME \
+        SOPHON_KOPIA_PASSWORD SOPHON_KOPIA_SFTP_HOST SOPHON_KOPIA_SFTP_PORT \
+        SOPHON_KOPIA_SFTP_USERNAME SOPHON_KOPIA_SFTP_PATH SOPHON_KOPIA_SFTP_PRIVATE_KEY_B64 \
+        SOPHON_KOPIA_SFTP_KNOWN_HOSTS_B64 SOPHON_KOPIA_CLIENT_USERNAME SOPHON_KOPIA_CLIENT_HOSTNAME; do
+        [[ ! -v $name ]] || preserve_vars+=("$name")
+    done
+    preserve_arg=""
+    if (( ${#preserve_vars[@]} )); then
+        preserve_arg=$(IFS=,; printf -- '--preserve-env=%s' "${preserve_vars[*]}")
+    fi
+    exec sudo -u sophon ${preserve_arg:+"$preserve_arg"} -- env \
+        HOME=/var/home/sophon \
+        XDG_RUNTIME_DIR=/run/user/1001 \
+        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus \
+        "$0" "$@"
+fi
 [[ $(podman --remote=false info --format '{{.Host.Security.Rootless}}') == true ]] || {
-    echo "Run sophon-restore as the rootless Podman owner, never with sudo." >&2; exit 1;
+    echo "Run sophon-restore as core (or the rootless Podman owner sophon), never with sudo." >&2; exit 1;
 }
 state=sophon-restore-v3
 forwarded=()

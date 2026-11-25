@@ -6,8 +6,16 @@ if [[ $(id -u) != 1000 || $(id -un) != core ]]; then
     echo "Log in as core to run sophon-deploy (do not use sudo)." >&2
     exit 1
 fi
-export HOME=/var/home/core XDG_RUNTIME_DIR=/run/user/1000
+export HOME=/var/home/core
 unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST
+
+as_sophon() {
+    sudo -u sophon -- env \
+        HOME=/var/home/sophon \
+        XDG_RUNTIME_DIR=/run/user/1001 \
+        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus \
+        "$@"
+}
 
 # `--network` asks the network questions again; the first run asks them because nothing is saved yet.
 # `--accept-dhcp` or `--network-cidr`/`--gateway` configure static networking non-interactively for serial automation.
@@ -32,30 +40,34 @@ done
 set -- "${forwarded[@]}"
 network_changed=0
 if (( redo_network || explicit_network )) ||
-    ! jq -e '(.SOPHON_INFRAVM_IP // "") != "" and (.SOPHON_VNET_DNS // "") != ""' "$site" >/dev/null 2>&1; then
-    /usr/local/libexec/sophon-network "${network_args[@]}" "$site"
+    ! as_sophon jq -e '(.SOPHON_INFRAVM_IP // "") != "" and (.SOPHON_VNET_DNS // "") != ""' "$site" >/dev/null 2>&1; then
+    site_tmp=$(mktemp)
+    /usr/local/libexec/sophon-network "${network_args[@]}" "$site_tmp"
+    as_sophon sh -c 'install -d -m 0700 "$(dirname "$1")"' _ "$site"
+    as_sophon sh -c 'umask 077; cat > "$1"' _ "$site" < "$site_tmp"
+    rm -f "$site_tmp"
     network_changed=1
 fi
 # Host setup (loading the runner image, starting Podman socket) begins at boot; wait for it, and redo it once the
 # address is known so the services' DNS points at this machine.
-if (( network_changed )) || [[ ! -f /run/user/1000/sophon-ready ]]; then
+if (( network_changed )) || [[ ! -f /run/sophon/ready ]]; then
     echo "Finishing host setup (this can take a few minutes the first time)..."
     sudo systemctl start sophon-host-bootstrap || true
     if (( network_changed )); then sudo systemctl restart sophon-host-bootstrap || true; fi
 fi
-if [[ ! -f /run/user/1000/sophon-ready ]]; then
+if [[ ! -f /run/sophon/ready ]]; then
     echo "Host setup is not ready. Inspect: journalctl -u sophon-host-bootstrap" >&2
     echo "Retry without reinstalling: sudo systemctl restart sophon-host-bootstrap" >&2
     exit 1
 fi
 
-install -d -m 0700 /var/lib/sophon/stacks /var/lib/sophon/control
+as_sophon install -d -m 0700 /var/lib/sophon/stacks /var/lib/sophon/control
 
 args=(
     --remote=false run --rm --network host --pull never
     --security-opt label=disable
     --label sophon.deployment=configure
-    -v /run/user/1000/podman/podman.sock:/var/run/docker.sock
+    -v /run/user/1001/podman/podman.sock:/var/run/docker.sock
     -v /var/lib/sophon/stacks:/var/lib/sophon/stacks
     -v /var/lib/sophon/project:/workspace:Z --workdir /workspace
     --env SOPHON_DEPLOYMENT_STEP=configure
@@ -66,14 +78,14 @@ fi
 # A secret disk (label SOPHON_CERTS) carries the pre-issued certificate file for air-gapped sites
 # (or sophon-autodeploy may have already staged /var/lib/sophon/project/imports/acme.json before ejecting the ISO).
 certs_device=${SOPHON_CERTS_DEVICE:-/dev/disk/by-label/SOPHON_CERTS}
-if [[ -f /var/lib/sophon/project/imports/acme.json ]]; then
+if as_sophon test -f /var/lib/sophon/project/imports/acme.json; then
     export SOPHON_ACME_FILE=/workspace/imports/acme.json
 elif [[ -e $certs_device ]]; then
     mount_point=$(mktemp -d)
     if sudo mount -o ro "$certs_device" "$mount_point" 2>/dev/null; then
         if [[ -f $mount_point/acme.json ]]; then
-            install -d -m 700 /var/lib/sophon/project/imports
-            install -m 600 "$mount_point/acme.json" /var/lib/sophon/project/imports/acme.json
+            as_sophon install -d -m 0700 /var/lib/sophon/project/imports
+            as_sophon sh -c 'umask 077; cat > "$1"' _ /var/lib/sophon/project/imports/acme.json < "$mount_point/acme.json"
             export SOPHON_ACME_FILE=/workspace/imports/acme.json
             echo "Found the certificate disk; using its acme.json."
         elif [[ ! -f $mount_point/sophon-seed.json ]]; then
@@ -85,9 +97,10 @@ elif [[ -e $certs_device ]]; then
     fi
     rmdir "$mount_point" 2>/dev/null || true
 fi
-if [[ -d /run/user/1000/sophon-seed ]]; then
-    args+=(-v /run/user/1000/sophon-seed:/run/sophon-seed:Z)
+if as_sophon test -d /run/user/1001/sophon-seed; then
+    args+=(-v /run/user/1001/sophon-seed:/run/sophon-seed:Z)
 fi
+preserve_vars=()
 for name in \
     SOPHON_ACME_FILE SOPHON_INFRAVM_IP SOPHON_VNET_DNS SOPHON_DOMAIN SOPHON_ACME_EMAIL \
     SOPHON_CF_TOKEN SOPHON_CF_TUNNEL_ENABLED SOPHON_CF_TUNNEL_NAME \
@@ -108,15 +121,25 @@ for name in \
 do
     if [[ -v $name ]]; then
         args+=(--env "$name")
+        preserve_vars+=("$name")
     fi
 done
 if [[ -v SOPHON_PREPARE_RESTORE ]]; then
     args+=(--env SOPHON_PREPARE_RESTORE)
+    preserve_vars+=(SOPHON_PREPARE_RESTORE)
 fi
-podman "${args[@]}" sophon:latest python3 src/console.py "$@"
-if [[ -x /usr/local/bin/sophon-reconcile-gitops && ( -f /var/lib/sophon/stacks/nexus/compose.yaml || -f /var/lib/sophon/stacks/nexus/docker-compose.yml ) ]]; then
+preserve_arg=""
+if (( ${#preserve_vars[@]} )); then
+    preserve_arg=$(IFS=,; printf -- '--preserve-env=%s' "${preserve_vars[*]}")
+fi
+sudo -u sophon ${preserve_arg:+"$preserve_arg"} -- env \
+    HOME=/var/home/sophon \
+    XDG_RUNTIME_DIR=/run/user/1001 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus \
+    podman "${args[@]}" sophon:latest python3 src/console.py "$@"
+if [[ -x /usr/local/bin/sophon-reconcile-gitops ]] && as_sophon sh -c 'test -f /var/lib/sophon/stacks/nexus/compose.yaml || test -f /var/lib/sophon/stacks/nexus/docker-compose.yml'; then
     /usr/local/bin/sophon-reconcile-gitops --sync-auth-only || true
 fi
 if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
-    /usr/local/libexec/sophon-control-sync --probe || true
+    sudo /usr/local/libexec/sophon-control-sync --probe || true
 fi

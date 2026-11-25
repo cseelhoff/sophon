@@ -52,6 +52,7 @@ class OpenLDAPTemplateTests(unittest.TestCase):
         self.assertEqual(self.compose['services']['certs-dumper']['security_opt'], ['label=disable'])
         self.assertIn('groupOfUniqueNames/groupOfNames', script)
         self.assertIn('cn=arcane-admins,ou=groups,dc=site,dc=example', script)
+        self.assertIn('cn=gitea-admins,ou=groups,dc=site,dc=example', script)
         self.assertIn('cn=nexus-admins,ou=groups,dc=site,dc=example', script)
         self.assertIn('cn=nexus-developers,ou=groups,dc=site,dc=example', script)
         self.assertIn('member: uid=john.doe.admin,ou=people,dc=site,dc=example', script)

@@ -20,8 +20,8 @@ class CoarseTests(unittest.TestCase):
         validated, error = deployment.validate_settings(values, {}, "configure")
         self.assertIsNone(error)
         self.assertEqual(validated["SOPHON_KOPIA_COARSE_VOLUMES_DIR"],
-                         "/var/home/core/.local/share/containers/storage/volumes")
-        self.assertEqual(validated["SOPHON_KOPIA_COARSE_WORK_DIR"], "/var/home/core/sophon-coarse")
+                         "/var/home/sophon/.local/share/containers/storage/volumes")
+        self.assertEqual(validated["SOPHON_KOPIA_COARSE_WORK_DIR"], "/var/home/sophon/sophon-coarse")
         custom = values | {"SOPHON_KOPIA_COARSE_VOLUMES_DIR": "/srv/podman/volumes",
                            "SOPHON_KOPIA_COARSE_WORK_DIR": "/srv/coarse"}
         self.assertIsNone(deployment.validate_settings(custom, {}, "configure")[1])

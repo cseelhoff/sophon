@@ -12,8 +12,8 @@ Reads a JSON payload from stdin and reconciles over HTTPS REST APIs:
      (`ops-gitops-ci`), and bootstrap `gitea-runner` GitOpsSync so a fresh push
      to `ops/workloads` brings up the socketless runner automatically.
   4. Encrypted Gitea `ops` organization Actions secrets (`ARCANE_API_KEY`,
-     `KEYCLOAK_CI_CLIENT_ID`, `KEYCLOAK_CI_CLIENT_SECRET`,
-     `GITEA_RUNNER_REGISTRATION_TOKEN`).
+     `KEYCLOAK_CI_CLIENT_ID`, `KEYCLOAK_CI_CLIENT_SECRET`), plus idempotent
+     `main` branch protection on `ops/workloads` once commits exist.
 
 Never prints secret values to stdout or stderr. Emits JSON `{"changed": bool, "actions": [...]}`.
 """
@@ -300,7 +300,7 @@ def reconcile_gitea_org_and_token(
     repo = cfg["gitea_repo"]
     headers = gitea_basic_headers(cfg["gitea_admin_user"], cfg["gitea_admin_password"])
 
-    status, _ = http_json(
+    status, org_obj = http_json(
         "GET",
         f"{gt_base}/api/v1/orgs/{urllib.parse.quote(org)}",
         ctx=ctx,
@@ -317,17 +317,33 @@ def reconcile_gitea_org_and_token(
                 "username": org,
                 "full_name": "Sophon Operations",
                 "visibility": "private",
+                "repo_admin_change_team_access": False,
             },
         )
         actions.append(f"gitea:created_org:{org}")
+    elif (org_obj or {}).get("visibility") != "private" or (org_obj or {}).get(
+        "repo_admin_change_team_access"
+    ) is True:
+        http_json(
+            "PATCH",
+            f"{gt_base}/api/v1/orgs/{urllib.parse.quote(org)}",
+            ctx=ctx,
+            headers=headers,
+            json_body={
+                "visibility": "private",
+                "repo_admin_change_team_access": False,
+            },
+        )
+        actions.append(f"gitea:locked_private_org:{org}")
 
-    r_status, _ = http_json(
+    r_status, repo_obj = http_json(
         "GET",
         f"{gt_base}/api/v1/repos/{urllib.parse.quote(org)}/{urllib.parse.quote(repo)}",
         ctx=ctx,
         headers=headers,
         expected=(200, 404),
     )
+    repo_empty = True
     if r_status == 404:
         http_json(
             "POST",
@@ -343,6 +359,22 @@ def reconcile_gitea_org_and_token(
             },
         )
         actions.append(f"gitea:created_repo:{org}/{repo}")
+    else:
+        repo_empty = bool((repo_obj or {}).get("empty", False))
+        if (repo_obj or {}).get("private") is False:
+            http_json(
+                "PATCH",
+                f"{gt_base}/api/v1/repos/{urllib.parse.quote(org)}/{urllib.parse.quote(repo)}",
+                ctx=ctx,
+                headers=headers,
+                json_body={"private": True},
+            )
+            actions.append(f"gitea:locked_private_repo:{org}/{repo}")
+
+    reconcile_gitea_ops_admin_ownership(cfg, ctx, headers, actions)
+
+    if not repo_empty:
+        reconcile_gitea_branch_protection(cfg, ctx, headers, actions)
 
     _, tok_resp = http_json(
         "POST",
@@ -361,6 +393,171 @@ def reconcile_gitea_org_and_token(
     items = secrets_resp if isinstance(secrets_resp, list) else (secrets_resp or {}).get("data", [])
     existing_secret_names = {s["name"].upper() for s in items if isinstance(s, dict) and s.get("name")}
     return reg_token, existing_secret_names
+
+
+GITEA_MAIN_REQUIRED_CHECKS = [
+    "Reconcile Workloads / Validate & Reconcile Compose Workloads (pull_request)"
+]
+
+
+def reconcile_gitea_ops_admin_ownership(
+    cfg: dict[str, Any],
+    ctx: ssl.SSLContext,
+    headers: dict[str, str],
+    actions: list[str],
+) -> None:
+    """Restrict `ops` and `ops/workloads` strictly to Gitea administrators.
+
+    Standard SSO users can sign into Gitea for regular repositories, while
+    `ops` (`visibility=private`) and `ops/workloads` (`private=True`) have only
+    the `Owners` team populated strictly with active Gitea admins (`is_admin=True`)
+    and zero direct repo collaborators or non-Owners teams.
+    """
+    gt_base = cfg["gitea_url"].rstrip("/")
+    org = cfg["gitea_org"]
+    repo = cfg["gitea_repo"]
+
+    _, users = http_json(
+        "GET",
+        f"{gt_base}/api/v1/admin/users?limit=200",
+        ctx=ctx,
+        headers=headers,
+    )
+    admin_logins = {
+        u["login"]
+        for u in (users or [])
+        if isinstance(u, dict) and u.get("login") and u.get("is_admin") and u.get("active", True)
+    }
+    admin_logins.add(cfg["gitea_admin_user"])
+
+    _, teams = http_json(
+        "GET",
+        f"{gt_base}/api/v1/orgs/{urllib.parse.quote(org)}/teams?limit=100",
+        ctx=ctx,
+        headers=headers,
+    )
+    owners_team_id: int | None = None
+    for team in teams or []:
+        if not isinstance(team, dict) or "id" not in team:
+            continue
+        t_id = int(team["id"])
+        t_name = str(team.get("name") or "")
+        if t_name == "Owners":
+            owners_team_id = t_id
+        else:
+            http_json(
+                "DELETE",
+                f"{gt_base}/api/v1/teams/{t_id}",
+                ctx=ctx,
+                headers=headers,
+                expected=(204, 404),
+            )
+            actions.append(f"gitea:deleted_non_owner_team:{org}/{t_name}")
+
+    if owners_team_id is not None:
+        _, members = http_json(
+            "GET",
+            f"{gt_base}/api/v1/teams/{owners_team_id}/members?limit=200",
+            ctx=ctx,
+            headers=headers,
+        )
+        current_owners = {
+            m["login"] for m in (members or []) if isinstance(m, dict) and m.get("login")
+        }
+        for login in sorted(admin_logins - current_owners):
+            http_json(
+                "PUT",
+                f"{gt_base}/api/v1/teams/{owners_team_id}/members/{urllib.parse.quote(login)}",
+                ctx=ctx,
+                headers=headers,
+                expected=(204,),
+            )
+            actions.append(f"gitea:added_ops_owner:{login}")
+        for login in sorted(current_owners - admin_logins):
+            http_json(
+                "DELETE",
+                f"{gt_base}/api/v1/teams/{owners_team_id}/members/{urllib.parse.quote(login)}",
+                ctx=ctx,
+                headers=headers,
+                expected=(204, 404),
+            )
+            actions.append(f"gitea:removed_non_admin_ops_owner:{login}")
+
+    _, collabs = http_json(
+        "GET",
+        f"{gt_base}/api/v1/repos/{urllib.parse.quote(org)}/{urllib.parse.quote(repo)}/collaborators?limit=200",
+        ctx=ctx,
+        headers=headers,
+    )
+    for collab in collabs or []:
+        if isinstance(collab, dict) and collab.get("login"):
+            c_login = collab["login"]
+            http_json(
+                "DELETE",
+                f"{gt_base}/api/v1/repos/{urllib.parse.quote(org)}/{urllib.parse.quote(repo)}/collaborators/{urllib.parse.quote(c_login)}",
+                ctx=ctx,
+                headers=headers,
+                expected=(204, 404),
+            )
+            actions.append(f"gitea:removed_direct_collaborator:{org}/{repo}:{c_login}")
+
+
+def reconcile_gitea_branch_protection(
+    cfg: dict[str, Any],
+    ctx: ssl.SSLContext,
+    headers: dict[str, str],
+    actions: list[str],
+) -> None:
+    gt_base = cfg["gitea_url"].rstrip("/")
+    org = cfg["gitea_org"]
+    repo = cfg["gitea_repo"]
+    desired_bp: dict[str, Any] = {
+        "branch_name": "main",
+        "rule_name": "main",
+        "enable_push": False,
+        "enable_push_whitelist": False,
+        "block_admin_merge_override": False,
+        "enable_merge_whitelist": False,
+        "required_approvals": 1,
+        "enable_approvals_whitelist": True,
+        "approvals_whitelist_teams": ["Owners"],
+        "block_on_rejected_reviews": True,
+        "block_on_official_review_requests": True,
+        "block_on_outdated_branch": False,
+        "dismiss_stale_approvals": True,
+        "require_signed_commits": False,
+        "enable_status_check": True,
+        "status_check_contexts": GITEA_MAIN_REQUIRED_CHECKS,
+    }
+    bp_url = (
+        f"{gt_base}/api/v1/repos/{urllib.parse.quote(org)}"
+        f"/{urllib.parse.quote(repo)}/branch_protections"
+    )
+    bp_status, bp_obj = http_json(
+        "GET",
+        f"{bp_url}/main",
+        ctx=ctx,
+        headers=headers,
+        expected=(200, 404),
+    )
+    if bp_status == 404:
+        http_json("POST", bp_url, ctx=ctx, headers=headers, json_body=desired_bp)
+        actions.append(f"gitea:created_branch_protection:{org}/{repo}:main")
+        return
+
+    check_keys = (
+        "enable_push",
+        "required_approvals",
+        "enable_approvals_whitelist",
+        "approvals_whitelist_teams",
+        "block_on_rejected_reviews",
+        "dismiss_stale_approvals",
+        "enable_status_check",
+        "status_check_contexts",
+    )
+    if any((bp_obj or {}).get(k) != desired_bp[k] for k in check_keys):
+        http_json("PATCH", f"{bp_url}/main", ctx=ctx, headers=headers, json_body=desired_bp)
+        actions.append(f"gitea:updated_branch_protection:{org}/{repo}:main")
 
 
 def put_gitea_org_secret(
@@ -618,9 +815,18 @@ def main() -> int:
     put_gitea_org_secret(
         cfg, ctx, "KEYCLOAK_CI_CLIENT_SECRET", kc_secret, existing_secrets, actions
     )
-    put_gitea_org_secret(
-        cfg, ctx, "ACT_RUNNER_REGISTRATION_TOKEN", reg_token, existing_secrets, actions
-    )
+    if "ACT_RUNNER_REGISTRATION_TOKEN" in existing_secrets:
+        gt_base = cfg["gitea_url"].rstrip("/")
+        org = cfg["gitea_org"]
+        headers = gitea_basic_headers(cfg["gitea_admin_user"], cfg["gitea_admin_password"])
+        http_json(
+            "DELETE",
+            f"{gt_base}/api/v1/orgs/{urllib.parse.quote(org)}/actions/secrets/ACT_RUNNER_REGISTRATION_TOKEN",
+            ctx=ctx,
+            headers=headers,
+            expected=(204, 404),
+        )
+        actions.append("gitea:deleted_org_secret:ACT_RUNNER_REGISTRATION_TOKEN")
     if new_arcane_key is not None:
         put_gitea_org_secret(
             cfg,

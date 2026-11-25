@@ -19,7 +19,7 @@ services:
       - "registry-push.{{ arcane_clean_domain }}:{{ infravm_ip }}"
 {% endif %}
     volumes:
-      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+      - /run/user/1001/podman/podman.sock:/var/run/docker.sock
       - arcane_data:/app/data
       - {{ arcane_stacks_dir }}:{{ arcane_stacks_dir }}
     environment:

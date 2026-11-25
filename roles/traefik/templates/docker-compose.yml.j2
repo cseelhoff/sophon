@@ -32,7 +32,7 @@ services:
     volumes:
       - traefik_config:/etc/traefik:ro
       - traefik_data:/data
-      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+      - /run/user/1001/podman/podman.sock:/var/run/docker.sock
     command:
       - --api.dashboard=true
       - --api.insecure=true

@@ -89,7 +89,7 @@ nexus_db_password: "{{ lookup('env', 'SOPHON_NEXUS_DB_PASSWORD') | default(arcan
 kopia_version: "0.23.1"
 kopia_image: "localhost/sophon-kopia:{{ kopia_version }}"
 kopia_image_tarname: "sophon-kopia_{{ kopia_version }}.tar"
-kopia_volumes_dir: "/var/home/core/.local/share/containers/storage/volumes"
+kopia_volumes_dir: "/var/home/sophon/.local/share/containers/storage/volumes"
 kopia_password: "{{ lookup('env', 'SOPHON_KOPIA_PASSWORD') }}"
 kopia_server_username: "{{ lookup('env', 'SOPHON_KOPIA_SERVER_USERNAME') | default('admin', true) }}"
 kopia_server_password: "{{ lookup('env', 'SOPHON_KOPIA_SERVER_PASSWORD') }}"
@@ -105,8 +105,8 @@ sophon_version: "{{ lookup('file', playbook_dir ~ '/bootstrap/sophon-version') |
 kopia_backups_enabled: "{{ lookup('env', 'SOPHON_KOPIA_BACKUPS_ENABLED') | default('true', true) }}"
 kopia_snapshot_interval: "{{ lookup('env', 'SOPHON_KOPIA_SNAPSHOT_INTERVAL') | default('6h', true) }}"
 kopia_coarse_enabled: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_ENABLED') | default('false', true) }}"
-kopia_coarse_volumes_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_VOLUMES_DIR') | default('/var/home/core/.local/share/containers/storage/volumes', true) }}"
-kopia_coarse_work_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_WORK_DIR') | default('/var/home/core/sophon-coarse', true) }}"
+kopia_coarse_volumes_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_VOLUMES_DIR') | default('/var/home/sophon/.local/share/containers/storage/volumes', true) }}"
+kopia_coarse_work_dir: "{{ lookup('env', 'SOPHON_KOPIA_COARSE_WORK_DIR') | default('/var/home/sophon/sophon-coarse', true) }}"
 
 # --- Shared paths --------------------------------------------------------------
 artifacts_dir: "{{ playbook_dir }}/artifacts"
