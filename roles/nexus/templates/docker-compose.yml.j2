@@ -57,6 +57,11 @@ services:
       - 'sophon.backup.enable=true'
       - 'sophon.backup.group=nexus'
       - 'sophon.backup.paths=/nexus-data/blobs/hosted,/nexus-data/keystores,/nexus-data/etc'
+      - "homepage.group=Platform & Infrastructure"
+      - "homepage.name=Nexus"
+      - "homepage.icon=nexus.svg"
+      - "homepage.href=https://{{ nexus_hostname }}.{{ nexus_domain }}"
+      - "homepage.description=Artifact & container registry ({{ nexus_registry_hostname }}.{{ nexus_domain }})"
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.nexus.entrypoints=websecure"

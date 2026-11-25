@@ -52,7 +52,7 @@ All providers: `SOPHON_INFRAVM_NAME` (`sophon-infravm`), `SOPHON_DEV_INFRAVM_NAM
 For `sophon-provision`, a VM that already exists is only started if this workflow created it (`sophon-provision --recreate` replaces it;
 `sophon-destroy-vm` stops and deletes a VM);
 anything else is left alone. When building unattended seeds (`secrets`), `SOPHON_NETWORK_CIDR` sets the production
-static IPv4 CIDR and `SOPHON_DEV_NETWORK_CIDR` sets the dev/restore-drill static IPv4 CIDR (promoting from `https://<domain>` or
+static IPv4 CIDR and `SOPHON_DEV_NETWORK_CIDR` sets the dev/restore-drill static IPv4 CIDR (promoting from `https://status.<domain>` or
 `sophon-activate` verifies `SOPHON_NETWORK_CIDR` is unoccupied and switches the VM's IP and self-pointing DNS from
 `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`).
 

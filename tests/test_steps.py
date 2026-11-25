@@ -488,6 +488,10 @@ def test_new_cloudflare_tunnel_enforces_fail_closed_access_policies():
             assert [p.split('/')[-1] for p, _ in post_paths] == ['apps', 'apps', 'cfd_tunnel']
             wildcard_body, oidc_body, _ = [b for _, b in post_paths]
             assert wildcard_body['domain'] == '*.site.example'
+            assert wildcard_body['destinations'] == [
+                {'type': 'public', 'uri': '*.site.example'},
+                {'type': 'public', 'uri': 'site.example'},
+            ]
             assert wildcard_body['policies'][0]['decision'] == 'allow'
             assert wildcard_body['policies'][0]['include'] == [
                 {'email': {'email': 'ops@site.example'}},

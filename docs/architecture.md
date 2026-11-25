@@ -73,7 +73,7 @@ which snapshots record alongside the workload image references and immutable IDs
 CoreDNS resolves *.<domain> ─▶ Traefik routes by Host and gets certificates
    ─▶ LDAPS at ldap.<domain> verifies ─▶ Keycloak federates OpenLDAP
    ─▶ Gitea (Git/LFS) and Nexus (OpenLDAP RBAC + hosted/proxy registries) start
-   ─▶ Arcane and the LAN-only Status & Cutover UI (https://<domain>) trust Keycloak (OIDC)
+   ─▶ Arcane and the LAN-only Status & Cutover UI (https://status.<domain>) trust Keycloak (OIDC)
    ─▶ Kopia connects with native actions enabled and triggers the initial hot snapshot
 ```
 

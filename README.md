@@ -32,7 +32,7 @@ sh sophon-provision.sh            # PowerShell: .\sophon-provision.ps1
 
 | Service | Endpoint | Role |
 |---|---|---|
-| **Appliance Status & Cutover UI** | `https://<domain>` (`status.<domain>`) | LAN-only appliance status, one-click standby-to-production promotion, and TLS certificate rotation |
+| **Appliance Status & Cutover UI** | `https://status.<domain>` | LAN-only appliance status, one-click standby-to-production promotion, and TLS certificate rotation |
 | **Arcane** | `https://arcane.<domain>` | OIDC-authenticated Compose stack UI & Pure GitOps reconciler |
 | **Keycloak** + **OpenLDAP** | `https://auth.<domain>`, `ldap.<domain>` | Central OIDC/SSO identity provider backed by OpenLDAP (`arcane-admins`, `nexus-admins`, `nexus-developers`) |
 | **Gitea** | `https://git.<domain>` | Git hosting, Gitea Actions CI/CD, and file-backed Git LFS |
@@ -44,10 +44,10 @@ sh sophon-provision.sh            # PowerShell: .\sophon-provision.ps1
 
 ## Key Capabilities
 
-- **Online or fully air-gapped:** Every OS image, container archive, and runner dependency is baked into local ISOs during `sophon-build-isos`. Air-gapped sites carry a pre-issued 90-day Let's Encrypt wildcard certificate on `sophon-secrets.iso` and rotate it with one click in `https://<domain>`.
+- **Online or fully air-gapped:** Every OS image, container archive, and runner dependency is baked into local ISOs during `sophon-build-isos`. Air-gapped sites carry a pre-issued 90-day Let's Encrypt wildcard certificate on `sophon-secrets.iso` and rotate it with one click in `https://status.<domain>`.
 - **Zero-downtime encrypted backups:** Workloads opt in via `sophon.backup.*` container labels—hot logical database dumps and Btrfs CoW reflinks stream to an SFTP repository without stopping containers.
 - **Unified Day-1 & Safe Standby recovery:** The same `sophon-secrets.iso` performs a Day-1 build when the SFTP repository is empty, or automatically boots into **Safe Standby Mode** (read-only SFTP, Cloudflare tunnel disabled, backups paused) and restores the latest snapshot when backups exist.
-- **Reconstructible from code:** Nothing lives exclusively in UI state—rebuilding or upgrading is always *"deploy a clean VM from code, restore state from Kopia, and promote at `https://<domain>`."*
+- **Reconstructible from code:** Nothing lives exclusively in UI state—rebuilding or upgrading is always *"deploy a clean VM from code, restore state from Kopia, and promote at `https://status.<domain>`."*
 
 ---
 

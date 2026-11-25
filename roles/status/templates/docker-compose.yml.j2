@@ -33,10 +33,15 @@ services:
       retries: 10
       start_period: 5s
     labels:
-      - "coredns.dockerdiscovery.host={{ status_domain_clean }}"
+      - "coredns.dockerdiscovery.host=status.{{ status_domain_clean }}"
+      - "homepage.group=Platform & Infrastructure"
+      - "homepage.name=Sophon Status"
+      - "homepage.icon=statuspage.svg"
+      - "homepage.href=https://status.{{ status_domain_clean }}"
+      - "homepage.description=Appliance health, certificates & DR cutover"
       - "traefik.enable=true"
       - "traefik.http.routers.sophon-status.entrypoints=websecure"
-      - "traefik.http.routers.sophon-status.rule=Host(`{{ status_domain_clean }}`) || Host(`status.{{ status_domain_clean }}`)"
+      - "traefik.http.routers.sophon-status.rule=Host(`status.{{ status_domain_clean }}`)"
       - "traefik.http.routers.sophon-status.tls=true"
       - "traefik.http.routers.sophon-status.tls.certresolver=letsencrypt"
       - "traefik.http.routers.sophon-status.tls.domains[0].main={{ status_domain_clean }}"

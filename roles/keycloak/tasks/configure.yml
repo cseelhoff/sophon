@@ -469,16 +469,39 @@
       frontchannelLogout: true
       fullScopeAllowed: true
       redirectUris:
-        - "https://{{ keycloak_domain }}/oauth2/callback"
         - "https://status.{{ keycloak_domain }}/oauth2/callback"
       webOrigins:
-        - "https://{{ keycloak_domain }}"
         - "https://status.{{ keycloak_domain }}"
       attributes:
         pkce.code.challenge.method: S256
-        post.logout.redirect.uris: "https://{{ keycloak_domain }}/*##https://status.{{ keycloak_domain }}/*"
+        post.logout.redirect.uris: "https://status.{{ keycloak_domain }}/*"
     validate_certs: false
     status_code: [201, 409]
+
+- name: Ensure existing sophon-status client uses status subdomain only
+  when:
+    - _kc_status_client.json | length > 0
+    - >-
+      (_kc_status_client.json[0].redirectUris | default([])) != ['https://status.' ~ keycloak_domain ~ '/oauth2/callback']
+      or (_kc_status_client.json[0].webOrigins | default([])) != ['https://status.' ~ keycloak_domain]
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_status_client.json[0].id }}"
+    method: PUT
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body: >-
+      {{
+        _kc_status_client.json[0] | combine({
+          'redirectUris': ['https://status.' ~ keycloak_domain ~ '/oauth2/callback'],
+          'webOrigins': ['https://status.' ~ keycloak_domain],
+          'attributes': (_kc_status_client.json[0].attributes | default({})) | combine({
+            'pkce.code.challenge.method': 'S256',
+            'post.logout.redirect.uris': 'https://status.' ~ keycloak_domain ~ '/*'
+          })
+        })
+      }}
+    validate_certs: false
+    status_code: 204
 
 - name: Refresh sophon-status client lookup
   ansible.builtin.uri:

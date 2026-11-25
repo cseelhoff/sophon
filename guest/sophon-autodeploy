@@ -134,7 +134,7 @@ verify_url "auth.${domain}" "/realms/master/.well-known/openid-configuration"
 verify_url "git.${domain}" "/api/v1/version"
 verify_url "nexus.${domain}" "/service/rest/v1/status"
 verify_url "arcane.${domain}" "/"
-verify_url "${domain}" "/healthz"
+verify_url "status.${domain}" "/healthz"
 
 if [[ -x /usr/local/libexec/sophon-control-sync ]]; then
     /usr/local/libexec/sophon-control-sync --probe || true

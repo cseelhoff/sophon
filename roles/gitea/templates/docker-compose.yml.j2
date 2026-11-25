@@ -65,6 +65,11 @@ services:
       - 'sophon.backup.volumes=/data'
       - 'sophon.backup.exclude=git/lfs/tmp/,gitea/tmp/,gitea/uploads/,gitea/indexers/,gitea/queues/,gitea/sessions/,gitea/log/'
       - 'sophon.backup.ini=/data/gitea/conf/app.ini:security.SECRET_KEY,security.INTERNAL_TOKEN,server.LFS_JWT_SECRET,oauth2.JWT_SECRET'
+      - "homepage.group=Platform & Infrastructure"
+      - "homepage.name=Gitea"
+      - "homepage.icon=gitea.svg"
+      - "homepage.href={{ gitea_root_url }}"
+      - "homepage.description=Git repositories & GitOps CI/CD"
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.gitea.entrypoints=websecure"

@@ -298,6 +298,8 @@
                   destinations:
                     - type: public
                       uri: "{{ _wildcard_fqdn }}"
+                    - type: public
+                      uri: "{{ _clean_domain }}"
                   session_duration: "{{ coredns_cf_access_session_duration }}"
                   policies:
                     - name: "Sophon Operators ({{ _clean_domain }})"

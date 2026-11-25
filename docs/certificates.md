@@ -59,7 +59,7 @@ Repeat monthly (certificates last 90 days, and `sophon-build-isos.sh` automatica
 1. Run `sh sophon-build-isos.sh` (`.\sophon-build-isos.ps1`) on the connected workstation.
 2. Run `sh sophon-mount-secrets.sh` (`.\sophon-mount-secrets.ps1`) to hot-attach the renewed `sophon-secrets.iso` to
    `sophon-infravm` (and delete the local workstation copy unless `--keep-local` is passed).
-3. Open `https://<domain>` and click **Update Certificates** (or run `sophon-refresh-certs` as `core` on the VM console
+3. Open `https://status.<domain>` and click **Update Certificates** (or run `sophon-refresh-certs` as `core` on the VM console
    if the previous certificate already expired). This validates the new `acme.json`, updates Traefik, reloads
    `certs-dumper` and OpenLDAP, triggers a Kopia backup snapshot, and ejects the certificate ISO automatically.
 

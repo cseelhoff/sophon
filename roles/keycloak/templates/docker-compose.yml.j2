@@ -34,6 +34,11 @@ services:
       keycloak-db:
         condition: service_healthy
     labels:
+      - "homepage.group=Identity & Access"
+      - "homepage.name=Keycloak"
+      - "homepage.icon=keycloak.svg"
+      - "homepage.href=https://{{ keycloak_hostname }}.{{ keycloak_domain }}"
+      - "homepage.description=Single sign-on & OIDC identity provider"
       - "traefik.enable=true"
       - "traefik.http.routers.keycloak.entrypoints=websecure"
       - "traefik.http.routers.keycloak.rule=Host(`{{ keycloak_hostname }}.{{ keycloak_domain }}`)"

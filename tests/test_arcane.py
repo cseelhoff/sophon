@@ -96,6 +96,7 @@ class ArcaneAndComposeTests(unittest.TestCase):
             service = compose['services']['arcane']
             self.assertEqual(service['pull_policy'], 'never')
             self.assertEqual(service['environment']['ARCANE_APP_URL'], 'https://arcane.step4.example')
+            self.assertEqual(service['environment']['SOPHON_PODMAN_SOCK'], '/run/user/1001/podman/podman.sock')
             self.assertEqual(service['environment']['ARCANE_PROJECTS_DIRECTORY'], str(stacks))
             self.assertEqual(service['environment']['ARCANE_OIDC_ENABLED'], 'true')
             self.assertEqual(service['environment']['ARCANE_OIDC_ISSUER_URL'],
@@ -104,6 +105,8 @@ class ArcaneAndComposeTests(unittest.TestCase):
             self.assertEqual(service['environment']['ARCANE_UPDATE_CHECK_ENABLED'], 'false')
             self.assertIn('/run/user/1001/podman/podman.sock:/var/run/docker.sock', service['volumes'])
             self.assertIn('traefik.http.routers.arcane.rule=Host(`arcane.step4.example`)', service['labels'])
+            self.assertIn('homepage.name=Arcane', service['labels'])
+            self.assertIn('homepage.href=https://arcane.step4.example', service['labels'])
 
             dotenv = env_file.read_text()
             self.assertIn('ARCANE_DEFAULT_ADMIN_PASSWORD="p\\$w\\"quote\'hash#space=slash\\\\end"', dotenv)
@@ -242,6 +245,28 @@ class ArcaneAndComposeTests(unittest.TestCase):
             mod.reconcile_gitea_org_and_token(cfg, None, actions_drift)
         self.assertEqual(actions_drift, ['gitea:updated_branch_protection:ops/workloads:main'])
         self.assertFalse(bp_state['enable_push'])
+
+    def test_stage1_compose_templates_define_homepage_discovery_labels(self):
+        expected = {
+            'keycloak': ('Identity & Access', 'Keycloak', 'keycloak.svg', True),
+            'openldap': ('Identity & Access', 'OpenLDAP', 'openldap.svg', False),
+            'arcane': ('Platform & Infrastructure', 'Arcane', 'arcane.svg', True),
+            'gitea': ('Platform & Infrastructure', 'Gitea', 'gitea.svg', True),
+            'nexus': ('Platform & Infrastructure', 'Nexus', 'nexus.svg', True),
+            'kopia': ('Platform & Infrastructure', 'Kopia', 'kopia.svg', True),
+            'status': ('Platform & Infrastructure', 'Sophon Status', 'statuspage.svg', True),
+            'traefik': ('Platform & Infrastructure', 'Traefik', 'traefik.svg', True),
+            'coredns': ('Platform & Infrastructure', 'CoreDNS', 'coredns.svg', True),
+        }
+        for role, (group, name, icon, has_href) in expected.items():
+            raw = (ROOT / 'roles' / role / 'templates' / 'docker-compose.yml.j2').read_text(encoding='utf-8')
+            self.assertIn('homepage.group', raw, role)
+            self.assertIn(group, raw, role)
+            self.assertIn(name, raw, role)
+            self.assertIn(icon, raw, role)
+            self.assertIn('homepage.description', raw, role)
+            if has_href:
+                self.assertIn('homepage.href', raw, role)
 
 
 if __name__ == '__main__':

@@ -140,7 +140,7 @@ def main(argv=None) -> int:
         iso_path.unlink(missing_ok=True)
         print(f'Removed local workstation copy: {iso_path}')
     print(f"Certificate disk attached to '{vm_name}'.")
-    print(f"Next: open https://{domain} and click 'Update Certificates' (or run `sophon-refresh-certs` on the VM console).")
+    print(f"Next: open https://status.{domain} and click 'Update Certificates' (or run `sophon-refresh-certs` on the VM console).")
     return 0
 
 

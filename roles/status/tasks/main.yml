@@ -1,5 +1,5 @@
 ---
-# Deploy the Appliance Status & Disaster-Recovery Cutover Web UI (https://<domain>)
+# Deploy the Appliance Status & Disaster-Recovery Cutover Web UI (https://status.<domain>)
 # Reuses localhost/sophon:latest (0 MB extra ISO footprint) behind Traefik TLS + Keycloak OIDC.
 
 - name: Deploy Appliance Status Compose stack

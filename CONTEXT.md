@@ -64,6 +64,7 @@ inbound webhooks or `sophon-reconcile-gitops` during `standby_restore` drills wi
 access or long-lived Arcane admin credentials.
 
 **Appliance Status & Cutover UI (`sophon-status`)**: the LAN-only (`CF_EXCLUDE`), Keycloak PKCE OIDC-authenticated
-(`arcane-admins`) status and disaster-recovery cutover console served at `https://<domain>` and `https://status.<domain>`.
-Reads only non-secret state in `/var/lib/sophon/control`, disables promotion whenever `SOPHON_NETWORK_CIDR` is still
-occupied on the network, and triggers `sophon-activate` via the detached host `sophon-web-activate.path` systemd unit.
+(`arcane-admins`) status and disaster-recovery cutover console served at `https://status.<domain>` (leaving the bare
+root `<domain>` free for user workloads). Reads only non-secret state in `/var/lib/sophon/control`, disables promotion
+whenever `SOPHON_NETWORK_CIDR` is still occupied on the network, and triggers `sophon-activate` via the detached host
+`sophon-web-activate.path` systemd unit.

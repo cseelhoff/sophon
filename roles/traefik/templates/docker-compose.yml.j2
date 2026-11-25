@@ -63,6 +63,11 @@ services:
       - 'sophon.backup.group=traefik'
       - 'sophon.backup.paths=/data/acme.json?optional=true'
       - "coredns.dockerdiscovery.host={{ traefik_fqdn }}"
+      - "homepage.group=Platform & Infrastructure"
+      - "homepage.name=Traefik"
+      - "homepage.icon=traefik.svg"
+      - "homepage.href=https://{{ traefik_fqdn }}"
+      - "homepage.description=Edge reverse proxy & TLS routing"
       - "traefik.enable=true"
       - "traefik.http.routers.dashboard.rule=Host(`{{ traefik_fqdn }}`)"
       - "traefik.http.routers.dashboard.entrypoints=websecure"

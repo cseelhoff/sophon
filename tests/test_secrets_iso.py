@@ -230,11 +230,12 @@ class SecretsIsoTests(unittest.TestCase):
                     'SOPHON_NETWORK_GATEWAY': '10.0.60.1',
                     'SOPHON_BACKUP_NETWORK_CIDR': '10.0.60.100/24',
                 })
-                rc = secrets_iso.main([
-                    '--state-dir', str(state_dir),
-                    '--output-iso', str(sophon_iso),
-                    '--backup-output-iso', str(backup_iso),
-                ])
+                with mock.patch.object(sys.stdin, 'isatty', return_value=False):
+                    rc = secrets_iso.main([
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                    ])
                 self.assertEqual(rc, 0)
             finally:
                 os.environ.clear()
@@ -279,10 +280,11 @@ class SecretsIsoTests(unittest.TestCase):
             # 6) SOPHON_VNET_DNS (default '')
             # 7) SOPHON_INFRAVM_DISK_GB (default '' -> 1024)
             # 8) SOPHON_DOMAIN
-            # 9) paired backup ISO Y (default '')
-            # 10) SOPHON_BACKUP_NETWORK_CIDR
-            # 11) SOPHON_BACKUP_VM_DISK_GB (default '' -> 1536)
-            # 12) internet access -> n (air-gapped with cached acme.json)
+            # 9) SOPHON_KEYCLOAK_REALM_DISPLAY_NAME
+            # 10) paired backup ISO Y (default '')
+            # 11) SOPHON_BACKUP_NETWORK_CIDR
+            # 12) SOPHON_BACKUP_VM_DISK_GB (default '' -> 1536)
+            # 13) internet access -> n (air-gapped with cached acme.json)
             inputs = iter([
                 '',
                 '',
@@ -292,6 +294,7 @@ class SecretsIsoTests(unittest.TestCase):
                 '',
                 '',
                 'sophon.example.com',
+                'Slow Jedi',
                 '',
                 '10.0.60.100/24',
                 '',
@@ -334,8 +337,18 @@ class SecretsIsoTests(unittest.TestCase):
                 self.assertTrue(dotenv_path.is_file())
                 self.assertEqual(stat.S_IMODE(dotenv_path.stat().st_mode), 0o600)
 
-                # Subsequent build using saved .env requires zero prompts even without a TTY!
+                extracted = tmp_dir / 'extracted-interactive'
+                extracted.mkdir()
+                subprocess.run(
+                    ['xorriso', '-osirrox', 'on', '-indev', str(sophon_iso), '-extract', '/', str(extracted)],
+                    check=True, capture_output=True,
+                )
+                seed = json.loads((extracted / 'sophon-seed.json').read_text())
+                self.assertEqual(seed['env']['SOPHON_KEYCLOAK_REALM_DISPLAY_NAME'], 'Slow Jedi')
+
+                # Subsequent build using saved .env requires zero prompts both without and with a TTY!
                 loaded_saved = secrets_iso.cli.load_dotenv(dotenv_path)
+                self.assertEqual(loaded_saved['SOPHON_KEYCLOAK_REALM_DISPLAY_NAME'], 'Slow Jedi')
                 self.assertEqual(loaded_saved['SOPHON_INFRAVM_DISK_GB'], '1024')
                 self.assertEqual(loaded_saved['SOPHON_BACKUP_VM_DISK_GB'], '1536')
                 with mock.patch.object(sys.stdin, 'isatty', return_value=False):
@@ -346,6 +359,15 @@ class SecretsIsoTests(unittest.TestCase):
                         '--dotenv-path', str(dotenv_path),
                     ])
                 self.assertEqual(rc_repeat, 0)
+                with mock.patch.object(sys.stdin, 'isatty', return_value=True), \
+                     mock.patch('builtins.input', side_effect=AssertionError('unexpected prompt')):
+                    rc_repeat_tty = secrets_iso.main([
+                        '--state-dir', str(state_dir),
+                        '--output-iso', str(sophon_iso),
+                        '--backup-output-iso', str(backup_iso),
+                        '--dotenv-path', str(dotenv_path),
+                    ])
+                self.assertEqual(rc_repeat_tty, 0)
             finally:
                 os.environ.clear()
                 os.environ.update(old_env)
@@ -386,6 +408,7 @@ class SecretsIsoTests(unittest.TestCase):
             secrets_iso.cli.save_dotenv(
                 {
                     'SOPHON_DOMAIN': 'sophon.example.com',
+                    'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME': 'Slow Jedi',
                     'SOPHON_ACME_EMAIL': 'ops@sophon.example.com',
                     'SOPHON_AIRGAPPED': 'true',
                     'SOPHON_SHARED_PASSWORD': 'SharedTestPassword!123',

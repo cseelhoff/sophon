@@ -739,6 +739,15 @@ def main(argv=None) -> int:
                     40,
                 )
             env['SOPHON_DOMAIN'] = need_field('SOPHON_DOMAIN', 'Sophon domain', 'host', env.get('SOPHON_DOMAIN', ''), True)
+            default_realm_display = env.get('SOPHON_KEYCLOAK_REALM', '').strip() or 'sophon'
+            env['SOPHON_KEYCLOAK_REALM_DISPLAY_NAME'] = need_field(
+                'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME',
+                'Keycloak realm display name (e.g. Slow Jedi)',
+                'text',
+                env.get('SOPHON_KEYCLOAK_REALM_DISPLAY_NAME', ''),
+                False,
+                default_realm_display,
+            )
 
             if not with_backup and not explicit_without_backup and not env.get('SOPHON_KOPIA_SFTP_HOST', '').strip():
                 require_tty('SOPHON_BACKUP_NETWORK_CIDR or SOPHON_KOPIA_SFTP_HOST')
@@ -989,6 +998,8 @@ def main(argv=None) -> int:
             dotenv_updates['SOPHON_VNET_DNS'] = net_dns
             dotenv_updates['SOPHON_INFRAVM_DISK_GB'] = infravm_disk_gb
             dotenv_updates['SOPHON_DOMAIN'] = domain
+            if env.get('SOPHON_KEYCLOAK_REALM_DISPLAY_NAME', '').strip():
+                dotenv_updates['SOPHON_KEYCLOAK_REALM_DISPLAY_NAME'] = env['SOPHON_KEYCLOAK_REALM_DISPLAY_NAME'].strip()
             dotenv_updates['SOPHON_WITH_BACKUP_SECRETS'] = 'true' if with_backup else 'false'
             if with_backup:
                 dotenv_updates['SOPHON_BACKUP_VM_DISK_GB'] = backup_disk_gb

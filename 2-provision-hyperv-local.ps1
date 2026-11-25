@@ -107,7 +107,7 @@ if ($manageCertificates) {
     } else {
         Write-Host "Certificate disk attached to '$Name'."
     }
-    Write-Host "Open https://<domain> and click 'Update Certificates' (or run sophon-refresh-certs on the InfraVM console)."
+    Write-Host "Open https://status.<domain> and click 'Update Certificates' (or run sophon-refresh-certs on the InfraVM console)."
     return
 }
 

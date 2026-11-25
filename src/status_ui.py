@@ -1,4 +1,4 @@
-"""Sophon Appliance Status & Disaster-Recovery Cutover Web UI (`https://<domain>`).
+"""Sophon Appliance Status & Disaster-Recovery Cutover Web UI (`https://status.<domain>`).
 
 Runs on the pre-loaded `sophon:latest` image behind Traefik TLS with Keycloak OIDC (`arcane-admins`
 group required). Mounts only `/var/lib/sophon/control` (never `/var/lib/sophon/project` or Docker
@@ -373,8 +373,12 @@ class StatusConfig:
         return f'https://auth.{self.domain}/realms/{self.oidc_realm}'
 
     @property
+    def fqdn(self) -> str:
+        return f'status.{self.domain}'
+
+    @property
     def allowed_hosts(self) -> set[str]:
-        return {self.domain, f'status.{self.domain}'}
+        return {self.fqdn}
 
     def fetch_jwks(self, *, force: bool = False) -> dict:
         now = time.monotonic()
@@ -915,7 +919,7 @@ def render_dashboard_html(*, domain: str, username: str, csrf_token: str, initia
         if (switchingNetwork) {{
           const banner = document.getElementById('cutover-banner');
           banner.className = 'banner info';
-          banner.textContent = `Appliance NIC is transitioning to production IP ${{currentState.target_ip || ''}} and running 5-activate.yml. Ensure your client resolves ${{currentState.domain}} to ${{currentState.target_ip || 'the production IP'}} — waiting to reconnect…`;
+          banner.textContent = `Appliance NIC is transitioning to production IP ${{currentState.target_ip || ''}} and running 5-activate.yml. Ensure your client resolves status.${{currentState.domain}} to ${{currentState.target_ip || 'the production IP'}} — waiting to reconnect…`;
         }} else if (refreshingCerts) {{
           const certBanner = document.getElementById('cert-banner');
           certBanner.className = 'banner info';
@@ -1067,7 +1071,7 @@ def make_handler(config: StatusConfig):
             host = raw_host.split(':')[0].lower().rstrip('.')
             if host in config.allowed_hosts:
                 return host
-            return config.domain
+            return config.fqdn
 
         def _parse_cookies(self) -> dict[str, str]:
             jar = cookies.SimpleCookie()

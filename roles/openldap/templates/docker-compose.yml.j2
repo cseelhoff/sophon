@@ -79,6 +79,10 @@ services:
       - 'sophon.backup.dump.restore=ldap-subtree'
       - 'sophon.backup.dump.base={{ openldap_base_dn }}'
       - "coredns.dockerdiscovery.host={{ openldap_tls_domain }}"
+      - "homepage.group=Identity & Access"
+      - "homepage.name=OpenLDAP"
+      - "homepage.icon=openldap.svg"
+      - "homepage.description=LDAPS directory server ({{ openldap_tls_domain }}:636)"
     volumes:
       - openldap_database:/var/lib/ldap
       - openldap_config:/etc/ldap/slapd.d

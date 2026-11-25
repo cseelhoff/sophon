@@ -184,10 +184,10 @@ if as_sophon podman --remote=false container exists keycloak; then
             --data-urlencode "username=${kc_user}" \
             --data-urlencode "password=${kc_pass}" 2>/dev/null | jq -r '.access_token // empty' || true)
         if [[ -n $kc_tok ]]; then
-            existing_id=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+            existing_json=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
                 -H "Authorization: Bearer ${kc_tok}" \
-                "https://auth.${domain}/admin/realms/${kc_realm}/clients?clientId=sophon-status" 2>/dev/null \
-                | jq -r '.[0].id // empty' || true)
+                "https://auth.${domain}/admin/realms/${kc_realm}/clients?clientId=sophon-status" 2>/dev/null || echo '[]')
+            existing_id=$(jq -r '.[0].id // empty' <<< "$existing_json" 2>/dev/null || true)
             if [[ -z $existing_id ]]; then
                 payload=$(jq -n --arg d "$domain" '{
                     clientId: "sophon-status",
@@ -201,11 +201,11 @@ if as_sophon podman --remote=false container exists keycloak; then
                     serviceAccountsEnabled: false,
                     frontchannelLogout: true,
                     fullScopeAllowed: true,
-                    redirectUris: [("https://" + $d + "/oauth2/callback"), ("https://status." + $d + "/oauth2/callback")],
-                    webOrigins: [("https://" + $d), ("https://status." + $d)],
+                    redirectUris: [("https://status." + $d + "/oauth2/callback")],
+                    webOrigins: [("https://status." + $d)],
                     attributes: {
                         "pkce.code.challenge.method": "S256",
-                        "post.logout.redirect.uris": ("https://" + $d + "/*##https://status." + $d + "/*")
+                        "post.logout.redirect.uris": ("https://status." + $d + "/*")
                     }
                 }')
                 curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
@@ -216,6 +216,20 @@ if as_sophon podman --remote=false container exists keycloak; then
                     -H "Authorization: Bearer ${kc_tok}" \
                     "https://auth.${domain}/admin/realms/${kc_realm}/clients?clientId=sophon-status" 2>/dev/null \
                     | jq -r '.[0].id // empty' || true)
+            else
+                updated_payload=$(jq -c --arg d "$domain" '.[0]
+                    | .redirectUris = [("https://status." + $d + "/oauth2/callback")]
+                    | .webOrigins = [("https://status." + $d)]
+                    | .attributes = ((.attributes // {}) + {
+                        "pkce.code.challenge.method": "S256",
+                        "post.logout.redirect.uris": ("https://status." + $d + "/*")
+                    })' <<< "$existing_json" 2>/dev/null || true)
+                if [[ -n $updated_payload ]]; then
+                    curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \
+                        -X PUT "https://auth.${domain}/admin/realms/${kc_realm}/clients/${existing_id}" \
+                        -H "Authorization: Bearer ${kc_tok}" -H "Content-Type: application/json" \
+                        -d "$updated_payload" >/dev/null 2>&1 || true
+                fi
             fi
             if [[ -n $existing_id ]]; then
                 grp_scope=$(curl -ksS --max-time 10 --resolve "auth.${domain}:443:${ip}" \

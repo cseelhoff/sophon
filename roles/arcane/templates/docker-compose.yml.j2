@@ -25,6 +25,7 @@ services:
     environment:
       PUID: "0"
       PGID: "0"
+      SOPHON_PODMAN_SOCK: "/run/user/1001/podman/podman.sock"
       ARCANE_APP_URL: "https://{{ arcane_fqdn }}"
       ARCANE_PROJECTS_DIRECTORY: "{{ arcane_stacks_dir }}"
       ARCANE_TRUSTED_PROXIES: "10.88.0.0/16,10.89.0.0/16,172.16.0.0/12,127.0.0.0/8,::1/128"
@@ -52,6 +53,11 @@ services:
       start_period: 15s
     labels:
       - "coredns.dockerdiscovery.host={{ arcane_fqdn }}"
+      - "homepage.group=Platform & Infrastructure"
+      - "homepage.name=Arcane"
+      - "homepage.icon=arcane.svg"
+      - "homepage.href=https://{{ arcane_fqdn }}"
+      - "homepage.description=Container & GitOps stack management"
       - "traefik.enable=true"
       - "traefik.http.routers.arcane.rule=Host(`{{ arcane_fqdn }}`)"
       - "traefik.http.routers.arcane.entrypoints=websecure"

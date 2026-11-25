@@ -12,14 +12,14 @@ This guide covers the standard end-to-end workflow for deploying Sophon, verifyi
 Sophon runs on one **Fedora CoreOS** virtual machine (**InfraVM**) alongside an external SFTP backup server:
 
 - **Immutable OS + persistent Btrfs storage:** Fedora CoreOS keeps the OS root read-only while storing container volumes on a persistent `/var` Btrfs partition so snapshots and restores can use fast copy-on-write reflinks.
-- **Declarative rootless Podman stacks:** CoreDNS, Traefik, OpenLDAP, Keycloak, Gitea (with local file-backed Git LFS; built-in package registry disabled), Sonatype Nexus Repository (hosted + upstream proxy/group registries), Arcane, the LAN-only Appliance Status & Cutover UI (`https://<domain>` / `https://status.<domain>`), and Kopia run from Compose files in `/var/lib/sophon/stacks/`.
+- **Declarative rootless Podman stacks:** CoreDNS, Traefik, OpenLDAP, Keycloak, Gitea (with local file-backed Git LFS; built-in package registry disabled), Sonatype Nexus Repository (hosted + upstream proxy/group registries), Arcane, the LAN-only Appliance Status & Cutover UI (`https://status.<domain>`), and Kopia run from Compose files in `/var/lib/sophon/stacks/`.
 - **Sonatype Nexus Repository (`https://nexus.<domain>`, `https://registry.<domain>`, `https://registry-push.<domain>`):** Unified OCI container, PyPI, npm, APT, Maven, Cargo, and Raw artifact registry integrated natively with OpenLDAP (`nexus-admins`, `nexus-developers`). Read-only anonymous pull/browse access is enabled by default across all repository types (`SOPHON_NEXUS_ANONYMOUS_ENABLED=true`) while pushes/writes always require authentication (`registry-push.<domain>` / hosted repositories), and InfraVM automatically configures Podman (`/etc/containers/registries.conf.d/sophon-nexus.conf`) to mirror `docker.io`, `ghcr.io`, and `quay.io` pulls through `registry.<domain>`. Proprietary `hosted` artifacts (including immutable `raw-vault` forensics/archive uploads and `raw-hosted` files) and PostgreSQL metadata are backed up by Kopia, while internet `proxy-cache` blobs and large re-obtainable `raw-scratch` blobs (`scratch` blob store) are excluded.
-- **Arcane (`https://arcane.<domain>`) & Appliance Status UI (`https://<domain>`):** OIDC-authenticated UIs integrated with Keycloak (`arcane-admins` grants admin access). Arcane manages Compose stacks and Pure GitOps pull reconciliation ([`docs/nexus-and-gitops-plan.md`](./nexus-and-gitops-plan.md)), while `https://<domain>` (excluded from Cloudflare Tunnel publishing) shows appliance mode and provides one-click standby-to-production cutover and monthly TLS certificate updates.
+- **Arcane (`https://arcane.<domain>`) & Appliance Status UI (`https://status.<domain>`):** OIDC-authenticated UIs integrated with Keycloak (`arcane-admins` grants admin access). Arcane manages Compose stacks and Pure GitOps pull reconciliation ([`docs/nexus-and-gitops-plan.md`](./nexus-and-gitops-plan.md)), while `https://status.<domain>` (excluded from Cloudflare Tunnel publishing, leaving the bare root `<domain>` available for your own workloads) shows appliance mode and provides one-click standby-to-production cutover and monthly TLS certificate updates.
 - **Zero-downtime encrypted Kopia backups:**
   - **Primary backups (`/sophon-state`, default every `6h`):** Kopia's native scheduler and before/after snapshot actions capture hot database dumps (`pg_dumpall`, `pg_dump -Fc -Z0`, `slapcat`) via a restricted dump proxy and stage volume files (including Gitea Git + LFS data and TLS certificates) without stopping containers. Any container deployed via Gitea Actions can opt in with `sophon.backup.*` labels (see [`roles/kopia/README.md`](../roles/kopia/README.md)).
   - **Optional weekly Btrfs volume snapshots (`/sophon-coarse`, latest 4 kept):** Atomic read-only Btrfs subvolume snapshots uploaded weekly as a last-resort fallback.
 
-> **Golden rule:** Nothing may exist only in the Arcane UI. Rebuilding a lost server is always **"deploy a clean VM from code, restore state from Kopia, and promote via `https://<domain>` (or `sophon-activate`)"**, never restoring a full-disk VM image.
+> **Golden rule:** Nothing may exist only in the Arcane UI. Rebuilding a lost server is always **"deploy a clean VM from code, restore state from Kopia, and promote via `https://status.<domain>` (or `sophon-activate`)"**, never restoring a full-disk VM image.
 
 ---
 
@@ -171,7 +171,7 @@ Click `/sophon-state` and choose any snapshot timestamp to browse directories or
 
 ## 6. Disaster Recovery & Restore Drills
 
-Sophon uses the same workflow for **routine restore drills** and **real disaster-recovery cutovers**: deploy a clean dev/standby VM from `sophon-secrets.iso`, verify the restored services on the dev IP, and—only when cutting over to production—promote it from the web UI at `https://<domain>` (or via `sophon-activate`).
+Sophon uses the same workflow for **routine restore drills** and **real disaster-recovery cutovers**: deploy a clean dev/standby VM from `sophon-secrets.iso`, verify the restored services on the dev IP, and—only when cutting over to production—promote it from the web UI at `https://status.<domain>` (or via `sophon-activate`).
 
 ### 6.1 Deploy or refresh the dev / restore-drill InfraVM
 
@@ -181,7 +181,7 @@ From your workstation, run:
 sh sophon-provision-dev.sh        # PowerShell: .\sophon-provision-dev.ps1
 ```
 
-- **For a restore drill:** You are done once the VM console banner reads `STANDBY RESTORE VERIFIED` (or after opening `https://<domain>`, `https://arcane.<domain>`, and `https://git.<domain>` against the dev IP)—leave the VM in Safe Standby Mode.
+- **For a restore drill:** You are done once the VM console banner reads `STANDBY RESTORE VERIFIED` (or after opening `https://status.<domain>`, `https://arcane.<domain>`, and `https://git.<domain>` against the dev IP)—leave the VM in Safe Standby Mode.
 - **Optional weekly Linux schedule:** Enable the user timer in [`contrib/systemd/`](../contrib/systemd):
   ```sh
   mkdir -p ~/.config/systemd/user
@@ -202,7 +202,7 @@ Append `--wait-https` if your workstation can reach `SOPHON_DEV_NETWORK_CIDR` ov
 
 </details>
 
-### 6.2 Promote to live production (`https://<domain>`)
+### 6.2 Promote to live production (`https://status.<domain>`)
 
 When recovering from an actual production outage:
 
@@ -210,16 +210,16 @@ When recovering from an actual production outage:
    ```sh
    sh sophon-destroy-vm.sh        # PowerShell: .\sophon-destroy-vm.ps1
    ```
-2. Point client DNS for `<domain>` at the restored standby VM (`SOPHON_DEV_NETWORK_CIDR`), open **`https://<domain>`** (or `https://status.<domain>`), sign in with Keycloak SSO (`arcane-admins`), and click **Promote to Active Production**.
+2. Point client DNS for `<domain>` at the restored standby VM (`SOPHON_DEV_NETWORK_CIDR`), open **`https://status.<domain>`**, sign in with Keycloak SSO (`arcane-admins`), and click **Promote to Active Production**.
    - **Automatic IP-conflict lock:** While the production IP (`SOPHON_NETWORK_CIDR`) is still responding on the network, **Promote to Active Production** remains disabled (grayed out) to prevent an IP collision against a live production VM. Once step 1 shuts down the old VM, the button unlocks automatically within seconds (or click **Re-check Production IP**), and update your client DNS back to `SOPHON_NETWORK_CIDR` once cutover switches the NIC.
 
 <details>
 <summary>Notes: How web cutover works, CLI fallback (<code>sophon-activate</code>), &amp; alternative recovery options</summary>
 
-- **LAN-only cutover UI & detached host promotion:** `https://<domain>` and `https://status.<domain>` are explicitly excluded from Cloudflare Tunnel publishing (`CF_EXCLUDE`), require a verified Keycloak session in `arcane-admins`, and never mount secret tokens or the Podman socket inside the web container. Clicking **Promote to Active Production** triggers a detached host `systemd` unit (`sophon-web-activate.service`) that runs `sophon-activate --yes`, so switching the VM's NIC from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR` mid-cutover never interrupts activation.
+- **LAN-only cutover UI & detached host promotion:** `https://status.<domain>` is explicitly excluded from Cloudflare Tunnel publishing (`CF_EXCLUDE`), requires a verified Keycloak session in `arcane-admins`, and never mounts secret tokens or the Podman socket inside the web container. Clicking **Promote to Active Production** triggers a detached host `systemd` unit (`sophon-web-activate.service`) that runs `sophon-activate --yes`, so switching the VM's NIC from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR` mid-cutover never interrupts activation.
 - **What promotion updates (`sophon-activate`):** Re-verifies that `SOPHON_NETWORK_CIDR` is unoccupied on the network, switches the VM's static IPv4 address and self-pointing DNS (CoreDNS, Podman network resolvers, and stack `extra_hosts` mappings) from `SOPHON_DEV_NETWORK_CIDR` to `SOPHON_NETWORK_CIDR`, switches Kopia from read-only `sophon-restore` to read-write `sophon-backup`, enables `cloudflared` if configured, runs and verifies an immediate backup, and marks the server `PRODUCTION ACTIVE`.
 - **CLI fallback:** You can also SSH or console in as `core` and run `sophon-activate` directly (which enforces the same live IP-occupancy preflight check).
-- **Alternative—replace the production VM directly in place:** If you prefer to rebuild `sophon-infravm` directly on `SOPHON_NETWORK_CIDR` instead of promoting `sophon-dev-infravm`, run `sh sophon-provision.sh --recreate` (which confirms, deletes `sophon-infravm`, and boots a fresh `sophon-infravm` into Safe Standby Mode), then promote via `https://<domain>` or `sophon-activate`.
+- **Alternative—replace the production VM directly in place:** If you prefer to rebuild `sophon-infravm` directly on `SOPHON_NETWORK_CIDR` instead of promoting `sophon-dev-infravm`, run `sh sophon-provision.sh --recreate` (which confirms, deletes `sophon-infravm`, and boots a fresh `sophon-infravm` into Safe Standby Mode), then promote via `https://status.<domain>` or `sophon-activate`.
 - **Recovering without `sophon-secrets.iso`:** Follow [Interactive Disaster Recovery in Manual Installation](./manual-installation.md#3-interactive-disaster-recovery-without-sophon-secretsiso).
 
 </details>
@@ -251,13 +251,13 @@ sh sophon-build-isos.sh           # PowerShell: .\sophon-build-isos.ps1
 
 *(Uses your saved `.env` settings, prompts privately for a Cloudflare DNS API token with `Zone:Read` + `DNS:Edit` if not set in your environment, issues a fresh 90-day wildcard certificate when ≤65 days remain, and rebuilds `artifacts/secrets/sophon-secrets.iso` with both `/acme.json` and `/sophon-seed.json` while skipping unchanged OS/app ISOs.)*
 
-### 7.2 Mount `sophon-secrets.iso` & apply in `https://<domain>`
+### 7.2 Mount `sophon-secrets.iso` & apply in `https://status.<domain>`
 
 1. Hot-attach the renewed `sophon-secrets.iso` to `sophon-infravm` (and automatically delete the local workstation ISO copy once uploaded; pass `--keep-local` / `-KeepLocal` if you also keep `sophon-secrets.iso` on an encrypted workstation for `sophon-provision-dev.sh` restore drills):
    ```sh
    sh sophon-mount-secrets.sh     # PowerShell: .\sophon-mount-secrets.ps1
    ```
-2. Open **`https://<domain>`** (or `https://status.<domain>`), sign in with Keycloak SSO (`arcane-admins`), and click **Update Certificates** in the **TLS Certificate Management** card.
+2. Open **`https://status.<domain>`**, sign in with Keycloak SSO (`arcane-admins`), and click **Update Certificates** in the **TLS Certificate Management** card.
    - **Automatic validation & cleanup:** **Update Certificates** remains disabled until a valid `SOPHON_CERTS` disk is attached (click **Scan Certificate Disk** if needed). Clicking it validates the new certificate chain and key, updates Traefik, reloads `certs-dumper`, OpenLDAP (LDAPS), and host Podman registry trust, triggers an immediate Kopia backup snapshot, and automatically ejects `sophon-secrets.iso` from the VM's CD/DVD drive.
 
 <details>

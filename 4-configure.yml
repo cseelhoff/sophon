@@ -98,4 +98,4 @@
         name: kopia
     - name: Finish service deployment
       ansible.builtin.debug:
-        msg: "Deployment complete. Status & Cutover: https://{{ domain_name }} | Arcane: {{ arcane_url }}. Retain credentials in your password manager."
+        msg: "Deployment complete. Status & Cutover: https://status.{{ domain_name | lower | regex_replace('\\.$', '') }} | Arcane: {{ arcane_url }}. Retain credentials in your password manager."

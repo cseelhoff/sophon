@@ -302,7 +302,7 @@ def main(argv=None) -> int:
             f"== Dev/drill VM '{vm_name}' ({meta['ip'] or 'dhcp'}) provisioned on {hypervisor} ==\n"
             'Inside the guest, sophon-autodeploy will install CoreOS, restore the latest snapshot in safe standby mode\n'
             '(Cloudflare tunnel postponed, Kopia read-only, scheduled backups paused), and verify all services locally.\n'
-            f"To promote this VM to active production after shutting down old prod, open https://{meta['domain'] or '<domain>'}\n"
+            f"To promote this VM to active production after shutting down old prod, open https://status.{meta['domain'] or '<domain>'}\n"
             'and click Promote to Active Production (or SSH in as core and run: sophon-activate).'
         )
     return 0

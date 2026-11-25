@@ -93,8 +93,10 @@ class StatusRoleAndScriptsTests(unittest.TestCase):
         self.assertEqual(svc["cap_drop"], ["ALL"])
         self.assertIn("auth.sophon.example.com:10.0.60.107", svc["extra_hosts"])
         labels = "\n".join(svc["labels"])
-        self.assertIn("coredns.dockerdiscovery.host=sophon.example.com", labels)
-        self.assertIn("Host(`sophon.example.com`) || Host(`status.sophon.example.com`)", labels)
+        self.assertIn("coredns.dockerdiscovery.host=status.sophon.example.com", labels)
+        self.assertNotIn("coredns.dockerdiscovery.host=sophon.example.com", labels)
+        self.assertIn("traefik.http.routers.sophon-status.rule=Host(`status.sophon.example.com`)", labels)
+        self.assertNotIn("Host(`sophon.example.com`)", labels)
 
         coredns_tpl = (ROOT / "roles/coredns/templates/docker-compose.yml.j2").read_text(encoding="utf-8")
         rendered_coredns = yaml.safe_load(
@@ -110,7 +112,8 @@ class StatusRoleAndScriptsTests(unittest.TestCase):
             )
         )
         coredns_env = "\n".join(rendered_coredns["services"]["coredns"]["environment"])
-        self.assertIn("CF_EXCLUDE=sophon.example.com,status.sophon.example.com", coredns_env)
+        self.assertIn("CF_EXCLUDE=status.sophon.example.com", coredns_env)
+        self.assertNotIn("CF_EXCLUDE=sophon.example.com", coredns_env)
 
     def test_sophon_control_sync_exports_non_secret_appliance_state_and_strips_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -397,7 +400,7 @@ class StatusWebServerEndToEndTests(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=body,
             method=method,
-            headers={"Host": "sophon.example.com", **(headers or {})},
+            headers={"Host": "status.sophon.example.com", **(headers or {})},
         )
         try:
             resp = opener.open(req, timeout=5)
@@ -412,6 +415,7 @@ class StatusWebServerEndToEndTests(unittest.TestCase):
         self.assertIn("https://auth.sophon.example.com/realms/sophon/protocol/openid-connect/auth", loc)
         self.assertIn("code_challenge_method=S256", loc)
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)
+        self.assertEqual(qs["redirect_uri"], ["https://status.sophon.example.com/oauth2/callback"])
         state_param = qs["state"][0]
         self.last_nonce = qs["nonce"][0]
 
@@ -469,9 +473,21 @@ class StatusWebServerEndToEndTests(unittest.TestCase):
         self.assertFalse(st_json["promote_enabled"])
         self.assertTrue(st_json["target_ip_occupied"])
 
-        # Missing CSRF -> 403
+        # Missing CSRF -> 403; bare root domain Origin -> 403 (reserved for homepage, not status UI)
+        self.assertEqual(self.cfg.allowed_hosts, {"status.sophon.example.com"})
         no_csrf_status, _, _ = self._request("POST", "/api/promote", headers={"Cookie": session_cookie}, body=b"{}")
         self.assertEqual(no_csrf_status, 403)
+        apex_origin_status, _, _ = self._request(
+            "POST",
+            "/api/promote",
+            headers={
+                "Cookie": session_cookie,
+                "X-Sophon-CSRF": csrf,
+                "Origin": "https://sophon.example.com",
+            },
+            body=b"{}",
+        )
+        self.assertEqual(apex_origin_status, 403)
 
         # Valid CSRF while prod IP is still alive -> 409 Conflict, no activate.request written
         conflict_status, _, conflict_body = self._request(
