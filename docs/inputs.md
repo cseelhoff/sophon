@@ -88,6 +88,7 @@ service accounts** (default no), then asks for:
 |---|---|
 | Domain | A public domain whose DNS is on Cloudflare (needed for Let's Encrypt DNS-01 when connected). |
 | Keycloak realm display name (`SOPHON_KEYCLOAK_REALM_DISPLAY_NAME`) | Optional label for the Keycloak login page title and heading, e.g. `Slow Jedi`. If unset, Keycloak shows the realm ID (`sophon` by default). Changing the display name does not change login URLs. |
+| Keycloak self-registration (`SOPHON_KEYCLOAK_REGISTRATION_ALLOWED`) | Default `true`. Allows users to self-register on the Keycloak login page; new accounts sync to OpenLDAP `ou=people` as `inetOrgPerson` (without admin groups or POSIX attributes). Set `false` to disable self-registration. |
 | ACME email | Connected sites only. A real address. |
 | Cloudflare token | Connected sites only, required unless running `sophon-deploy --prepare-restore`. A custom token with Zone / Zone / Read, Zone / DNS / Edit, and—when `SOPHON_CF_TUNNEL_ENABLED=true`—Account / Cloudflare Tunnel / Edit plus (when creating a brand-new tunnel with `SOPHON_CF_ACCESS_ENABLED=true`) Account / Access: Apps and Policies / Edit, scoped to your zone and account. Steps: [Operations Guide](operator-guide.md#21-pre-configure-env-optional). |
 | Publish Cloudflare tunnel (`SOPHON_CF_TUNNEL_ENABLED`) | Default `true`. Set `false` on non-production, lab, or restore-verification instances so `coredns` never creates/updates Cloudflare tunnels or public CNAMEs and `cloudflared` is not deployed, even if a Cloudflare token is supplied for Let's Encrypt DNS-01. |

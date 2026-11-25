@@ -66,6 +66,7 @@ kopia_readonly: "{{ prepare_restore | bool }}"
 keycloak_realm: "{{ lookup('env', 'SOPHON_KEYCLOAK_REALM') | default('sophon', true) }}"
 keycloak_realm_display_name: >-
   {{ lookup('env', 'SOPHON_KEYCLOAK_REALM_DISPLAY_NAME') | default(keycloak_realm, true) }}
+keycloak_registration_allowed: "{{ (lookup('env', 'SOPHON_KEYCLOAK_REGISTRATION_ALLOWED') | default('true', true) | lower) not in ['0', 'false', 'no', 'off'] }}"
 keycloak_admin_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_ADMIN_PASSWORD') }}"
 keycloak_db_password: "{{ lookup('env', 'SOPHON_KEYCLOAK_DB_PASSWORD') }}"
 keycloak_arcane_client_secret: "{{ lookup('env', 'SOPHON_KEYCLOAK_ARCANE_CLIENT_SECRET') }}"

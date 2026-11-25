@@ -428,7 +428,12 @@ def build_infravm_secrets_iso(
         )
 
     clean_env = {k: v for k, v in checked.items() if k != 'SOPHON_ACME_FILE' and v != ''}
-    for opt_key in ('SOPHON_CF_ACCESS_ENABLED', 'SOPHON_CF_ACCESS_EMAILS', 'SOPHON_NEXUS_ANONYMOUS_ENABLED'):
+    for opt_key in (
+        'SOPHON_CF_ACCESS_ENABLED',
+        'SOPHON_CF_ACCESS_EMAILS',
+        'SOPHON_KEYCLOAK_REGISTRATION_ALLOWED',
+        'SOPHON_NEXUS_ANONYMOUS_ENABLED',
+    ):
         opt_val = str(configure_values.get(opt_key, '')).strip()
         if opt_val:
             clean_env[opt_key] = opt_val

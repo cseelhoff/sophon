@@ -57,7 +57,7 @@
       displayName: "{{ keycloak_realm_display_name }}"
       enabled: true
       sslRequired: external
-      registrationAllowed: false
+      registrationAllowed: "{{ keycloak_registration_allowed | bool }}"
       loginWithEmailAllowed: true
       duplicateEmailsAllowed: false
       resetPasswordAllowed: true
@@ -79,6 +79,20 @@
     body_format: json
     body:
       displayName: "{{ keycloak_realm_display_name }}"
+    validate_certs: false
+    status_code: [204]
+
+- name: Reconcile realm self-registration setting
+  when:
+    - _kc_realm_check.status == 200
+    - (_kc_realm_check.json.registrationAllowed | default(false) | bool) != (keycloak_registration_allowed | bool)
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}"
+    method: PUT
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body:
+      registrationAllowed: "{{ keycloak_registration_allowed | bool }}"
     validate_certs: false
     status_code: [204]
 
@@ -114,7 +128,9 @@
         usernameLDAPAttribute: ["uid"]
         rdnLDAPAttribute: ["uid"]
         uuidLDAPAttribute: ["entryUUID"]
-        userObjectClasses: ["inetOrgPerson,posixAccount,shadowAccount"]
+        # Use inetOrgPerson so self-registered users sync into OpenLDAP without
+        # requiring POSIX uidNumber/gidNumber/homeDirectory attributes.
+        userObjectClasses: ["inetOrgPerson"]
         editMode: ["WRITABLE"]
         importEnabled: ["true"]
         syncRegistrations: ["true"]
@@ -137,9 +153,30 @@
   register: _kc_storage_components
   changed_when: false
 
-- name: Set LDAP component id fact
+- name: Set LDAP component facts
   ansible.builtin.set_fact:
+    _kc_ldap_component: "{{ (_kc_storage_components.json | selectattr('name', 'equalto', 'ldap') | list | first) }}"
     _kc_ldap_id: "{{ (_kc_storage_components.json | selectattr('name', 'equalto', 'ldap') | list | first).id }}"
+
+- name: Reconcile LDAP userObjectClasses for self-registration
+  when: (_kc_ldap_component.config.userObjectClasses | default([])) != ['inetOrgPerson']
+  ansible.builtin.uri:
+    url: "{{ _kc_base }}/admin/realms/{{ keycloak_realm }}/components/{{ _kc_ldap_id }}"
+    method: PUT
+    headers: "{{ _kc_headers }}"
+    body_format: json
+    body: >-
+      {{
+        _kc_ldap_component | combine({
+          'config': _kc_ldap_component.config | combine({
+            'userObjectClasses': ['inetOrgPerson'],
+            'bindCredential': [openldap_keycloak_password],
+          })
+        })
+      }}
+    validate_certs: false
+    status_code: 204
+  no_log: true
 
 - name: List existing LDAP mappers
   ansible.builtin.uri:

@@ -12,6 +12,7 @@ keycloak_domain: "{{ domain_name }}"
 
 # Required credentials come from group_vars/all.yml or explicit overrides.
 keycloak_admin_user: "admin"
+keycloak_registration_allowed: true
 
 # Database. Keycloak's realm, clients, mappers and group mappings are written
 # by configure.yml over the Admin REST API, so the DB must outlive the

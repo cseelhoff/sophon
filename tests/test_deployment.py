@@ -215,9 +215,46 @@ def test_startup_failure():
   assert 'PRIVATE_STARTUP_PASSWORD' not in result.stdout + result.stderr
 
 
+def test_keycloak_self_registration_iac():
+  fields = step_fields('configure')
+  assert fields['SOPHON_KEYCLOAK_REGISTRATION_ALLOWED'][2] == 'choice'
+  assert fields['SOPHON_KEYCLOAK_REGISTRATION_ALLOWED'][3] == 'true'
+
+  tasks = yaml.safe_load((ROOT / 'roles/keycloak/tasks/configure.yml').read_text())
+  by_name = {task['name']: task for task in tasks if isinstance(task, dict) and 'name' in task}
+  assert by_name['Create realm']['ansible.builtin.uri']['body']['registrationAllowed'] == '{{ keycloak_registration_allowed | bool }}'
+  assert by_name['Reconcile realm self-registration setting']['ansible.builtin.uri']['method'] == 'PUT'
+  assert by_name['Create LDAP user federation provider']['ansible.builtin.uri']['body']['config']['userObjectClasses'] == ['inetOrgPerson']
+  assert by_name['Reconcile LDAP userObjectClasses for self-registration']['ansible.builtin.uri']['method'] == 'PUT'
+  assert by_name['Reconcile LDAP userObjectClasses for self-registration']['no_log'] is True
+
+  with tempfile.TemporaryDirectory() as temporary:
+    directory = Path(temporary)
+    (directory / 'group_vars').mkdir()
+    (directory / 'group_vars/all.yml').write_text((ROOT / 'group_vars/all.yml').read_text())
+    (directory / 'bootstrap').mkdir()
+    (directory / 'bootstrap/sophon-version').write_text('test\n')
+    playbook = directory / 'reg.yml'
+    playbook.write_text(json.dumps([{
+      'hosts': 'localhost', 'gather_facts': False,
+      'tasks': [{'ansible.builtin.assert': {'that': ['(keycloak_registration_allowed | bool) == (expected | bool)']}}],
+    }]))
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith(('SOPHON_', 'ANSIBLE_'))}
+    for env_val, expected in ((None, True), ('true', True), ('false', False), ('0', False)):
+      env = dict(base_env)
+      if env_val is not None:
+        env['SOPHON_KEYCLOAK_REGISTRATION_ALLOWED'] = env_val
+      res = subprocess.run(
+          ['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(playbook),
+           '-e', json.dumps({'expected': expected})],
+          env=env, cwd=directory, capture_output=True, text=True, timeout=30)
+      assert res.returncode == 0, (env_val, res.stdout + res.stderr)
+
+
 if __name__ == '__main__':
   test_vm_network_config()
   test_credential_inputs()
   test_launcher_passes_only_the_steps_settings()
   test_launcher_rejects_wrong_step_and_hypervisor()
   test_startup_failure()
+  test_keycloak_self_registration_iac()

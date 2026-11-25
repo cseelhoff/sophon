@@ -251,6 +251,7 @@ def main(argv=None):
                     'SOPHON_KOPIA_CREATE_REPOSITORY',
                     'SOPHON_CF_ACCESS_ENABLED',
                     'SOPHON_CF_ACCESS_EMAILS',
+                    'SOPHON_KEYCLOAK_REGISTRATION_ALLOWED',
                     'SOPHON_NEXUS_ANONYMOUS_ENABLED',
                 ):
                     continue
